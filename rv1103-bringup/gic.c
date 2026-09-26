@@ -123,6 +123,33 @@ void gic_disable_irq(unsigned n)
     gic_dsb();
 }
 
+void gic_set_priority(unsigned n, uint8_t prio)
+{
+    if (n >= GIC_MAX_IRQ)
+        return;
+
+    gic_dsb();
+    REG8(GICD_BASE + GICD_IPRIORITYRn + n) = prio;
+    gic_dsb();
+}
+
+void gic_set_level(unsigned n)
+{
+    uint32_t v;
+    unsigned shift;
+
+    if (n < 16u || n >= GIC_MAX_IRQ)
+        return; /* SGI tidak punya field konfigurasi */
+
+    /* 2 bit per interrupt; 00 = level-sensitive. */
+    shift = (n % 16u) * 2u;
+    gic_dsb();
+    v = REG32(GICD_BASE + GICD_ICFGRn + ((n / 16u) * 4u));
+    v &= ~(3u << shift);
+    REG32(GICD_BASE + GICD_ICFGRn + ((n / 16u) * 4u)) = v;
+    gic_dsb();
+}
+
 /* ------------------------------------------------------------------ */
 /* Acknowledge / End Of Interrupt                                      */
 /* ------------------------------------------------------------------ */

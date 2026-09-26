@@ -44,10 +44,5 @@ _hang:
     wfi
     b _hang
 
-/* Dummy: IRQs are never enabled in this demo, but vectors.S references it. */
-    .global c_irq_handler
-    .type c_irq_handler, %function
-c_irq_handler:
-    b c_irq_handler
     .size _start, . - _start
     .end

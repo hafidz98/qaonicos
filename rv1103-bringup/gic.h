@@ -1,19 +1,16 @@
 /*
- * gic.h - Driver GIC-400 minimal untuk Rockchip RV1103 (Cortex-A7).
+ * gic.h - Driver GIC-400 minimal (Cortex-A7).
+ *
+ * Board addresses come from board.h (-DBOARD_VIRT for QEMU virt,
+ * -DBOARD_RV1103 for the Luckfox Pico Mini).
  *
  * Target: bare-metal / -ffreestanding, C99, tanpa libc.
- * Alamat diambil dari hw-addrs.md (rv1106.dtsi, compatible "arm,gic-400"):
- *   GICD : 0xff1f1000, size 0x1000
- *   GICC : 0xff1f2000, size 0x2000
  */
-#ifndef RV1103_GIC_H
-#define RV1103_GIC_H
+#ifndef MACH_GIC_H
+#define MACH_GIC_H
 
 #include <stdint.h>
-
-/* Base register blok GIC-400 (RV1103). */
-#define GICD_BASE   0xFF1F1000u
-#define GICC_BASE   0xFF1F2000u
+#include "board.h"
 
 /* Jumlah interrupt ID yang didukung GICv2 (ID 0..1019). */
 #define GIC_MAX_IRQ 1020u
@@ -41,10 +38,16 @@ void gic_enable_irq(unsigned n);
 /* Disable interrupt ID n di distributor. */
 void gic_disable_irq(unsigned n);
 
+/* Set priority byte untuk interrupt ID n. */
+void gic_set_priority(unsigned n, uint8_t prio);
+
+/* Konfigurasi interrupt ID n sebagai level-sensitive (bukan edge). */
+void gic_set_level(unsigned n);
+
 /* Acknowledge: baca GICC_IAR dan kembalikan ID interrupt (mask 0x3ff). */
 unsigned gic_ack(void);
 
 /* End of interrupt: tulis GICC_EOIR dengan ID interrupt. */
 void gic_eoi(unsigned n);
 
-#endif /* RV1103_GIC_H */
+#endif /* MACH_GIC_H */

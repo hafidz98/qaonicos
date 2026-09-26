@@ -1,19 +1,23 @@
 /*
- * kernel_main.c - Integrated Mach-x-Luckfox bring-up demo.
+ * kernel_main.c - Integrated Mach-x-Luckfox bring-up demo (Fase 4).
  *
  * One ELF that boots like a real kernel: MMU on (pmap), traps live,
- * FPU enabled, then two threads ping-ponging through ctx_switch while
- * one does VFP math and the other takes SVC traps.
+ * FPU enabled, IPC self-test, then a PREEMPTIVE round-robin scheduler:
+ * the ARM virtual timer (PPI 27) fires every 10 ms, the IRQ stub builds
+ * a full exception frame, and sched_on_tick() switches threads — no
+ * manual yields. VFP state is saved/restored eagerly on every switch.
  *
  * Runs on: qemu-system-arm -M virt -cpu cortex-a7
  */
 #include "../rv1103-bringup/pmap.h"
 #include "../rv1103-bringup/trap.h"
-#include "../rv1103-bringup/pcb.h"
 #include "../rv1103-bringup/fpu.h"
 #include "../rv1103-bringup/ipc.h"
 #include "../rv1103-bringup/syscall.h"
 #include "../rv1103-bringup/zone.h"
+#include "../rv1103-bringup/gic.h"
+#include "../rv1103-bringup/timer.h"
+#include "../rv1103-bringup/sched.h"
 #include "../rv1103-bringup/lib.h"
 
 /* PL011 (QEMU virt UART0). */
@@ -49,19 +53,35 @@ static void puthex64(uint64_t v)
         putc("0123456789abcdef"[(v >> (i * 4)) & 0xf]);
 }
 
-static uint64_t dbits(double x)
+static uint64_t dbits_arg(double x)
 {
     uint64_t b;
     __builtin_memcpy(&b, &x, 8);
     return b;
 }
 
-/* IPC: one task, one shared space (Mach threads of a task share it). */
+/* IRQ on/off for atomic console output. Threads run with IRQs enabled;
+ * the timer may otherwise preempt us mid-line and garble the output. */
+static inline unsigned irq_save(void)
+{
+    unsigned cpsr;
+    __asm__ volatile("mrs %0, cpsr\n\tcpsid i" : "=r"(cpsr) :: "memory");
+    return cpsr;
+}
+
+static inline void irq_restore(unsigned cpsr)
+{
+    __asm__ volatile("msr cpsr_c, %0" :: "r"(cpsr) : "memory");
+}
+
+/* IPC: one task, one shared space (Mach threads of a task share it).
+ * Two ports: A->B and B->A (a single port would let the sender eat its
+ * own message on poll-recv). */
 static struct zone port_zone, msg_zone;
 static uint8_t port_pool[IPC_NPORTS * sizeof(struct ipc_port)] __attribute__((aligned(8)));
 static uint8_t msg_pool[16 * sizeof(struct ipc_msg)] __attribute__((aligned(8)));
 static struct ipc_space kern_space;
-static unsigned demo_port;
+static unsigned port_ab, port_ba;
 
 /* mach_msg-style traps. Explicit clobbers (P6 lesson: svc kills lr). */
 static int svc_send(unsigned name, const struct ipc_wire *w, unsigned len)
@@ -173,74 +193,89 @@ static int ipc_selftest(void)
     return fails;
 }
 
-/* Thread A: VFP compute thread, also the IPC initiator. */
-static struct pcb pcb_main, pcb_a, pcb_b;
-static unsigned char stack_a[4096] __attribute__((aligned(8)));
-static unsigned char stack_b[4096] __attribute__((aligned(8)));
-static struct vfp_state vfp_a, vfp_b;
+/* ------------------------------------------------------------------ */
+/* Fase 4: preemptive threads. No manual yields anywhere.              */
+/* ------------------------------------------------------------------ */
+static unsigned char stack_a[8192] __attribute__((aligned(8)));
+static unsigned char stack_b[8192] __attribute__((aligned(8)));
 
-static void thread_a(void)
+static volatile unsigned total_lines;
+
+/* Atomically print one status line; the 12th line ends the demo. */
+static void report(const char *tag, unsigned n, uint64_t fpubits)
 {
-    int i;
-    struct ipc_wire w;
+    unsigned s = irq_save();
+    int over;
 
-    /* IPC: send first, then wait for B's reply. */
-    wire_puts(&w, 0xA1, "halo dari thread A");
-    puts("  A: sending msg id=0xa1 -> ");
-    putdec((unsigned)svc_send(demo_port, &w, sizeof(w)));
+    puts("  "); puts(tag); puts(": n="); putdec(n);
+    puts("  fpu="); puthex64(fpubits);
+    puts("  ticks="); putdec(sched_ticks());
     putc('\n');
-
-    fpu_save(&vfp_a);
-    ctx_switch(&pcb_a, &pcb_b);
-    fpu_restore(&vfp_a);
-
-    if (svc_recv(demo_port, &w, sizeof(w)) >= 0) {
-        puts("  A: got reply id="); puthex64(w.id);
-        puts(" : "); puts((const char *)w.data); putc('\n');
+    total_lines++;
+    over = (total_lines >= 12);
+    if (over) {
+        puts("PREEMPT OK - halting\n");
+        gic_disable_irq(TIMER_PPI_IRQ);
     }
-
-    for (i = 0; i < 3; i++) {
-        double x = 1.5 * (double)(i + 1);
-        x = x * 2.0 + 0.25;
-        puts("  A: i="); putdec((unsigned)i);
-        puts("  fpu -> "); puthex64(dbits(x)); putc('\n');
-        /* A real kernel saves/restores VFP state on every switch. */
-        fpu_save(&vfp_a);
-        ctx_switch(&pcb_a, &pcb_b);
-        fpu_restore(&vfp_a);
+    irq_restore(s);
+    if (over) {
+        for (;;) { __asm__ volatile("wfi"); }
     }
-    fpu_save(&vfp_a);
-    ctx_switch(&pcb_a, &pcb_main);
 }
 
-/* Thread B: syscall thread (takes SVC traps), answers A's message. */
+static void ipc_note(const char *tag, const struct ipc_wire *w)
+{
+    unsigned s = irq_save();
+    puts("  "); puts(tag); puts(": ipc rx id=");
+    puthex64(w->id);
+    puts(" : "); puts((const char *)w->data); putc('\n');
+    irq_restore(s);
+}
+
+/* Thread A: IPC initiator, then VFP compute loop. */
+static void thread_a(void)
+{
+    struct ipc_wire w;
+    unsigned n = 0, i;
+
+    wire_puts(&w, 0xA1, "halo preemptif dari A");
+    svc_send(port_ab, &w, sizeof(w));
+    while (svc_recv(port_ba, &w, sizeof(w)) < 0)
+        ; /* B gets scheduled by the timer and replies */
+    ipc_note("A", &w);
+
+    for (i = 0; ; i++) {
+        /* Pin x to d8: it stays live in a VFP register while the timer
+         * may strike, so correct output proves VFP save/restore works. */
+        register double x __asm__("d8") = 1.5 * (double)(n + 1);
+        x = x * 2.0 + 0.25;   /* 3.25, 6.25, 9.25, ... */
+        if ((i & 0x1FFFFu) == 0) {
+            report("A", n, dbits_arg(x));
+            n++;
+        }
+    }
+}
+
+/* Thread B: answers A's message, then its own VFP compute loop. */
 static void thread_b(void)
 {
-    int i;
     struct ipc_wire w;
+    unsigned n = 0, i;
 
-    if (svc_recv(demo_port, &w, sizeof(w)) >= 0) {
-        puts("  B: got msg id="); puthex64(w.id);
-        puts(" : "); puts((const char *)w.data); putc('\n');
-    }
-    wire_puts(&w, 0xB1, "balasan dari thread B");
-    puts("  B: replying -> ");
-    putdec((unsigned)svc_send(demo_port, &w, sizeof(w)));
-    putc('\n');
+    while (svc_recv(port_ab, &w, sizeof(w)) < 0)
+        ; /* spin until A sends */
+    ipc_note("B", &w);
+    wire_puts(&w, 0xB1, "balasan preemptif dari B");
+    svc_send(port_ba, &w, sizeof(w));
 
-    for (i = 0; i < 3; i++) {
-        /* NOTE the "lr" clobber: svc overwrites lr_svc with the return
-         * address (lesson learned in the P6 Clang cross-check). */
-        __asm__ volatile("mov r7, %0\n\tsvc #0"
-                         :: "r"(200u + (unsigned)i) : "r7", "lr", "memory");
-        puts("  B: i="); putdec((unsigned)i);
-        puts("  svc trap, r7 recorded="); putdec(svc_last_num); putc('\n');
-        fpu_save(&vfp_b);
-        ctx_switch(&pcb_b, &pcb_a);
-        fpu_restore(&vfp_b);
+    for (i = 0; ; i++) {
+        register double x __asm__("d8") = 2.5 * (double)(n + 1);
+        x = x * 2.0 + 0.5;    /* 5.5, 10.5, 15.5, ... */
+        if ((i & 0x1FFFFu) == 0) {
+            report("B", n, dbits_arg(x));
+            n++;
+        }
     }
-    fpu_save(&vfp_b);
-    ctx_switch(&pcb_b, &pcb_main);
 }
 
 void kernel_main(void)
@@ -258,7 +293,7 @@ void kernel_main(void)
         double x = 1.5;
         x = x * 2.0 + 0.25;
         puts("[fpu ] VFPv4 on, 1.5*2+0.25 = ");
-        puthex64(dbits(x));
+        puthex64(dbits_arg(x));
         puts(" (3.25)\n");
     }
 
@@ -269,10 +304,13 @@ void kernel_main(void)
               sizeof(struct ipc_msg));
     ipc_space_init(&kern_space, &port_zone, &msg_zone);
     syscall_init(&kern_space);
-    demo_port = ipc_port_alloc(&kern_space, IPC_SEND | IPC_RECV);
-    puts("[ipc ] zones up, port allocated, name = ");
-    putdec(demo_port);
-    puts(" (send+recv)\n");
+    port_ab = ipc_port_alloc(&kern_space, IPC_SEND | IPC_RECV);
+    port_ba = ipc_port_alloc(&kern_space, IPC_SEND | IPC_RECV);
+    puts("[ipc ] zones up, ports allocated: A->B name = ");
+    putdec(port_ab);
+    puts(", B->A name = ");
+    putdec(port_ba);
+    putc('\n');
 
     /* 3b. Rigorous self-test before any threading. */
     {
@@ -285,15 +323,33 @@ void kernel_main(void)
         }
     }
 
-    /* 4. Threads: A <-IPC-> B, then A (fpu) and B (svc) interleave. */
-    puts("[sched] spawning threads A (fpu) and B (svc)\n");
-    pcb_init(&pcb_a, stack_a + sizeof(stack_a), thread_a);
-    pcb_init(&pcb_b, stack_b + sizeof(stack_b), thread_b);
-    ctx_switch(&pcb_main, &pcb_a);
-    /* Back here when both threads finish. */
+    /* 4. Preemptive scheduler: GIC + virtual-timer tick. */
+    puts("[gic ] init GIC-400\n");
+    gic_init();
+    gic_set_priority(TIMER_PPI_IRQ, 0x80);
+    gic_set_level(TIMER_PPI_IRQ);
 
-    puts("[sched] all threads done\n");
-    puts("kernel demo complete - halting\n");
+    timer_init();
+    sched_init();
+    sched_add(thread_a, stack_a + sizeof(stack_a));
+    sched_add(thread_b, stack_b + sizeof(stack_b));
+    {
+        /* 1 ms slice, in timer ticks. */
+        uint32_t freq = timer_get_freq();
+        uint32_t slice = freq / 1000u;
+        sched_set_slice(slice);
+        timer_irq_every_us(1000);
+    }
+    gic_enable_irq(TIMER_PPI_IRQ);
+    puts("[sched] preemptive round-robin, 1ms slices, no manual yields\n");
+
+    /*
+     * IRQs stay disabled until sched_start()'s rfeia enters thread A
+     * with cpsr=0x13 (I=0): the first tick can only fire once a thread
+     * is actually running. sched_start() never returns.
+     */
+    sched_start();
+
     for (;;) {
         __asm__ volatile("wfi");
     }

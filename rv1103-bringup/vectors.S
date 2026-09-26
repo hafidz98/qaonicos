@@ -97,25 +97,30 @@ reset_handler:
     dead_handler fiq_handler
 
 /*
- * Handler IRQ:
- *   - pasang SP mode IRQ dari irq_stack_top (disediakan linker script)
- *   - simpan r0-r3, r12, lr (volatile + return address)
- *   - panggil c_irq_handler() (C, AAPCS: r4-r11 dijaga oleh callee)
- *   - restore
- *   - subs pc, lr, #4  -> return ke instruksi yang terinterupsi,
- *     sekaligus memulihkan CPSR (mode + I-bit) dari SPSR.
+ * Handler IRQ (preemptif):
+ *   - bangun exception frame penuh di stack SVC thread yang terinterupsi:
+ *       [pad, r0..r12, pc, cpsr]  (16 word, 8-byte aligned)
+ *   - panggil c_irq_handler(frame); ia mengembalikan SP frame thread
+ *     berikutnya (bisa sama) — scheduler preemptif terjadi di sini
+ *   - rfeia: pc = frame[14], cpsr = frame[15]
  *
- * Catatan: lr pada entry IRQ bernilai return address + 4, sehingga
- * lr - 4 adalah alamat instruksi yang harus dieksekusi ulang.
+ * Catatan: srsdb menyimpan lr_irq-4 (sudah dikurangi) dan spsr_irq ke
+ * stack mode SVC, lalu kita pindah ke SVC dan push sisanya.
  */
     .global irq_handler
     .type irq_handler, %function
 irq_handler:
-    ldr sp, =irq_stack_top
-    push {r0-r3, r12, lr}
-    bl c_irq_handler
-    pop {r0-r3, r12, lr}
-    subs pc, lr, #4
+    sub lr, lr, #4
+    srsdb sp!, #0x13        /* [sp-8]=lr_irq-4, [sp-4]=spsr_irq (stack SVC) */
+    cps #0x13              /* SVC: sp sekarang menunjuk frame parsial */
+    push {r0-r12}          /* frame: r0..r12 */
+    sub sp, sp, #4         /* pad -> total 16 word */
+    mov r0, sp
+    bl c_irq_handler       /* r0 = frame thread berikutnya */
+    mov sp, r0
+    add sp, sp, #4         /* lewati pad */
+    pop {r0-r12}
+    rfeia sp!              /* pc=[sp], cpsr=[sp+4] */
     .size irq_handler, . - irq_handler
 
     .end
