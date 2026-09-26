@@ -5,6 +5,7 @@
  * No libc, -ffreestanding.
  */
 #include "trap.h"
+#include "syscall.h"
 #include "armv7/exception.h"
 
 volatile unsigned trap_count[8];
@@ -19,5 +20,7 @@ void arm_trap(unsigned exc, struct trap_regs *regs)
     }
     if (exc == EXC_SVC && regs) {
         svc_last_num = regs->r[7];
+        /* r7 doubles as the syscall number; dispatch may rewrite r0. */
+        svc_dispatch(regs);
     }
 }
