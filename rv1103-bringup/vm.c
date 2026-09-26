@@ -167,16 +167,120 @@ uint32_t vm_page_alloc(void)
     return (uint32_t)pg;
 }
 
+/* The space the CPU is currently running in. Set by vm_space_switch;
+ * the pager maps faulted pages into this space. */
+static struct vm_space *vm_cur_space;
+
+static inline void vm_tlbimva(uint32_t va)
+{
+    __asm__ __volatile__("mcr p15, 0, %0, c8, c7, 1" :: "r"(va) : "memory");
+}
+
 void vm_space_switch(struct vm_space *sp)
 {
     vm_dsb();
     /* Same TTBR0 format pmap_enable() uses: bare table base, the low
      * 14 bits are zero from the 16 KiB alignment. */
     vm_write_ttbr0((uint32_t)sp->l1);
+    vm_cur_space = sp;
     vm_dsb();
     vm_invalidate_tlb();   /* old ASID-less entries must not survive */
     vm_dsb();
     vm_isb();
+}
+
+struct vm_space *vm_current_space(void)
+{
+    return vm_cur_space;
+}
+
+/* Look up the L2 small-page descriptor for va in sp, or 0 if va is not
+ * mapped as a page (unmapped, or covered by a 1 MiB section). */
+uint32_t vm_lookup(struct vm_space *sp, uint32_t va)
+{
+    uint32_t l1i, e, l2i;
+    uint32_t *l2;
+
+    if (!sp || !sp->l1 || (va & VM_PAGE_MASK))
+        return 0u;
+    l1i = va >> 20;
+    e = sp->l1[l1i];
+    if ((e & 0x3u) != 0x1u)
+        return 0u;              /* no L2 table: unmapped or a section */
+    l2 = (uint32_t *)(e & 0xFFFFFC00u);
+    l2i = (va >> 12) & 0xFFu;
+    return l2[l2i];
+}
+
+int vm_unmap(struct vm_space *sp, uint32_t va)
+{
+    uint32_t l1i, e, l2i;
+    uint32_t *l2;
+
+    if (!sp || !sp->l1 || (va & VM_PAGE_MASK))
+        return -1;
+    l1i = va >> 20;
+    e = sp->l1[l1i];
+    if ((e & 0x3u) != 0x1u)
+        return -1;              /* no L2 table here */
+    l2 = (uint32_t *)(e & 0xFFFFFC00u);
+    l2i = (va >> 12) & 0xFFu;
+    if (l2[l2i] == 0u)
+        return -1;              /* already unmapped */
+    l2[l2i] = 0u;
+    vm_dsb();
+    /* If this is the live space, drop the stale TLB entry now; a
+     * full TLBIALL from thread context trips a QEMU race (see Fase 5
+     * notes), so invalidate just this page. */
+    if (sp == vm_cur_space) {
+        vm_tlbimva(va);
+        vm_dsb();
+        vm_isb();
+    }
+    return 0;
+}
+
+/*
+ * Pager: resolve a data abort when we can.
+ * Returns 1 when the fault is fixed and the faulting instruction should
+ * be retried, 0 when it is a genuine bug (caller reports and parks).
+ *
+ * Handled case: translation fault (section 0x5 / page 0x7) on an address
+ * inside VM_DEMAND_BASE..VM_DEMAND_END. We allocate a zeroed page and
+ * map it read/write into the current space - demand paging, the seed of
+ * every Mach VM feature (lazy allocation, and later COW / pager-backed
+ * mappings). Permission faults, alignment faults, and faults outside the
+ * demand range are NOT resolved.
+ */
+int vm_page_fault(uint32_t far, uint32_t fsr)
+{
+    unsigned fs;
+    uint32_t pa, va;
+    struct vm_space *sp;
+
+    /* ARMv7 short-descriptor FS: bits[3:0] + bit[10] -> FS[4]. */
+    fs = (fsr & 0xFu) | ((fsr >> 6) & 0x10u);
+    if (fs != 0x5u && fs != 0x7u)
+        return 0;               /* not a translation fault */
+    if (far < VM_DEMAND_BASE || far >= VM_DEMAND_END)
+        return 0;               /* outside the demand range */
+
+    sp = vm_cur_space;
+    if (!sp)
+        return 0;
+    va = far & ~VM_PAGE_MASK;
+    if (vm_lookup(sp, va) != 0u)
+        return 0;               /* already mapped: weird, don't loop */
+    pa = vm_page_alloc();
+    if (pa == 0u)
+        return 0;               /* out of pages */
+    if (vm_map(sp, va, pa, VM_PROT_READ | VM_PROT_WRITE) != 0)
+        return 0;
+    /* vm_map did a DSB; make the new entry visible to the walker now. */
+    vm_tlbimva(va);
+    vm_dsb();
+    vm_isb();
+    return 1;
 }
 
 int vm_probe(struct vm_space *sp, uint32_t va, uint32_t pattern)

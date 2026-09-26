@@ -23,6 +23,11 @@
 #define VM_PAGE_SIZE    4096u
 #define VM_PAGE_MASK    (VM_PAGE_SIZE - 1u)
 
+/* Demand-paging range: the pager (vm_page_fault) resolves translation
+ * faults here by mapping a fresh zeroed page on demand. */
+#define VM_DEMAND_BASE  0x10000000u
+#define VM_DEMAND_END   0x11000000u
+
 /* Protection flags for vm_map(). */
 #define VM_PROT_READ    0x1u
 #define VM_PROT_WRITE   0x2u
@@ -61,6 +66,24 @@ uint32_t vm_page_alloc(void);
  * kernel mappings are identical in every space, and the tables live in
  * 1:1-mapped BSS. */
 void vm_space_switch(struct vm_space *sp);
+
+/* The space the CPU is currently running in (set by vm_space_switch),
+ * or NULL if no switch has happened yet. The pager maps into this. */
+struct vm_space *vm_current_space(void);
+
+/* Return the L2 small-page descriptor for va in sp, or 0 when va is not
+ * mapped as a page. */
+uint32_t vm_lookup(struct vm_space *sp, uint32_t va);
+
+/* Remove the page mapping for va in sp. Returns 0 on success, -1 when
+ * va is not page-mapped. */
+int vm_unmap(struct vm_space *sp, uint32_t va);
+
+/* Pager: try to resolve a data abort (far = DFAR, fsr = DFSR).
+ * Returns 1 when the faulting instruction should be retried, 0 when
+ * the fault is genuine. Resolves translation faults inside the demand
+ * range by mapping a fresh zeroed page. */
+int vm_page_fault(uint32_t far, uint32_t fsr);
 
 /*
  * Atomic isolation probe, for threads: mask IRQs, switch to sp, write

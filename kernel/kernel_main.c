@@ -402,6 +402,94 @@ void kernel_main(void)
         }
     }
 
+    /* 3d. VM maturation: unmap, read-only pages, demand paging.
+     * Still single-threaded (IRQs off), so data aborts land in our
+     * pager without scheduler interference. */
+    {
+        int fails = 0;
+        uint32_t pa_c, desc, v;
+        volatile uint32_t *q;
+
+        /* --- unmap: map a scratch page, verify, unmap, verify gone --- */
+        pa_c = vm_page_alloc();
+        vm_space_switch(&vm_space_a);
+        if (pa_c == 0u) {
+            puts("  FAIL: unmap test out of pages\n"); fails++;
+        } else if (vm_map(&vm_space_a, VM_TEST_VA + 0x1000u, pa_c,
+                          VM_PROT_READ | VM_PROT_WRITE) != 0) {
+            puts("  FAIL: map for unmap test\n"); fails++;
+        } else {
+            q = (volatile uint32_t *)(VM_TEST_VA + 0x1000u);
+            *q = 0x12345678u;
+            if (*q != 0x12345678u) { puts("  FAIL: pre-unmap rw\n"); fails++; }
+            if (vm_lookup(&vm_space_a, VM_TEST_VA + 0x1000u) == 0u) {
+                puts("  FAIL: lookup before unmap\n"); fails++;
+            }
+            if (vm_unmap(&vm_space_a, VM_TEST_VA + 0x1000u) != 0) {
+                puts("  FAIL: vm_unmap\n"); fails++;
+            }
+            if (vm_lookup(&vm_space_a, VM_TEST_VA + 0x1000u) != 0u) {
+                puts("  FAIL: lookup after unmap\n"); fails++;
+            }
+            if (vm_unmap(&vm_space_a, VM_TEST_VA + 0x1000u) == 0) {
+                puts("  FAIL: double unmap succeeded\n"); fails++;
+            }
+            if (vm_unmap(&vm_space_a, 0x20000000u) == 0) {
+                puts("  FAIL: unmap of section VA succeeded\n"); fails++;
+            }
+        }
+
+        /* --- read-only: AP bits must encode RO, RW still works --- */
+        pa_c = vm_page_alloc();
+        if (pa_c == 0u) {
+            puts("  FAIL: ro test out of pages\n"); fails++;
+        } else if (vm_map(&vm_space_a, VM_TEST_VA + 0x3000u, pa_c,
+                          VM_PROT_READ) != 0) {
+            puts("  FAIL: map RO\n"); fails++;
+        } else {
+            desc = vm_lookup(&vm_space_a, VM_TEST_VA + 0x3000u);
+            /* AP[1:0]=0b10 (bits 5:4), APX=1 (bit 9) => read-only for
+             * both privileged and user. A write would permission-fault
+             * (pager deliberately does not resolve those), so we verify
+             * the encoding structurally here. */
+            if (((desc >> 4) & 0x3u) != 0x2u || ((desc >> 9) & 0x1u) != 1u) {
+                puts("  FAIL: RO descriptor AP bits\n"); fails++;
+            }
+            /* RW page for contrast: AP[1:0]=0b11, APX=0. */
+            desc = vm_lookup(&vm_space_a, VM_TEST_VA);
+            if (((desc >> 4) & 0x3u) != 0x3u || ((desc >> 9) & 0x1u) != 0u) {
+                puts("  FAIL: RW descriptor AP bits\n"); fails++;
+            }
+        }
+
+        /* --- demand paging: touch unmapped page, pager maps it --- */
+        q = (volatile uint32_t *)(VM_DEMAND_BASE + 0x2000u);
+        if (vm_lookup(&vm_space_a, (uint32_t)q) != 0u) {
+            puts("  FAIL: demand VA already mapped\n"); fails++;
+        } else {
+            *q = 0xDEADBEEFu;   /* faults -> pager maps zeroed page -> retry */
+            v = *q;
+            if (v != 0xDEADBEEFu) {
+                puts("  FAIL: demand paging write/read\n"); fails++;
+            }
+            if (vm_lookup(&vm_space_a, (uint32_t)q) == 0u) {
+                puts("  FAIL: pager did not map\n"); fails++;
+            }
+            *q = 0xCAFEBABEu;   /* second touch: no fault, page persists */
+            if (*q != 0xCAFEBABEu) {
+                puts("  FAIL: demand page not persistent\n"); fails++;
+            }
+        }
+        vm_space_switch(&vm_space_kern);
+
+        puts("[vm  ] unmap / read-only / demand paging: ");
+        if (fails == 0)
+            puts("ALL CHECKS PASSED\n");
+        else {
+            puts("FAILURES = "); putdec((unsigned)fails); putc('\n');
+        }
+    }
+
     /* 4. Preemptive scheduler: GIC + virtual-timer tick. */
     puts("[gic ] init GIC-400\n");
     gic_init();

@@ -8,6 +8,7 @@
 #include "syscall.h"
 #include "board.h"
 #include "armv7/exception.h"
+#include "vm.h"
 
 volatile unsigned trap_count[8];
 volatile unsigned last_trap_exc;
@@ -89,7 +90,17 @@ void arm_trap(unsigned exc, struct trap_regs *regs)
         uint32_t dfsr, dfar;
         __asm__ __volatile__("mrc p15, 0, %0, c5, c0, 0" : "=r"(dfsr));
         __asm__ __volatile__("mrc p15, 0, %0, c6, c0, 0" : "=r"(dfar));
+        /* Pager first: a translation fault in the demand range gets a
+         * fresh page and the instruction is retried. The stub returns
+         * via rfefd using the stacked LR_abt (= fault + 8 for data
+         * aborts), so rewind it to the faulting instruction. */
+        if (vm_page_fault(dfar, dfsr)) {
+            if (regs)
+                regs->lr -= 8u;
+            return;
+        }
         report_abort("data", (unsigned)dfsr, (unsigned)dfar, regs);
+        for (;;) { __asm__ __volatile__("wfi"); }  /* genuine bug: park */
     } else if (exc == EXC_PREFETCH_ABORT) {
         uint32_t ifsr, ifar;
         __asm__ __volatile__("mrc p15, 0, %0, c5, c0, 1" : "=r"(ifsr));
