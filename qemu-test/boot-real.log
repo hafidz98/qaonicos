@@ -1,0 +1,3 @@
+Hello dari Cortex-A7 bare-metal!
+Startup asm + linker script + UART polled: OK.
+qemu-system-arm: terminating on signal 15 from pid 6366 (timeout)
