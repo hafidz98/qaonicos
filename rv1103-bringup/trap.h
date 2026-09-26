@@ -7,11 +7,14 @@
 /*
  * Register frame built by the asm vector stubs. Layout (r1 on entry):
  *   r[0..12]  : r0-r12 at trap time
- *   lr        : banked LR of the exception mode
+ *   _pad      : 4-byte gap from the stub's "sub sp, sp, #4"
+ *   lr        : banked LR of the exception mode (srsdb stores LR at
+ *               [sp] and SPSR at [sp+4]; rfe is its exact inverse)
  *   spsr      : banked SPSR of the exception mode
  */
 struct trap_regs {
     uint32_t r[13];
+    uint32_t _pad;
     uint32_t lr;
     uint32_t spsr;
 };
