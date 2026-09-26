@@ -25,7 +25,7 @@ int main(void)
     puts("P3 trap test (qemu-virt, cortex-a7)\n");
 
     /* SVC #0 with r7 = 42. Must return and record r7. */
-    __asm__ volatile("mov r7, %0\n\tsvc #0" :: "r"(42u) : "r7", "memory");
+    __asm__ volatile("mov r7, %0\n\tsvc #0" :: "r"(42u) : "r7", "lr", "memory");
     if (svc_last_num == 42u && trap_count[EXC_SVC] == 1u &&
         last_trap_exc == EXC_SVC)
         puts("PASS svc #0 (r7=42 recorded, returned)\n");
@@ -38,7 +38,7 @@ int main(void)
     else { puts("FAIL undef\n"); fails++; }
 
     /* Second SVC: traps must be repeatable. */
-    __asm__ volatile("mov r7, %0\n\tsvc #1" :: "r"(7u) : "r7", "memory");
+    __asm__ volatile("mov r7, %0\n\tsvc #1" :: "r"(7u) : "r7", "lr", "memory");
     if (svc_last_num == 7u && trap_count[EXC_SVC] == 2u)
         puts("PASS svc #1 (repeat)\n");
     else { puts("FAIL svc #1\n"); fails++; }
