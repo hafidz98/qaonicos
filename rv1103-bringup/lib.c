@@ -23,3 +23,14 @@ size_t strlen(const char *s)
     while (*s++) n++;
     return n;
 }
+
+int memcmp(const void *a, const void *b, size_t n)
+{
+    const uint8_t *p = (const uint8_t *)a, *q = (const uint8_t *)b;
+    while (n--) {
+        if (*p != *q)
+            return (int)*p - (int)*q;
+        p++; q++;
+    }
+    return 0;
+}

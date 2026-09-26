@@ -109,6 +109,70 @@ static void wire_puts(struct ipc_wire *w, uint32_t id, const char *txt)
     w->size = n + 1;
 }
 
+/* Rigorous self-test of the whole IPC path (via SVC traps, like
+ * real userspace). Returns number of failed checks. */
+static int ipc_selftest(void)
+{
+    struct ipc_wire w, r;
+    unsigned tp, p_send, p_recv;
+    int fails = 0, i, ret;
+
+#define CHECK(cond, msg) do { \
+        if (!(cond)) { puts("  FAIL: "); puts(msg); putc('\n'); fails++; } \
+    } while (0)
+
+    /* 1. rights enforcement */
+    p_send = ipc_port_alloc(&kern_space, IPC_SEND);
+    p_recv = ipc_port_alloc(&kern_space, IPC_RECV);
+    CHECK(p_send != 0 && p_recv != 0, "port alloc");
+    wire_puts(&w, 0x71, "x");
+    CHECK(svc_send(p_recv, &w, sizeof(w)) == -1, "send to recv-only port must fail");
+    CHECK(svc_recv(p_send, &r, sizeof(r)) == -1, "recv from send-only port must fail");
+    CHECK(svc_send(99, &w, sizeof(w)) == -1, "send to bad name must fail");
+    CHECK(svc_recv(99, &r, sizeof(r)) == -1, "recv from bad name must fail");
+
+    /* 2. FIFO order */
+    tp = ipc_port_alloc(&kern_space, IPC_SEND | IPC_RECV);
+    CHECK(tp != 0, "test port alloc");
+    for (i = 0; i < 3; i++) {
+        wire_puts(&w, 0x10u + (unsigned)i, "fifo");
+        w.data[0] = (uint8_t)('A' + i);
+        CHECK(svc_send(tp, &w, sizeof(w)) == 0, "fifo send");
+    }
+    for (i = 0; i < 3; i++) {
+        ret = svc_recv(tp, &r, sizeof(r));
+        CHECK(ret > 0, "fifo recv");
+        CHECK(r.id == 0x10u + (unsigned)i, "fifo order");
+        CHECK(r.data[0] == (uint8_t)('A' + i), "fifo payload");
+    }
+
+    /* 3. payload integrity: 224-byte pattern, byte-exact */
+    for (i = 0; i < IPC_MSG_DATA; i++)
+        w.data[i] = (uint8_t)(i * 7 + 3);
+    w.bits = 0xdead; w.id = 0xbeef; w.size = IPC_MSG_DATA;
+    CHECK(svc_send(tp, &w, sizeof(w)) == 0, "pattern send");
+    ret = svc_recv(tp, &r, sizeof(r));
+    CHECK(ret == IPC_MSG_DATA, "pattern size");
+    CHECK(r.bits == 0xdead && r.id == 0xbeef, "pattern header");
+    CHECK(memcmp(r.data, w.data, IPC_MSG_DATA) == 0, "pattern body");
+
+    /* 4. queue full: QDEPTH sends ok, next one fails; drain all */
+    for (i = 0; i < IPC_QDEPTH; i++) {
+        wire_puts(&w, (unsigned)i, "q");
+        CHECK(svc_send(tp, &w, sizeof(w)) == 0, "fill queue");
+    }
+    wire_puts(&w, 0xff, "q");
+    CHECK(svc_send(tp, &w, sizeof(w)) == -1, "send to full queue must fail");
+    for (i = 0; i < IPC_QDEPTH; i++)
+        CHECK(svc_recv(tp, &r, sizeof(r)) > 0, "drain queue");
+
+    /* 5. empty queue */
+    CHECK(svc_recv(tp, &r, sizeof(r)) == -1, "recv from empty queue must fail");
+
+#undef CHECK
+    return fails;
+}
+
 /* Thread A: VFP compute thread, also the IPC initiator. */
 static struct pcb pcb_main, pcb_a, pcb_b;
 static unsigned char stack_a[4096] __attribute__((aligned(8)));
@@ -209,6 +273,17 @@ void kernel_main(void)
     puts("[ipc ] zones up, port allocated, name = ");
     putdec(demo_port);
     puts(" (send+recv)\n");
+
+    /* 3b. Rigorous self-test before any threading. */
+    {
+        int fails = ipc_selftest();
+        puts("[ipc ] selftest: ");
+        if (fails == 0)
+            puts("ALL CHECKS PASSED\n");
+        else {
+            puts("FAILURES = "); putdec((unsigned)fails); putc('\n');
+        }
+    }
 
     /* 4. Threads: A <-IPC-> B, then A (fpu) and B (svc) interleave. */
     puts("[sched] spawning threads A (fpu) and B (svc)\n");
