@@ -73,6 +73,9 @@ langsung ke ~30% komponen machine-dependent yang dibutuhkan.
 3. **Strategi debug**: `printf` via UART (T1) + LED/pin GPIO sebagai "breakpoint
    buta" + `db_trace` ala `db_trace.c` i386.
 4. **Jangan mulai dari openmach/FKernel** — keduanya tidak memberi kode ARM.
+5. **LLVM/Clang (P6)**: setelah bring-up stabil di QEMU, bangun ulang kode
+   dengan `clang --target=armv7` sebagai cross-check compiler (menangkap
+   GCC-ism) — persiapan integrasi GNU Mach yang upstream-nya mendukung clang.
 
 ## 6. Status Fase 1 (T1–T5)
 
