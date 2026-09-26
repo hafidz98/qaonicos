@@ -54,10 +54,45 @@ reset_handler:
     b 1b
     .endm
 
-    dead_handler undef_handler
-    dead_handler svc_handler
-    dead_handler prefetch_handler
-    dead_handler data_handler
+/*
+ * Real trap stubs for undef / svc / prefetch-abort / data-abort.
+ *
+ * Each stub:
+ *   srsdb sp!, #mode   - push the exception mode's banked LR+SPSR
+ *   sub sp, sp, #4     - pad so the frame stays 8-byte aligned (AAPCS)
+ *   push {r0-r12}      - save the general registers
+ *   arm_trap(exc, regs) with regs -> r0 (matches struct trap_regs)
+ *   ... then either RFE back (svc/undef) or park on wfi (aborts).
+ *
+ * Abort LR adjustments (prefetch: lr-4, data: lr-8) only matter when
+ * resuming; the abort stubs record the trap and park, so no fixup yet.
+ * IRQ/FIQ paths below are untouched.
+ */
+    .macro trap_stub name, excnum, mode, ret
+    .global \name
+    .type \name, %function
+\name:
+    srsdb sp!, #\mode
+    sub sp, sp, #4
+    push {r0-r12}
+    mov r0, #\excnum
+    mov r1, sp
+    bl arm_trap
+    pop {r0-r12}
+    add sp, sp, #4
+    .if \ret
+    rfefd sp!
+    .else
+1:  wfi
+    b 1b
+    .endif
+    .endm
+
+    trap_stub undef_handler,    1, 0x1b, 1   /* EXC_UNDEF = 1, UND, return */
+    trap_stub svc_handler,      2, 0x13, 1   /* EXC_SVC = 2, SVC, return   */
+    trap_stub prefetch_handler, 3, 0x17, 0   /* EXC_PREFETCH_ABORT, hang   */
+    trap_stub data_handler,     4, 0x17, 0   /* EXC_DATA_ABORT, hang       */
+
     dead_handler reserved_handler
     dead_handler fiq_handler
 
