@@ -66,6 +66,62 @@ static unsigned hexapp(uint8_t *d, unsigned off, uint8_t v)
     return off;
 }
 
+/* --- simulasi spek Luckfox Pico Mini (Fase 12c) ---
+ * LCG sederhana + random walk. State persisten antar request sehingga
+ * nilai BERUBAH tiap halaman di-refresh. Semua nilai di sini SIMULASI
+ * dari spek asli (RV1103 Cortex-A7 @1.2GHz, 64MB DDR2, 128MB SPI NAND),
+ * bukan pengukuran nyata. Tanpa rand() libc.
+ */
+static uint32_t sim_state = 0u;
+static int sim_cpu = 23;   /* persen, walk 4..87 */
+static int sim_mem = 31;   /* MB terpakai dari 64MB DDR2, walk 18..52 */
+static int sim_stor = 68;  /* MB terpakai dari 128MB SPI NAND, walk 40..110 */
+static int sim_up = 85;    /* 0.1 Mbps, walk 0.2..40.0 */
+static int sim_dn = 142;   /* 0.1 Mbps, walk 0.2..40.0 */
+
+static uint32_t sim_next(void)
+{
+    sim_state = sim_state * 1103515245u + 12345u;
+    return (sim_state >> 16) & 0x7fffu;
+}
+
+static int sim_walk(int v, int lo, int hi, int step)
+{
+    int d = (int)(sim_next() % (uint32_t)(2 * step + 1)) - step;
+    v += d;
+    if (v < lo)
+        v = lo;
+    if (v > hi)
+        v = hi;
+    return v;
+}
+
+static void sim_tick(void)
+{
+    int k;
+    if (sim_state == 0u) {
+        sim_state = sched_ticks() | 0x9e3779b9u;
+        if (sim_state == 0u)
+            sim_state = 0x12345678u;
+    }
+    for (k = 0; k < 2; k++) {
+        sim_cpu = sim_walk(sim_cpu, 4, 87, 6);
+        sim_mem = sim_walk(sim_mem, 18, 52, 3);
+        sim_stor = sim_walk(sim_stor, 40, 110, 4);
+        sim_up = sim_walk(sim_up, 2, 400, 25);
+        sim_dn = sim_walk(sim_dn, 2, 400, 30);
+    }
+}
+
+/* Format persepuluh Mbps: 85 -> "8.5". */
+static unsigned fix1app(uint8_t *d, unsigned off, int tenths)
+{
+    off = u32app(d, off, (uint32_t)(tenths / 10));
+    off = strapp(d, off, ".");
+    off = u32app(d, off, (uint32_t)(tenths % 10));
+    return off;
+}
+
 /* --- body /metrics --- */
 static unsigned build_metrics(uint8_t *b)
 {
@@ -121,13 +177,19 @@ static unsigned build_metrics(uint8_t *b)
     return off;
 }
 
-/* --- body / : dashboard HTML system monitor (nilai live per request) --- */
+/* --- body / : dashboard HTML system monitor (nilai live per request) ---
+ * Dua bagian: "Simulasi" (spek Luckfox Pico Mini, nilai simulasi berlabel
+ * jelas) dan "Data kernel (real)" (data nyata dari kernel).
+ */
 static unsigned build_dashboard(uint8_t *b)
 {
     unsigned off = 0, i, n, nr = 0, nb = 0, nd = 0, pct;
+    unsigned mempct, stopct;
     struct vm_stats vs;
     uint32_t ms = sched_ticks();
     const uint8_t *mac = net_mac();
+
+    sim_tick(); /* majukan random walk simulasi tiap request */
 
     n = sched_thread_count();
     for (i = 0; i < n; i++) {
@@ -142,6 +204,8 @@ static unsigned build_dashboard(uint8_t *b)
     }
     vm_get_stats(&vs);
     pct = vs.pages_total ? (vs.pages_used * 100u / vs.pages_total) : 0;
+    mempct = (unsigned)sim_mem * 100u / 64u;
+    stopct = (unsigned)sim_stor * 100u / 128u;
 
     off = strapp(b, off,
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
@@ -159,14 +223,63 @@ static unsigned build_dashboard(uint8_t *b)
         ".card .v{font-size:20px;color:#fff}"
         ".bar{height:8px;background:#263049;border-radius:4px;margin-top:6px}"
         ".bar i{display:block;height:8px;background:#3fb950;border-radius:4px}"
+        ".simtag{font-size:10px;color:#0b0e14;background:#d29922;"
+        "border-radius:4px;padding:1px 6px;margin-left:6px}"
         "table{border-collapse:collapse;margin-top:8px}"
         "th,td{border:1px solid #263049;padding:3px 10px;text-align:left}"
         "th{color:#8fa3c0;font-weight:normal}"
         ".run{color:#3fb950}.blk{color:#d29922}.ded{color:#6e7681}"
-        ".note{color:#8fa3c0;font-size:12px;max-width:640px}"
+        ".note{color:#8fa3c0;font-size:12px;max-width:680px}"
         "</style></head><body>"
         "<h1>QaonicOS System Monitor</h1>"
+        "<h2>Simulasi - spek Luckfox Pico Mini</h2>"
+        "<p class=\"note\">Nilai di bagian ini adalah SIMULASI dari spek asli "
+        "Luckfox Pico Mini (RV1103 Cortex-A7 @1.2GHz, 64MB DDR2, 128MB SPI "
+        "NAND Flash), bukan pengukuran nyata.</p>"
         "<div class=\"cards\">");
+
+    /* Kartu CPU % (simulasi) */
+    off = strapp(b, off,
+        "<div class=\"card\"><b>CPU<span class=\"simtag\">simulasi</span></b>"
+        "<span class=\"v\">");
+    off = u32app(b, off, (uint32_t)sim_cpu);
+    off = strapp(b, off, "%</span><div class=\"bar\"><i style=\"width:");
+    off = u32app(b, off, (uint32_t)sim_cpu);
+    off = strapp(b, off, "%\"></i></div>RV1103 @1.2GHz</div>");
+
+    /* Kartu Memory % + MB (simulasi, 64MB DDR2) */
+    off = strapp(b, off,
+        "<div class=\"card\"><b>Memory<span class=\"simtag\">simulasi</span></b>"
+        "<span class=\"v\">");
+    off = u32app(b, off, (uint32_t)sim_mem);
+    off = strapp(b, off, "/64 MB</span><div class=\"bar\"><i style=\"width:");
+    off = u32app(b, off, mempct);
+    off = strapp(b, off, "%\"></i></div>");
+    off = u32app(b, off, mempct);
+    off = strapp(b, off, "% dari 64MB DDR2</div>");
+
+    /* Kartu Storage % + MB (simulasi, 128MB SPI NAND) */
+    off = strapp(b, off,
+        "<div class=\"card\"><b>Storage<span class=\"simtag\">simulasi</span></b>"
+        "<span class=\"v\">");
+    off = u32app(b, off, (uint32_t)sim_stor);
+    off = strapp(b, off, "/128 MB</span><div class=\"bar\"><i style=\"width:");
+    off = u32app(b, off, stopct);
+    off = strapp(b, off, "%\"></i></div>");
+    off = u32app(b, off, stopct);
+    off = strapp(b, off, "% dari 128MB SPI NAND</div>");
+
+    /* Kartu Bandwidth up/down (simulasi, link USB 2.0) */
+    off = strapp(b, off,
+        "<div class=\"card\"><b>Bandwidth<span class=\"simtag\">simulasi</span></b>"
+        "<span class=\"v\">&darr; ");
+    off = fix1app(b, off, sim_dn);
+    off = strapp(b, off, " Mbps</span><br>&uarr; ");
+    off = fix1app(b, off, sim_up);
+    off = strapp(b, off, " Mbps<br>link USB 2.0</div>");
+
+    /* --- Bagian data kernel (real) --- */
+    off = strapp(b, off, "</div><h2>Data kernel (real)</h2><div class=\"cards\">");
 
     /* Kartu Uptime */
     off = strapp(b, off,
@@ -176,9 +289,9 @@ static unsigned build_dashboard(uint8_t *b)
     off = u32app(b, off, ms);
     off = strapp(b, off, " ms</div>");
 
-    /* Kartu CPU: jujur sebagai proxy aktivitas thread */
+    /* Kartu aktivitas thread (data kernel nyata) */
     off = strapp(b, off,
-        "<div class=\"card\"><b>CPU (proxy: aktivitas thread)</b>"
+        "<div class=\"card\"><b>Aktivitas thread</b>"
         "<span class=\"v\">");
     off = u32app(b, off, nr);
     off = strapp(b, off, " runnable</span><br>");
@@ -187,9 +300,9 @@ static unsigned build_dashboard(uint8_t *b)
     off = u32app(b, off, nd);
     off = strapp(b, off, " dead</div>");
 
-    /* Kartu Memory */
+    /* Kartu Memory kernel */
     off = strapp(b, off,
-        "<div class=\"card\"><b>Memory</b><span class=\"v\">");
+        "<div class=\"card\"><b>Memory kernel</b><span class=\"v\">");
     off = u32app(b, off, vs.pages_used);
     off = strapp(b, off, "/");
     off = u32app(b, off, vs.pages_total);
@@ -206,7 +319,7 @@ static unsigned build_dashboard(uint8_t *b)
     off = u32app(b, off, vs.l2_total);
     off = strapp(b, off, "</div>");
 
-    /* Kartu Network */
+    /* Kartu Network kernel */
     off = strapp(b, off,
         "<div class=\"card\"><b>Network (virtio-net)</b>"
         "<span class=\"v\">10.0.2.15</span><br>MAC ");
@@ -244,9 +357,11 @@ static unsigned build_dashboard(uint8_t *b)
     }
     off = strapp(b, off,
         "</table><p class=\"note\">"
-        "CPU % belum diekspos kernel; kartu CPU memakai proxy jumlah "
-        "thread runnable. Data live dari <a href=\"/metrics\">/metrics</a> "
-        "(text/plain). Halaman refresh otomatis tiap 5 detik."
+        "Bagian \"Simulasi\" memakai nilai acak realistis berbasis spek "
+        "Luckfox Pico Mini dan selalu berlabel simulasi. Bagian "
+        "\"Data kernel\" adalah data nyata dari kernel. "
+        "Format teks: <a href=\"/metrics\">/metrics</a>. "
+        "Halaman refresh otomatis tiap 5 detik."
         "</p></body></html>\r\n");
     return off;
 }
