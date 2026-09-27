@@ -99,10 +99,13 @@ reset_handler:
 /*
  * Handler IRQ (preemptif):
  *   - bangun exception frame penuh di stack SVC thread yang terinterupsi:
- *       [pad, r0..r12, pc, cpsr]  (16 word, 8-byte aligned)
+ *       [r0..r12, lr_svc, pc, cpsr]  (16 word, 8-byte aligned, tanpa pad)
+ *     lr_svc WAJIB disimpan: `bl c_irq_handler` di bawah menimpa lr_svc
+ *     milik thread yang terinterupsi. Tanpa ini, tiap tick menghancurkan
+ *     lr thread (terekspos saat clang memakai lr sebagai scratch register).
  *   - panggil c_irq_handler(frame); ia mengembalikan SP frame thread
  *     berikutnya (bisa sama) — scheduler preemptif terjadi di sini
- *   - rfeia: pc = frame[14], cpsr = frame[15]
+ *   - pop r0..r12, lr lalu rfeia: pc = frame[14], cpsr = frame[15]
  *
  * Catatan: srsdb menyimpan lr_irq-4 (sudah dikurangi) dan spsr_irq ke
  * stack mode SVC, lalu kita pindah ke SVC dan push sisanya.
@@ -113,13 +116,11 @@ irq_handler:
     sub lr, lr, #4
     srsdb sp!, #0x13        /* [sp-8]=lr_irq-4, [sp-4]=spsr_irq (stack SVC) */
     cps #0x13              /* SVC: sp sekarang menunjuk frame parsial */
-    push {r0-r12}          /* frame: r0..r12 */
-    sub sp, sp, #4         /* pad -> total 16 word */
+    push {r0-r12, lr}      /* frame: r0..r12, lr_svc */
     mov r0, sp
     bl c_irq_handler       /* r0 = frame thread berikutnya */
     mov sp, r0
-    add sp, sp, #4         /* lewati pad */
-    pop {r0-r12}
+    pop {r0-r12, lr}       /* pulihkan r0..r12 dan lr_svc */
     rfeia sp!              /* pc=[sp], cpsr=[sp+4] */
     .size irq_handler, . - irq_handler
 

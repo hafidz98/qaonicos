@@ -57,9 +57,9 @@ void sched_add(void (*entry)(void), uint8_t *stack_top,
     if (nthreads >= SCHED_MAX_THREADS || !entry || !stack_top)
         return;
     f = (uint32_t *)stack_top - FR_WORDS;
-    f[0] = 0u;                          /* pad */
-    for (i = 1; i <= 13; i++)
-        f[i] = 0u;                      /* r0..r12 */
+    for (i = 0; i <= 12; i++)
+        f[i] = 0u;                          /* r0..r12 */
+    f[FR_LR] = 0u;                          /* lr_svc (tak dipakai saat start) */
     f[FR_PC] = (uint32_t)entry;
     f[FR_CPSR] = 0x13u;                 /* SVC mode, IRQ enabled */
 
@@ -155,9 +155,9 @@ void sched_add_user(uint8_t *stack_top, struct task *task,
     if (nthreads >= SCHED_MAX_THREADS || !stack_top || !task)
         return;
     f = (uint32_t *)stack_top - FR_WORDS;
-    f[0] = 0u;                          /* pad */
-    for (i = 1; i <= 13; i++)
-        f[i] = 0u;                      /* r0..r12 */
+    for (i = 0; i <= 12; i++)
+        f[i] = 0u;                          /* r0..r12 */
+    f[FR_LR] = 0u;                          /* lr_svc (tak dipakai thread user) */
     f[FR_PC] = user_pc;
     f[FR_CPSR] = 0x10u;                 /* USR mode, IRQ enabled */
 
@@ -260,8 +260,7 @@ void sched_start(void)
     f = threads[0].sp;
     __asm__ volatile(
         "mov sp, %0\n\t"
-        "add sp, sp, #4\n\t"       /* skip pad */
-        "pop {r0-r12}\n\t"
+        "pop {r0-r12, lr}\n\t"         /* r0..r12, lr_svc (tanpa pad) */
         "rfeia sp!"                 /* pc=f[14], cpsr=f[15] */
         :: "r"(f) : "memory");
     __builtin_unreachable();

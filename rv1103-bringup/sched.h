@@ -28,8 +28,17 @@
  * Fase 9: 8 -> 10 (tambah thread user fstest). */
 #define SCHED_MAX_THREADS 14u
 
-/* Exception frame layout (words). */
+/* Exception frame layout (words), dibangun irq_handler (vectors.S)
+ * dan sched_add/sched_add_user. 16 word, 8-byte aligned, tanpa pad:
+ *   f[0..12]  r0..r12
+ *   f[13]     lr_svc  (wajib: bl c_irq_handler menimpa lr_svc thread yang
+ *                      terinterupsi; tanpa ini tiap tick menghancurkan
+ *                      lr thread -> register allocator clang yang memakai
+ *                      lr sebagai scratch (fungsi tak-return) kena)
+ *   f[14]     pc (lr_irq-4)
+ *   f[15]     cpsr (spsr_irq) */
 #define FR_WORDS 16u
+#define FR_LR    13u
 #define FR_PC    14u
 #define FR_CPSR  15u
 
