@@ -88,6 +88,11 @@ static struct {
     uint8_t  req[1024];
     unsigned reqlen;
     uint8_t  responded;
+    /* Respons HTTP yang sedang dikirim (untuk retransmit per-segmen): */
+    const uint8_t *tx_base;  /* buffer respons (milik tcp_respond) */
+    unsigned tx_len;         /* panjang respons */
+    uint32_t tx_seq0;        /* seq number dari tx_base[0] */
+    uint8_t  tx_active;      /* 1 selama respons belum di-ack semua */
 } tc;
 
 static unsigned st_rx, st_tx, st_conns;
@@ -154,20 +159,33 @@ static void tcp_reset_conn(void)
     tc.reqlen = 0;
     tc.responded = 0;
     tc.last_valid = 0;
+    tc.tx_active = 0;
 }
 
-/* Kirim respons HTTP lalu FIN (dipanggil sekali saat request lengkap). */
+/* Kirim respons HTTP per-segmen lalu FIN (dipanggil sekali saat request
+ * lengkap). HTTP/1.0, Connection: close. */
 static void tcp_respond(void)
 {
-    static uint8_t resp[1400];
-    unsigned rlen;
+    static uint8_t resp[8704];
+    unsigned rlen, off;
 
     tc.responded = 1;
     rlen = http_handle(tc.req, tc.reqlen, resp);
-    if (rlen > TCP_MAXSEG)
-        rlen = TCP_MAXSEG;      /* pengaman; respons kita < 1 segmen */
-    /* Kirim body; kalau > TCP_MAXSEG perlu segmentasi (tak terjadi). */
-    tcp_send(TF_PSH | TF_ACK, resp, rlen);
+    if (rlen > sizeof(resp))
+        rlen = sizeof(resp);
+    /* Catat rentang data agar tcp_tick bisa retransmit per-segmen. */
+    tc.tx_base = resp;
+    tc.tx_len = rlen;
+    tc.tx_seq0 = tc.snd_nxt;
+    tc.tx_active = 1;
+    off = 0;
+    while (off < rlen) {
+        unsigned n = rlen - off;
+        if (n > TCP_MAXSEG)
+            n = TCP_MAXSEG;
+        tcp_send(TF_PSH | TF_ACK, resp + off, n);
+        off += n;
+    }
     /* Langsung FIN (HTTP/1.0 Connection: close). */
     tcp_send(TF_FIN | TF_ACK, 0, 0);
     tc.state = TS_FIN_SENT;
@@ -348,19 +366,49 @@ void tcp_tick(void)
         tcp_reset_conn();
         return;
     }
-    /* Retransmit segmen terakhir yang belum di-ack. */
-    if (tc.last_valid && now - tc.last_tx_ms > RTO_MS) {
-        uint8_t *s = tc.last_seg;
-        /* Patch ack number (bisa maju sejak pengiriman). */
-        s[8] = (uint8_t)(tc.rcv_nxt >> 24);
-        s[9] = (uint8_t)(tc.rcv_nxt >> 16);
-        s[10] = (uint8_t)(tc.rcv_nxt >> 8);
-        s[11] = (uint8_t)tc.rcv_nxt;
-        wr16(s + 16, 0u);
-        wr16(s + 16, tcp_csum(NET_IP, tc.rip, s, tc.last_seglen));
-        if (netstack_ip_send(tc.rip, 6u, s, tc.last_seglen) == 0) {
-            st_tx++;
-            tc.last_tx_ms = now;
+    /* Retransmit: kirim ulang dari snd_una bila ada yang belum di-ack. */
+    if (tc.last_valid && tc.snd_una < tc.snd_nxt &&
+        now - tc.last_tx_ms > RTO_MS) {
+        if (tc.tx_active && tc.snd_una >= tc.tx_seq0 &&
+            tc.snd_una < tc.tx_seq0 + tc.tx_len) {
+            /* Segmen data respons: bangun ulang dari buffer (tanpa
+               menggeser snd_nxt dan tanpa menimpa salinan FIN). */
+            static uint8_t rtx[TCP_HDRLEN + TCP_MAXSEG];
+            unsigned off = (unsigned)(tc.snd_una - tc.tx_seq0);
+            unsigned n = tc.tx_len - off;
+            unsigned i;
+            if (n > TCP_MAXSEG)
+                n = TCP_MAXSEG;
+            wr16(rtx + 0, TCP_PORT);
+            wr16(rtx + 2, tc.rport);
+            wr32(rtx + 4, tc.snd_una);
+            wr32(rtx + 8, tc.rcv_nxt);
+            rtx[12] = (uint8_t)(5u << 4);
+            rtx[13] = (uint8_t)(TF_PSH | TF_ACK);
+            wr16(rtx + 14, 4096u);
+            wr16(rtx + 16, 0u);
+            wr16(rtx + 18, 0u);
+            for (i = 0; i < n; i++)
+                rtx[TCP_HDRLEN + i] = tc.tx_base[off + i];
+            wr16(rtx + 16, tcp_csum(NET_IP, tc.rip, rtx, TCP_HDRLEN + n));
+            if (netstack_ip_send(tc.rip, 6u, rtx, TCP_HDRLEN + n) == 0) {
+                st_tx++;
+                tc.last_tx_ms = now;
+            }
+        } else {
+            /* SYN+ACK / FIN murni: pakai salinan segmen terakhir. */
+            uint8_t *s = tc.last_seg;
+            /* Patch ack number (bisa maju sejak pengiriman). */
+            s[8] = (uint8_t)(tc.rcv_nxt >> 24);
+            s[9] = (uint8_t)(tc.rcv_nxt >> 16);
+            s[10] = (uint8_t)(tc.rcv_nxt >> 8);
+            s[11] = (uint8_t)tc.rcv_nxt;
+            wr16(s + 16, 0u);
+            wr16(s + 16, tcp_csum(NET_IP, tc.rip, s, tc.last_seglen));
+            if (netstack_ip_send(tc.rip, 6u, s, tc.last_seglen) == 0) {
+                st_tx++;
+                tc.last_tx_ms = now;
+            }
         }
     }
 }
