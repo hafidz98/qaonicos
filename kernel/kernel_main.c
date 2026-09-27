@@ -25,6 +25,12 @@
 #include "../rv1103-bringup/task.h"
 #include "../rv1103-bringup/pager.h"
 #include "../rv1103-bringup/lib.h"
+#include "../rv1103-bringup/user.h"
+
+/* Fase 8: image program userspace, di-embed dari user/hello.bin oleh
+ * build.sh (user/embed.py -> /tmp/mach_hello_img.o). */
+extern const uint8_t hello_img[];
+extern const unsigned hello_img_len;
 
 /* PL011 (QEMU virt UART0). */
 #define UARTDR  (*(volatile unsigned *)0x09000000u)
@@ -270,6 +276,42 @@ static unsigned pager_req, pager_rep;   /* nama port di task_pager.ipc */
 static unsigned pager_obj;              /* id memory object */
 static volatile unsigned pager_done;    /* diset thread_pclient */
 
+/* ------------------------------------------------------------------ */
+/* Fase 8: user mode + syscall.                                       */
+/* ------------------------------------------------------------------ */
+static struct task task_user;           /* protection domain program user */
+static unsigned char stack_usvc[16384] __attribute__((aligned(8)));
+static unsigned char stack_uthread[16384] __attribute__((aligned(8)));
+static unsigned usvc_port;              /* recv port echo, di task_kern.ipc */
+static unsigned usvc_rep_in_kern;       /* send-right ke reply port user */
+
+/* Echo server kernel untuk program user: terima request di usvc_port,
+ * balas "echo:" + payload ke reply port user. */
+static void thread_usvc(void)
+{
+    static struct ipc_wire w, r;
+    int n;
+    unsigned i, m;
+
+    for (;;) {
+        n = svc_recv(usvc_port, &w, sizeof(w));
+        if (n <= 0 || w.id != ECHO_REQ_ID)
+            continue;
+        r.bits = 0;
+        r.id = ECHO_REP_ID;
+        r.data[0] = 'e'; r.data[1] = 'c'; r.data[2] = 'h';
+        r.data[3] = 'o'; r.data[4] = ':';
+        m = w.size;
+        if (m > IPC_MSG_DATA - 6u)
+            m = IPC_MSG_DATA - 6u;
+        for (i = 0; i < m; i++)
+            r.data[5 + i] = w.data[i];
+        r.size = 5u + m + 1u;
+        r.data[5 + m] = 0;
+        svc_send(usvc_rep_in_kern, &r, sizeof(r));
+    }
+}
+
 /* Atomically print one status line; the 12th line ends the demo. */
 static void report(const char *tag, unsigned n, uint64_t fpubits,
                    unsigned vmfails)
@@ -284,8 +326,10 @@ static void report(const char *tag, unsigned n, uint64_t fpubits,
     putc('\n');
     total_lines++;
     /* Fase 7: jangan halt sebelum pager test selesai (pager_done
-     * diset thread_pclient). Tes lama tidak rusak - hanya menunggu. */
-    over = (total_lines >= 12) && pager_done;
+     * diset thread_pclient). Fase 8: juga tunggu thread user selesai
+     * (user_done diset SYS_EXIT / user_kill). Tes lama tidak rusak -
+     * hanya menunggu. */
+    over = (total_lines >= 12) && pager_done && user_done;
     if (over) {
         puts("PREEMPT+VM OK - halting\n");
         gic_disable_irq(TIMER_PPI_IRQ);
@@ -886,6 +930,77 @@ void kernel_main(void)
         }
     }
 
+    /* 3h. Fase 8: user mode + syscall. Setup single-threaded:
+     * task_user + program image + stack user + port echo. */
+    task_create(&task_user, &port_zone, &msg_zone);
+    task_user.brk = USER_BRK_START;
+    {
+        int fails = 0;
+        uint32_t pa, va, off = 0u, chunk;
+        unsigned i, u_send, u_rep;
+
+        /* Program image -> 4 halaman RWX di USER_PROG_VA. Salin via
+         * alias fisik 1:1 (halaman pool ada di BSS kernel); halaman
+         * di-zero oleh vm_page_alloc sehingga sisa halaman = NOL.
+         * (BSS program butuh W; W^X per-section = follow-up.) */
+        if (hello_img_len > USER_PROG_PAGES * 4096u) {
+            puts("  FAIL: hello image too big\n");
+            fails++;
+        }
+        for (i = 0; i < USER_PROG_PAGES; i++) {
+            pa = vm_page_alloc();
+            va = USER_PROG_VA + i * 4096u;
+            if (pa == 0u ||
+                vm_map(&task_user.vm, va, pa,
+                       VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC) != 0) {
+                puts("  FAIL: map hello page\n");
+                fails++;
+                break;
+            }
+            if (off < hello_img_len) {
+                chunk = hello_img_len - off;
+                if (chunk > 4096u)
+                    chunk = 4096u;
+                memcpy((void *)pa, hello_img + off, chunk);
+                off += chunk;
+            }
+        }
+        /* Stack user: 2 halaman RW (XN, tanpa EXEC) di bawah
+         * USER_STACK_TOP. Wilayah di bawahnya tidak di-map
+         * (pager akan mengisinya malas bila disentuh). */
+        for (i = 0; i < USER_STACK_PAGES; i++) {
+            pa = vm_page_alloc();
+            va = USER_STACK_TOP - (i + 1u) * 4096u;
+            if (pa == 0u ||
+                vm_map(&task_user.vm, va, pa,
+                       VM_PROT_READ | VM_PROT_WRITE) != 0) {
+                puts("  FAIL: map user stack\n");
+                fails++;
+                break;
+            }
+        }
+        /* Port echo: server di task_kern (usvc_port), user dapat
+         * send-right hasil grant (harus = USER_SVC_SEND=1), reply
+         * port milik user (harus = USER_SVC_REPLY=2) di-grant balik. */
+        usvc_port = ipc_port_alloc(&task_kern.ipc, IPC_SEND | IPC_RECV);
+        u_send = ipc_port_grant(&task_user.ipc, &task_kern.ipc,
+                                usvc_port, IPC_SEND);
+        u_rep = ipc_port_alloc(&task_user.ipc, IPC_RECV);
+        usvc_rep_in_kern = ipc_port_grant(&task_kern.ipc, &task_user.ipc,
+                                          u_rep, IPC_SEND);
+        if (usvc_port == 0u || u_send != USER_SVC_SEND ||
+            u_rep != USER_SVC_REPLY || usvc_rep_in_kern == 0u) {
+            puts("  FAIL: echo port grant\n");
+            fails++;
+        }
+        puts("[user ] task + image + stack + echo ports: ");
+        if (fails == 0)
+            puts("ALL CHECKS PASSED\n");
+        else {
+            puts("FAILURES = "); putdec((unsigned)fails); putc('\n');
+        }
+    }
+
     /* 4. Preemptive scheduler: GIC + virtual-timer tick. */
     puts("[gic ] init GIC-400\n");
     gic_init();
@@ -901,6 +1016,12 @@ void kernel_main(void)
     sched_add(thread_pager, stack_pager + sizeof(stack_pager), &task_pager);
     sched_add(thread_pclient, stack_pclient + sizeof(stack_pclient),
               &task_c);
+    /* Fase 8: echo server kernel + thread user-mode pertama.
+     * sched_add_user: frame CPSR=USR(0x10), pc=USER_PROG_VA,
+     * SP_usr=USER_STACK_TOP. */
+    sched_add(thread_usvc, stack_usvc + sizeof(stack_usvc), &task_kern);
+    sched_add_user(stack_uthread + sizeof(stack_uthread), &task_user,
+                   USER_PROG_VA, USER_STACK_TOP);
     {
         /* 1 ms slice, in timer ticks. */
         uint32_t freq = timer_get_freq();

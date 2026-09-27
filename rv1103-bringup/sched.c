@@ -47,6 +47,45 @@ void sched_add(void (*entry)(void), uint8_t *stack_top,
     nthreads++;
 }
 
+/* Set SP_usr (banked) sekali, lewat mode SYS yang berbagi register
+ * banked dengan USR. Dipanggil dari SVC (privileged); nilainya awet
+ * sampai thread user pertama kali dijadwalkan. */
+static void user_sp_set(uint32_t sp)
+{
+    __asm__ volatile(
+        "cps #0x1f\n\t"   /* SYS: berbagi SP/LR banked dengan USR */
+        "mov sp, %0\n\t"
+        "cps #0x13"         /* kembali ke SVC */
+        :: "r"(sp) : "memory");
+}
+
+void sched_add_user(uint8_t *stack_top, struct task *task,
+                    uint32_t user_pc, uint32_t user_sp_top)
+{
+    uint32_t *f;
+    unsigned i;
+
+    if (nthreads >= SCHED_MAX_THREADS || !stack_top || !task)
+        return;
+    f = (uint32_t *)stack_top - FR_WORDS;
+    f[0] = 0u;                          /* pad */
+    for (i = 1; i <= 13; i++)
+        f[i] = 0u;                      /* r0..r12 */
+    f[FR_PC] = user_pc;
+    f[FR_CPSR] = 0x10u;                 /* USR mode, IRQ enabled */
+
+    threads[nthreads].sp = f;
+    for (i = 0; i < 32; i++)
+        threads[nthreads].vfp.d[i] = 0u;
+    threads[nthreads].vfp.fpscr = 0u;
+    threads[nthreads].id = (int)nthreads;
+    threads[nthreads].task = task;
+    threads[nthreads].state = THREAD_RUNNABLE;
+    nthreads++;
+
+    user_sp_set(user_sp_top);
+}
+
 void sched_set_slice(uint32_t ticks)
 {
     slice_ticks = ticks;

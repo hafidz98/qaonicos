@@ -32,9 +32,11 @@
 #define FR_PC    14u
 #define FR_CPSR  15u
 
-/* Thread states. */
+/* Thread states. THREAD_DEAD: thread selesai/dibunuh; tidak pernah
+ * dijadwalkan lagi (dipakai SYS_EXIT + user_kill, Fase 8). */
 #define THREAD_RUNNABLE 0u
 #define THREAD_BLOCKED  1u
+#define THREAD_DEAD     2u
 
 struct sched_thread {
     uint32_t *sp;           /* saved exception frame */
@@ -49,6 +51,12 @@ void sched_init(void);
 /* stack_top must be 8-byte aligned. The thread belongs to task. */
 void sched_add(void (*entry)(void), uint8_t *stack_top,
                struct task *task);
+
+/* Fase 8: thread user-mode. Frame awal: CPSR=USR (0x10, IRQ on),
+ * pc=user_pc; SP_usr di-set sekali via mode SYS (berbagi bank dengan
+ * USR). user_sp_top harus 8-byte aligned. */
+void sched_add_user(uint8_t *stack_top, struct task *task,
+                    uint32_t user_pc, uint32_t user_sp_top);
 
 /* Ticks per timer slice, for IRQ reprogramming. */
 void sched_set_slice(uint32_t ticks);

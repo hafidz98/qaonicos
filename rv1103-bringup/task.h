@@ -18,6 +18,7 @@ struct task {
     unsigned id;
     struct vm_space vm;     /* ruang alamat milik task ini */
     struct ipc_space ipc;   /* namespace port milik task ini */
+    uint32_t brk;           /* Fase 8: program break user (0 = belum init) */
     unsigned refs;
 };
 

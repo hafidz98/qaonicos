@@ -37,12 +37,26 @@ if arm-none-eabi-objdump -d /tmp/mach_sched.o | grep -Eq "vstm|vldm|vpush|vpop|v
     exit 1
 fi
 
+# Fase 8: program userspace pertama. Di-link di USER_PROG_VA tetap
+# (0x10030000, _start di awal via .text.start), lalu di-embed sebagai
+# blob biner -> array C hello_img (bukan objcopy -I binary: embed.py
+# memberi nama simbol rapi + cek ukuran eksplisit).
+$TOOL $COMMON -T user/hello.ld -o /tmp/mach_hello.elf user/hello.c
+ENTRY=$(arm-none-eabi-readelf -h /tmp/mach_hello.elf | sed -n 's/.*Entry point address: *//p')
+if [ "$ENTRY" != "0x10030000" ]; then
+    echo "FATAL: hello entry point $ENTRY != 0x10030000" >&2
+    exit 1
+fi
+arm-none-eabi-objcopy -O binary /tmp/mach_hello.elf /tmp/mach_hello.bin
+python3 user/embed.py /tmp/mach_hello.bin /tmp/mach_hello_img.c hello_img 16384
+$TOOL $COMMON -c /tmp/mach_hello_img.c -o /tmp/mach_hello_img.o
+
 $TOOL $COMMON $LDOPT -T kernel/virt.ld -o kernel/mach-kernel.elf \
-    /tmp/mach_sched.o \
+    /tmp/mach_sched.o /tmp/mach_hello_img.o \
     kernel/start.S kernel/kernel_main.c \
     $B/vectors.S $B/trap.c $B/pmap.c $B/fpu.c $B/zone.c $B/ipc.c \
     $B/syscall.c $B/lib.c $B/gic.c $B/timer.c $B/vm.c $B/task.c \
-    $B/pager.c \
+    $B/pager.c $B/user.c \
     $LIBGCC
 
 echo "built kernel/mach-kernel.elf"

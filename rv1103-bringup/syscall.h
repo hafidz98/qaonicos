@@ -23,6 +23,16 @@
 #define SYS_RECV    11u
 #define SYS_RPC     12u
 
+/* Fase 8: syscall user mode. Pointer user divalidasi terhadap USER
+ * range sebelum dipakai kernel (lihat user_range_ok). SYS_SEND/RECV/RPC
+ * (primitif mentah, tanpa batasan ukuran) DITOLAK dari USR; dari user
+ * hanya boleh lewat SYS_RPC_USER (bounce buffer kernel). */
+#define SYS_WRITE    20u   /* r0=fd(1/2) r1=buf r2=len -> byte tertulis */
+#define SYS_YIELD    21u   /* serahkan sisa slice, tunggu 1 tick */
+#define SYS_EXIT     22u   /* akhiri thread pemanggil (tidak kembali) */
+#define SYS_RPC_USER 23u   /* r0=sname r1=req r2=rlen r3=rname r4=rep r5=plen */
+#define SYS_SBRK     24u   /* r0=inkremen byte -> brk lama (-1 gagal) */
+
 void syscall_init(struct task *kern_task);
 void svc_dispatch(struct trap_regs *regs);
 

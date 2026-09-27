@@ -90,7 +90,7 @@ reset_handler:
 
     trap_stub undef_handler,    1, 0x1b, 1   /* EXC_UNDEF = 1, UND, return */
     trap_stub svc_handler,      2, 0x13, 1   /* EXC_SVC = 2, SVC, return   */
-    trap_stub prefetch_handler, 3, 0x17, 0   /* EXC_PREFETCH_ABORT, hang   */
+    trap_stub prefetch_handler, 3, 0x17, 1   /* EXC_PREFETCH_ABORT, return */
     trap_stub data_handler,     4, 0x17, 1   /* EXC_DATA_ABORT, pager may return */
 
     dead_handler reserved_handler

@@ -13,8 +13,10 @@
  *  | Section PA |  |S |nG|  | TEX | AP  |  |Domain|XN|C |B |1 |0 |
  *  +------------+--+--+--+--+--+-----+-----+--+-----+--+--+--+--+--+
  *
- * We set [1:0]=0b10, domain=0b0000, AP=0b11 (full access, PL0/PL1
- * read/write), TEX/C/B from the caller's flags, and XN for device.
+ * We set [1:0]=0b10, domain=0b0000, AP=0b01 (privileged read/write
+ * ONLY - sejak Fase 8 ada kode USR mode: memori kernel + device tidak
+ * boleh diakses dari PL0), TEX/C/B from the caller's flags, and XN for
+ * device. Halaman user tetap dapat AP user via vm_map (L2 descriptors).
  *
  * C99, -ffreestanding, no libc, -mcpu=cortex-a7 -marm.
  */
@@ -56,7 +58,7 @@
 
 /* Descriptor composition constants. */
 #define DESC_SECTION    (1u << 1)           /* bits[1:0] = 0b10          */
-#define DESC_AP_FULL    (0x3u << 10)        /* AP[1:0] = 0b11            */
+#define DESC_AP_PRIV    (0x1u << 10)        /* AP[1:0] = 0b01: PL1 RW saja */
 #define DESC_DOMAIN0    (0x0u << 5)         /* domain field [8:5] = 0    */
 
 /* Peripheral window mapped as device memory (identity). */
@@ -130,7 +132,7 @@ static uint32_t section_descriptor(uint32_t pa, int flags)
      * the caller (TEX/C/B/XN) land in the attribute field. AP and the
      * descriptor type are forced here.
      */
-    return DESC_SECTION | DESC_AP_FULL | DESC_DOMAIN0 |
+    return DESC_SECTION | DESC_AP_PRIV | DESC_DOMAIN0 |
            (pa & ~SECTION_MASK) | ((uint32_t)flags);
 }
 

@@ -8,7 +8,16 @@
 #include "syscall.h"
 #include "board.h"
 #include "armv7/exception.h"
+#include "user.h"
 #include "vm.h"
+
+/* 1 bila exception datang dari USR mode (spsr mode field == 0x10).
+ * Fault user yang tidak bisa diselesaikan pager -> user_kill()
+ * (jangan report_abort + wfi: itu memarkir SELURUH CPU). */
+static int trap_from_user(struct trap_regs *regs)
+{
+    return regs && ((regs->spsr & 0x1Fu) == 0x10u);
+}
 
 volatile unsigned trap_count[8];
 volatile unsigned last_trap_exc;
@@ -99,13 +108,28 @@ void arm_trap(unsigned exc, struct trap_regs *regs)
                 regs->lr -= 8u;
             return;
         }
+        if (trap_from_user(regs)) {
+            user_kill(regs, "data", dfsr, dfar);   /* tulis ulang frame */
+            return;   /* stub rfefd ke trampolin; JANGAN ke report_abort */
+        }
         report_abort("data", (unsigned)dfsr, (unsigned)dfar, regs);
         for (;;) { __asm__ __volatile__("wfi"); }  /* genuine bug: park */
     } else if (exc == EXC_PREFETCH_ABORT) {
         uint32_t ifsr, ifar;
         __asm__ __volatile__("mrc p15, 0, %0, c5, c0, 1" : "=r"(ifsr));
         __asm__ __volatile__("mrc p15, 0, %0, c6, c0, 2" : "=r"(ifar));
+        if (trap_from_user(regs)) {
+            user_kill(regs, "prefetch", ifsr, ifar); /* tulis ulang frame */
+            return;   /* stub rfefd ke trampolin */
+        }
         report_abort("prefetch", (unsigned)ifsr, (unsigned)ifar, regs);
+        for (;;) { __asm__ __volatile__("wfi"); }  /* genuine bug: park */
+    } else if (exc == EXC_UNDEF) {
+        if (trap_from_user(regs)) {
+            user_kill(regs, "undef", 0u, 0u);       /* tulis ulang frame */
+            return;   /* stub rfefd ke trampolin */
+        }
+        /* kernel undef: biarkan counter; stub kembali via rfefd */
     }
     if (exc == EXC_SVC && regs) {
         svc_last_num = regs->r[7];
