@@ -20,6 +20,14 @@ void netstack_tick(void);
 /* Kirim ICMP echo request ke ip (untuk verifikasi dua arah). */
 int netstack_ping(uint32_t ip);
 
+/* Fase 12: kirim paket IP generik (proto mis. 6=TCP). 0=ok, -1=gagal
+ * (MAC belum dikenal / payload terlalu besar). */
+int netstack_ip_send(uint32_t dst, uint8_t proto,
+                     const uint8_t *payload, unsigned plen);
+
+/* Fase 12: catat pasangan IP<-MAC (dipakai TCP saat menerima SYN). */
+void netstack_arp_learn(uint32_t ip, const uint8_t *mac);
+
 /* Statistik diagnostik. */
 unsigned netstack_rx_frames(void);
 unsigned netstack_arp_hits(void);

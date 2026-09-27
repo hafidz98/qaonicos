@@ -109,4 +109,8 @@ void sched_wakeup(struct sched_thread *t);
 /* C IRQ entry called from vectors.S (replaces the old void version). */
 uint32_t *c_irq_handler(uint32_t *frame);
 
+/* Fase 12: introspeksi untuk /metrics (read-only, aman dari thread net). */
+unsigned sched_thread_count(void);
+const struct sched_thread *sched_thread_at(unsigned i);
+
 #endif /* _SCHED_H_ */

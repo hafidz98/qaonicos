@@ -191,6 +191,19 @@ unsigned sched_ticks(void)
     return ticks;
 }
 
+/* Fase 12: introspeksi thread untuk HTTP /metrics. */
+unsigned sched_thread_count(void)
+{
+    return nthreads;
+}
+
+const struct sched_thread *sched_thread_at(unsigned i)
+{
+    if (i >= nthreads)
+        return 0;
+    return &threads[i];
+}
+
 struct sched_thread *sched_current_thread(void)
 {
     if (nthreads == 0)

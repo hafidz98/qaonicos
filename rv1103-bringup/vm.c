@@ -172,6 +172,19 @@ uint32_t vm_page_alloc(void)
     return (uint32_t)pg;
 }
 
+/* Fase 12: statistik pool untuk HTTP /metrics. */
+void vm_get_stats(struct vm_stats *s)
+{
+    if (!s)
+        return;
+    s->pages_used = page_next;
+    s->pages_total = VM_NPAGES;
+    s->l1_used = l1_next;
+    s->l1_total = VM_NSPACES;
+    s->l2_used = l2_next;
+    s->l2_total = VM_NL2;
+}
+
 /* The space the CPU is currently running in. Set by vm_space_switch;
  * the pager maps faulted pages into this space. */
 static struct vm_space *vm_cur_space;

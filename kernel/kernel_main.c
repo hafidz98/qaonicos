@@ -281,6 +281,7 @@ static unsigned char stack_pager[16384] __attribute__((aligned(8)));
 static unsigned char stack_pclient[16384] __attribute__((aligned(8)));
 
 static volatile unsigned total_lines;
+static volatile unsigned server_mode_announced;
 
 /* ------------------------------------------------------------------ */
 /* Fase 7: external pager (memory object) + copy-on-write.             */
@@ -379,14 +380,13 @@ static void report(const char *tag, unsigned n, uint64_t fpubits,
      * hanya menunggu. */
     over = (total_lines >= 12) && pager_done && user_done &&
            fs_test_done() && init_test_done() && net_test_done;
-    if (over) {
-        puts("PREEMPT+VM OK - halting\n");
-        gic_disable_irq(TIMER_PPI_IRQ);
+    if (over && !server_mode_announced) {
+        /* Fase 12: jangan halt — lanjut jadi HTTP server selamanya.
+         * Suite lama tetap PASS (lihat pesan PASSED di atas). */
+        puts("PREEMPT+VM OK - semua tes PASS, lanjut mode HTTP server\n");
+        server_mode_announced = 1u;
     }
     irq_restore(s);
-    if (over) {
-        for (;;) { __asm__ volatile("wfi"); }
-    }
 }
 
 static void ipc_note(const char *tag, const struct ipc_wire *w)
@@ -420,6 +420,7 @@ static void thread_net(void)
     gic_set_level(irq);
     gic_enable_irq(irq);
     puts("[net ] IP 10.0.2.15, menunggu paket (ping dari host)\n");
+    puts("[net ] HTTP server di port 80 (/ dan /metrics)\n");
     {
         /* Uji mandiri: ping host 10.0.2.1 (tap0). netstack_ping
          * mengirim ARP request dulu bila MAC belum dikenal. */
@@ -445,9 +446,11 @@ static void thread_net(void)
             net_log("[net] ping timeout (lanjut mode listen)\n");
         net_test_done = 1u;
     }
-    for (;;) {
-        net_poll();
-        netstack_tick();
+    {
+        for (;;) {
+            net_poll();
+            netstack_tick();
+        }
     }
 }
 

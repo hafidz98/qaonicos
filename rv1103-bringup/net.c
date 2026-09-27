@@ -371,9 +371,23 @@ int net_send(const uint8_t *frame, unsigned len)
 {
     struct vqueue *vq = &vq_tx;
     unsigned i;
+    unsigned spin;
 
     if (!vmm || !frame || len == 0u || len + VNET_HDR_LEN > RX_BUFLEN)
         return -1;
+
+    /* TX sinkron 1 buffer: tunggu paket sebelumnya selesai dikirim
+     * device sebelum menimpa tx_buf (kalau tidak, paket pertama
+     * korup/hilang — balapan dengan device). */
+    spin = 0u;
+    while (vq->avail_idx != vq->used_idx && spin < 1000000u) {
+        while (vq->used->idx != vq->used_idx)
+            vq->used_idx++;
+        mem_barrier();
+        spin++;
+    }
+    while (vq->used->idx != vq->used_idx)
+        vq->used_idx++;
 
     for (i = 0; i < VNET_HDR_LEN; i++)
         tx_buf[i] = 0u;

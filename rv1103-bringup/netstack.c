@@ -5,6 +5,7 @@
  */
 #include "netstack.h"
 #include "net.h"
+#include "tcp.h"
 
 
 #define ETH_ALEN 6u
@@ -15,6 +16,7 @@
 #define ARP_REP  2u
 
 #define IP_ICMP  1u
+#define IP_TCP   6u
 
 #define ICMP_ECHO_REQ 8u
 #define ICMP_ECHO_REP 0u
@@ -230,7 +232,7 @@ static void ip_on_frame(const uint8_t *f, unsigned len)
 {
     const uint8_t *ip = f + 14;
     unsigned iplen, ihl;
-    uint32_t dst;
+    uint32_t dst, src;
 
     if (len < 14u + 20u)
         return;
@@ -247,7 +249,45 @@ static void ip_on_frame(const uint8_t *f, unsigned len)
     dst = rd32(ip + 16);
     if (dst != NET_IP)
         return;
-    icmp_on_ip(ip, iplen, rd32(ip + 12), dst);
+    src = rd32(ip + 12);
+    if (ip[9] == IP_ICMP)
+        icmp_on_ip(ip, iplen, src, dst);
+    else if (ip[9] == IP_TCP)
+        tcp_on_ip(ip, iplen, src, f + 6); /* f+6 = MAC sumber */
+}
+
+/* Fase 12: kirim paket IP generik (dipakai TCP). */
+int netstack_ip_send(uint32_t dst, uint8_t proto,
+                     const uint8_t *payload, unsigned plen)
+{
+    struct arp_ent *e = arp_find(dst);
+    uint8_t *o;
+    unsigned i;
+
+    if (!e)
+        return -1;
+    if (plen > 1400u)
+        return -1;
+    o = txf + 14;
+    o[0] = 0x45u; o[1] = 0u;
+    wr16(o + 2, (uint16_t)(20u + plen));
+    wr16(o + 4, ip_id++);
+    o[6] = 0u; o[7] = 0u;
+    o[8] = 64u; o[9] = proto;
+    wr16(o + 10, 0u);
+    wr32(o + 12, NET_IP);
+    wr32(o + 16, dst);
+    wr16(o + 10, csum(o, 20u));
+    for (i = 0; i < plen; i++)
+        o[20 + i] = payload[i];
+    eth_send(e->mac, ETH_IP, o, 20u + plen);
+    return 0;
+}
+
+/* Fase 12: belajar MAC dari frame (dipakai TCP saat SYN). */
+void netstack_arp_learn(uint32_t ip, const uint8_t *mac)
+{
+    arp_learn(ip, mac);
 }
 
 static void rx_handler(const uint8_t *f, unsigned len)
@@ -277,7 +317,7 @@ void netstack_init(void)
 
 void netstack_tick(void)
 {
-    /* Sejauh ini tak ada state periodik; placeholder untuk retry ARP. */
+    tcp_tick();   /* retransmit TCP + timeout koneksi */
 }
 
 int netstack_ping(uint32_t ip)

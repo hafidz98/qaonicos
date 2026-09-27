@@ -120,4 +120,12 @@ int vm_page_fault(uint32_t far, uint32_t fsr);
  */
 int vm_probe(struct vm_space *sp, uint32_t va, uint32_t pattern);
 
+/* Fase 12: statistik pool untuk HTTP /metrics. */
+struct vm_stats {
+    unsigned pages_used, pages_total;
+    unsigned l1_used, l1_total;
+    unsigned l2_used, l2_total;
+};
+void vm_get_stats(struct vm_stats *s);
+
 #endif /* _VM_H_ */
