@@ -24,8 +24,9 @@
 #include "fpu.h"
 #include "task.h"
 
-/* Fase 7: 4 -> 8 (tambah thread pager + client). */
-#define SCHED_MAX_THREADS 8u
+/* Fase 7: 4 -> 8 (tambah thread pager + client).
+ * Fase 9: 8 -> 10 (tambah thread user fstest). */
+#define SCHED_MAX_THREADS 10u
 
 /* Exception frame layout (words). */
 #define FR_WORDS 16u
@@ -44,6 +45,12 @@ struct sched_thread {
     int id;
     struct task *task;      /* protection domain pemilik thread ini */
     volatile unsigned state;/* THREAD_RUNNABLE / THREAD_BLOCKED */
+    /* Fase 9: banked SP_usr/LR_usr per-thread. WAJIB di-save/restore
+     * saat context switch: banked register itu SATU fisik per-CPU,
+     * jadi dua thread user tanpa ini berbagi SP_usr yang sama
+     * (stack saling timpa). Tidak dipakai thread kernel. */
+    uint32_t user_sp;
+    uint32_t user_lr;
 };
 
 void sched_init(void);

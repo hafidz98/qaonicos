@@ -7,6 +7,7 @@
 #include "gic.h"
 #include "timer.h"
 #include "vm.h"
+#include "user.h"
 
 static struct sched_thread threads[SCHED_MAX_THREADS];
 static unsigned nthreads;
@@ -44,12 +45,15 @@ void sched_add(void (*entry)(void), uint8_t *stack_top,
     threads[nthreads].id = (int)nthreads;
     threads[nthreads].task = task;
     threads[nthreads].state = THREAD_RUNNABLE;
+    threads[nthreads].user_sp = 0u;     /* tak dipakai thread kernel */
+    threads[nthreads].user_lr = 0u;
     nthreads++;
 }
 
 /* Set SP_usr (banked) sekali, lewat mode SYS yang berbagi register
- * banked dengan USR. Dipanggil dari SVC (privileged); nilainya awet
- * sampai thread user pertama kali dijadwalkan. */
+ * banked dengan USR. Dipanggil dari SVC (privileged) saat pembuatan
+ * thread; nilai per-thread yang otoritatif ada di
+ * threads[].user_sp (di-restore tiap switch-in, Fase 9). */
 static void user_sp_set(uint32_t sp)
 {
     __asm__ volatile(
@@ -57,6 +61,41 @@ static void user_sp_set(uint32_t sp)
         "mov sp, %0\n\t"
         "cps #0x13"         /* kembali ke SVC */
         :: "r"(sp) : "memory");
+}
+
+/* Baca banked SP/LR (USR/SYS). Dipanggil dari sched_on_tick yang
+ * berjalan di SVC mode (stub IRQ vectors.S: cps #0x13 sebelum
+ * c_irq_handler). cps hanya mengganti bit mode; bit I tetap ter-mask
+ * (masuk IRQ me-mask IRQ), jadi jendela mode SYS ini atomik terhadap
+ * tick. WAJIB kembali ke SVC (#0x13), bukan IRQ: sp_irq tidak dipakai
+ * stub ini. */
+static void banked_get(uint32_t *sp, uint32_t *lr)
+{
+    uint32_t s, l;
+    __asm__ volatile(
+"cps #0x1f\n\t"      /* SYS: banked SP/LR sama dengan USR */
+        "mov %0, sp\n\t"
+        "mov %1, lr\n\t"
+        "cps #0x13"           /* kembali ke SVC (I tetap mask) */
+        : "=r"(s), "=r"(l) :: "memory");
+    *sp = s;
+    *lr = l;
+}
+
+static void banked_set(uint32_t sp, uint32_t lr)
+{
+    __asm__ volatile(
+"cps #0x1f\n\t"
+        "mov sp, %0\n\t"
+        "mov lr, %1\n\t"
+        "cps #0x13"
+        :: "r"(sp), "r"(lr) : "memory");
+}
+
+/* 1 bila frame exception akan kembali ke USR mode. */
+static int frame_is_user(uint32_t *frame)
+{
+    return frame && ((frame[FR_CPSR] & 0x1Fu) == 0x10u);
 }
 
 void sched_add_user(uint8_t *stack_top, struct task *task,
@@ -81,6 +120,11 @@ void sched_add_user(uint8_t *stack_top, struct task *task,
     threads[nthreads].id = (int)nthreads;
     threads[nthreads].task = task;
     threads[nthreads].state = THREAD_RUNNABLE;
+    /* Fase 9: SP_usr/LR_usr per-thread (di-restore tiap switch-in).
+     * user_sp_set() di bawah hanya untuk nilai awal sebelum tick
+     * pertama; yang otoritatif adalah field ini. */
+    threads[nthreads].user_sp = user_sp_top;
+    threads[nthreads].user_lr = 0u;
     nthreads++;
 
     user_sp_set(user_sp_top);
@@ -172,12 +216,25 @@ uint32_t *sched_on_tick(uint32_t *frame)
 {
     /* No VFP use in this function (build flag); the save/restore below
      * captures the outgoing/incoming thread's real VFP registers. */
-    struct sched_thread *out = &threads[cur];
+    struct sched_thread *out;
     struct sched_thread *in;
-    unsigned nxt = cur, i;
+    unsigned nxt, i;
+
+    /* Invariant: threads[cur] harus thread cur. Menangkap korupsi cur
+     * (mis. stack menimpa BSS) sebelum out->sp=frame merambat. */
+    if (cur >= nthreads || threads[cur].id != (int)cur) {
+        uputs("\n[SCHED] invariant rusak: cur/id!\n");
+        for (;;) { }
+    }
+    out = &threads[cur];
+    nxt = cur;
 
     fpu_save(&out->vfp);
     out->sp = frame;
+    /* Fase 9: keluar dari USR -> selamatkan banked SP/LR milik thread
+     * ini. Tanpa ini semua thread user berbagi satu SP_usr fisik. */
+    if (frame_is_user(frame))
+        banked_get(&out->user_sp, &out->user_lr);
     ticks++;
 
     /*
@@ -207,6 +264,9 @@ uint32_t *sched_on_tick(uint32_t *frame)
         vm_space_switch(&in->task->vm);
 
     fpu_restore(&in->vfp);
+    /* Fase 9: masuk ke USR -> pulihkan banked SP/LR milik thread ini. */
+    if (frame_is_user(in->sp))
+        banked_set(in->user_sp, in->user_lr);
     return in->sp;
 }
 

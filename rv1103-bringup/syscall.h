@@ -33,6 +33,14 @@
 #define SYS_RPC_USER 23u   /* r0=sname r1=req r2=rlen r3=rname r4=rep r5=plen */
 #define SYS_SBRK     24u   /* r0=inkremen byte -> brk lama (-1 gagal) */
 
+/* Fase 9: syscall file ramfs (user only, seperti SYS_WRITE).
+ * Nomor DISALIN MANUAL ke user/usys.h. */
+#define SYS_OPEN     30u   /* r0=path_va r1=flags -> fd / -1 */
+#define SYS_READ     31u   /* r0=fd r1=buf_va r2=len -> byte dibaca / -1 */
+#define SYS_CLOSE    32u   /* r0=fd -> 0 / -1 */
+#define SYS_LS       33u   /* r0=buf_va r1=max -> jumlah file */
+#define SYS_DELETE   34u   /* r0=path_va -> 0 / -1 */
+
 void syscall_init(struct task *kern_task);
 void svc_dispatch(struct trap_regs *regs);
 

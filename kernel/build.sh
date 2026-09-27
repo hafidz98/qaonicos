@@ -51,12 +51,25 @@ arm-none-eabi-objcopy -O binary /tmp/mach_hello.elf /tmp/mach_hello.bin
 python3 user/embed.py /tmp/mach_hello.bin /tmp/mach_hello_img.c hello_img 16384
 $TOOL $COMMON -c /tmp/mach_hello_img.c -o /tmp/mach_hello_img.o
 
+# Fase 9: program uji ramfs. Di-link di FSTEST_PROG_VA tetap
+# (0x10028000, _start di awal via .text.start), lalu di-embed sebagai
+# blob biner -> array C fstest_img (pola yang sama dengan hello).
+$TOOL $COMMON -T user/fstest.ld -o /tmp/mach_fstest.elf user/fstest.c
+ENTRY=$(arm-none-eabi-readelf -h /tmp/mach_fstest.elf | sed -n 's/.*Entry point address: *//p')
+if [ "$ENTRY" != "0x10028000" ]; then
+    echo "FATAL: fstest entry point $ENTRY != 0x10028000" >&2
+    exit 1
+fi
+arm-none-eabi-objcopy -O binary /tmp/mach_fstest.elf /tmp/mach_fstest.bin
+python3 user/embed.py /tmp/mach_fstest.bin /tmp/mach_fstest_img.c fstest_img 16384
+$TOOL $COMMON -c /tmp/mach_fstest_img.c -o /tmp/mach_fstest_img.o
+
 $TOOL $COMMON $LDOPT -T kernel/virt.ld -o kernel/mach-kernel.elf \
-    /tmp/mach_sched.o /tmp/mach_hello_img.o \
+    /tmp/mach_sched.o /tmp/mach_hello_img.o /tmp/mach_fstest_img.o \
     kernel/start.S kernel/kernel_main.c \
     $B/vectors.S $B/trap.c $B/pmap.c $B/fpu.c $B/zone.c $B/ipc.c \
     $B/syscall.c $B/lib.c $B/gic.c $B/timer.c $B/vm.c $B/task.c \
-    $B/pager.c $B/user.c \
+    $B/pager.c $B/user.c $B/fs.c \
     $LIBGCC
 
 echo "built kernel/mach-kernel.elf"

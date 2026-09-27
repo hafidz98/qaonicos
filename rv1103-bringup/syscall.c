@@ -9,6 +9,7 @@
 #include "sched.h"
 #include "user.h"
 #include "vm.h"
+#include "fs.h"
 #include "lib.h"
 
 static struct task *kern_task;
@@ -34,9 +35,8 @@ static int caller_is_user(struct trap_regs *regs)
 }
 
 /* ------------------------------------------------------------------ */
-/* SYS_WRITE (user only): tulis ke UART fd 1/2. Pointer user sudah     */
-/* divalidasi terhadap USER range; baca langsung aman (pager akan     */
-/* menyelesaikan halaman yang belum ter-map via data abort di SVC).   */
+/* SYS_WRITE (user only): fd 1/2 -> UART; fd >= 3 -> tulis ke file   */
+/* ramfs (Fase 9). Pointer user divalidasi terhadap USER range.      */
 /* ------------------------------------------------------------------ */
 static int sys_write_user(struct task *t, struct trap_regs *regs)
 {
@@ -47,20 +47,22 @@ static int sys_write_user(struct task *t, struct trap_regs *regs)
     uint32_t i;
     unsigned cpsr;
 
-    (void)t;
-    if (fd != 1u && fd != 2u)
-        return -1;
     if (!user_range_ok(va, len))
         return -1;
-    p = (const unsigned char *)va;
-    /* Mask IRQ selama loop pendek ini agar baris tidak ter-interleave
-     * dengan cetakan thread lain (pola irq_save Fase 6). */
-    __asm__ volatile("mrs %0, cpsr" : "=r"(cpsr));
-    __asm__ volatile("cpsid i" ::: "memory");
-    for (i = 0; i < len; i++)
-        uputc((char)p[i]);
-    __asm__ volatile("msr cpsr_c, %0" :: "r"(cpsr) : "memory");
-    return (int)len;
+    if (fd == 1u || fd == 2u) {
+        p = (const unsigned char *)va;
+        /* Mask IRQ selama loop pendek ini agar baris tidak ter-interleave
+         * dengan cetakan thread lain (pola irq_save Fase 6). */
+        __asm__ volatile("mrs %0, cpsr" : "=r"(cpsr));
+        __asm__ volatile("cpsid i" ::: "memory");
+        for (i = 0; i < len; i++)
+            uputc((char)p[i]);
+        __asm__ volatile("msr cpsr_c, %0" :: "r"(cpsr) : "memory");
+        return (int)len;
+    }
+    if (fd >= 3u)
+        return fs_write(t, fd, (const uint8_t *)va, len);
+    return -1;  /* fd 0 (stdin) / fd liar */
 }
 
 /* ------------------------------------------------------------------ */
@@ -137,10 +139,86 @@ static int sys_rpc_user(struct task *t, struct trap_regs *regs)
 }
 
 /* ------------------------------------------------------------------ */
-/* SYS_SBRK (user only): naikkan program break task ini sebanyak      */
-/* `inc` byte (dibulatkan ke halaman, zeroed via vm_page_alloc).      */
-/* Mengembalikan brk lama; inc<=0 = query; -1 bila gagal.             */
+/* Syscall file Fase 9 (semuanya user-only).                          */
 /* ------------------------------------------------------------------ */
+
+/* Salin path NUL-terminated dari user VA ke buffer kernel lokal
+ * (di stack SVC thread ini -> per-thread, aman dari preempt).
+ * -> 0 ok, -1 bila range tak valid / tak ada NUL dalam FS_PATH_MAX. */
+static int copy_path_user(uint32_t va, char *kpath)
+{
+    const char *up;
+    unsigned i;
+
+    if (!user_range_ok(va, FS_PATH_MAX))
+        return -1;
+    up = (const char *)va;
+    for (i = 0u; i < FS_PATH_MAX; i++) {
+        kpath[i] = up[i];   /* fault -> pager selesaikan (pola write) */
+        if (up[i] == 0)
+            return 0;
+    }
+    return -1;
+}
+
+/* SYS_OPEN: r0=path_va r1=flags -> fd / -1. */
+static int sys_open_user(struct task *t, struct trap_regs *regs)
+{
+    char kpath[FS_PATH_MAX];
+
+    if (!t)
+        return -1;
+    if (copy_path_user(regs->r[0], kpath) != 0)
+        return -1;
+    return fs_open(t, kpath, regs->r[1]);
+}
+
+/* SYS_READ: r0=fd r1=buf_va r2=len -> byte / -1.
+ * fd 0 (stdin): tidak ada input di bring-up -> 0 (EOF). */
+static int sys_read_user(struct task *t, struct trap_regs *regs)
+{
+    uint32_t fd = regs->r[0];
+    uint32_t va = regs->r[1];
+    uint32_t len = regs->r[2];
+
+    if (fd == 0u)
+        return 0;
+    if (fd == 1u || fd == 2u)
+        return -1;
+    if (!user_range_ok(va, len))
+        return -1;
+    return fs_read(t, fd, (uint8_t *)va, len);
+}
+
+/* SYS_CLOSE: r0=fd -> 0 / -1. */
+static int sys_close_user(struct task *t, struct trap_regs *regs)
+{
+    return fs_close(t, regs->r[0]);
+}
+
+/* SYS_LS: r0=buf_va r1=max -> jumlah file (daftar "nama\n"). */
+static int sys_ls_user(struct task *t, struct trap_regs *regs)
+{
+    uint32_t va = regs->r[0];
+    uint32_t max = regs->r[1];
+
+    (void)t;
+    if (!user_range_ok(va, max))
+        return -1;
+    return fs_list((char *)va, max);
+}
+
+/* SYS_DELETE: r0=path_va -> 0 / -1. */
+static int sys_delete_user(struct task *t, struct trap_regs *regs)
+{
+    char kpath[FS_PATH_MAX];
+
+    (void)t;
+    if (copy_path_user(regs->r[0], kpath) != 0)
+        return -1;
+    return fs_delete(kpath);
+}
+/* SYS_SBRK (user only): naikkan program break (lihat aslinya). */
 static int sys_sbrk_user(struct task *t, struct trap_regs *regs)
 {
     int inc;
@@ -205,6 +283,16 @@ void svc_dispatch(struct trap_regs *regs)
         ret = u ? sys_rpc_user(t, regs) : -1;
     } else if (num == SYS_SBRK) {
         ret = u ? sys_sbrk_user(t, regs) : -1;
+    } else if (num == SYS_OPEN) {
+        ret = u ? sys_open_user(t, regs) : -1;
+    } else if (num == SYS_READ) {
+        ret = u ? sys_read_user(t, regs) : -1;
+    } else if (num == SYS_CLOSE) {
+        ret = u ? sys_close_user(t, regs) : -1;
+    } else if (num == SYS_LS) {
+        ret = u ? sys_ls_user(t, regs) : -1;
+    } else if (num == SYS_DELETE) {
+        ret = u ? sys_delete_user(t, regs) : -1;
     }
     if (ret != -2)
         regs->r[0] = (uint32_t)ret;

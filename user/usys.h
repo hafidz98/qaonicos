@@ -14,6 +14,18 @@
 #define SYS_RPC_USER 23u
 #define SYS_SBRK     24u
 
+/* Fase 9: syscall file ramfs (DISALIN MANUAL dari syscall.h kernel). */
+#define SYS_OPEN     30u
+#define SYS_READ     31u
+#define SYS_CLOSE    32u
+#define SYS_LS       33u
+#define SYS_DELETE   34u
+
+#define O_RDONLY 0u
+#define O_WRONLY 1u
+#define O_RDWR   2u
+#define O_CREAT  0x40u
+
 /* Port well-known (disepakati dengan kernel, user.h): */
 #define U_SEND_PORT  1u      /* send-right ke echo server */
 #define U_REPLY_PORT 2u      /* recv port untuk reply */

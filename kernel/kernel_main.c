@@ -26,11 +26,16 @@
 #include "../rv1103-bringup/pager.h"
 #include "../rv1103-bringup/lib.h"
 #include "../rv1103-bringup/user.h"
+#include "../rv1103-bringup/fs.h"
 
 /* Fase 8: image program userspace, di-embed dari user/hello.bin oleh
  * build.sh (user/embed.py -> /tmp/mach_hello_img.o). */
 extern const uint8_t hello_img[];
 extern const unsigned hello_img_len;
+
+/* Fase 9: image program uji ramfs (user/fstest.bin -> fstest_img). */
+extern const uint8_t fstest_img[];
+extern const unsigned fstest_img_len;
 
 /* PL011 (QEMU virt UART0). */
 #define UARTDR  (*(volatile unsigned *)0x09000000u)
@@ -282,6 +287,7 @@ static volatile unsigned pager_done;    /* diset thread_pclient */
 static struct task task_user;           /* protection domain program user */
 static unsigned char stack_usvc[16384] __attribute__((aligned(8)));
 static unsigned char stack_uthread[16384] __attribute__((aligned(8)));
+static unsigned char stack_fstest[16384] __attribute__((aligned(8))); /* Fase 9 */
 static unsigned usvc_port;              /* recv port echo, di task_kern.ipc */
 static unsigned usvc_rep_in_kern;       /* send-right ke reply port user */
 
@@ -312,6 +318,15 @@ static void thread_usvc(void)
     }
 }
 
+/* Fase 9: 1 bila program uji ramfs selesai dengan sukses. fstest
+ * membuat sentinel "/.fs_done" HANYA sesudah semua verifikasi lolos
+ * ("FS TESTS PASSED"); report() menjadikannya gerbang halt. Aman
+ * dipanggil dengan IRQ ter-mask (fs_find me-mask sendiri). */
+static int fs_test_done(void)
+{
+    return fs_find(".fs_done") >= 0;
+}
+
 /* Atomically print one status line; the 12th line ends the demo. */
 static void report(const char *tag, unsigned n, uint64_t fpubits,
                    unsigned vmfails)
@@ -327,9 +342,11 @@ static void report(const char *tag, unsigned n, uint64_t fpubits,
     total_lines++;
     /* Fase 7: jangan halt sebelum pager test selesai (pager_done
      * diset thread_pclient). Fase 8: juga tunggu thread user selesai
-     * (user_done diset SYS_EXIT / user_kill). Tes lama tidak rusak -
-     * hanya menunggu. */
-    over = (total_lines >= 12) && pager_done && user_done;
+     * (user_done diset SYS_EXIT / user_kill). Fase 9: juga tunggu
+     * uji ramfs (sentinel /.fs_done dari thread fstest).
+     * Tes lama tidak rusak - hanya menunggu. */
+    over = (total_lines >= 12) && pager_done && user_done &&
+           fs_test_done();
     if (over) {
         puts("PREEMPT+VM OK - halting\n");
         gic_disable_irq(TIMER_PPI_IRQ);
@@ -586,6 +603,7 @@ void kernel_main(void)
     task_create(&task_a, &port_zone, &msg_zone);
     task_create(&task_b, &port_zone, &msg_zone);
     syscall_init(&task_kern);
+    fs_init();  /* Fase 9: ramfs (BSS sudah nol; eksplisit biar jelas). */
     port_ab = ipc_port_alloc(&task_kern.ipc, IPC_SEND | IPC_RECV);
     port_ba = ipc_port_alloc(&task_kern.ipc, IPC_SEND | IPC_RECV);
     puts("[ipc ] zones up, ports allocated: A->B name = ");
@@ -979,6 +997,43 @@ void kernel_main(void)
                 break;
             }
         }
+        /* Fase 9: program uji ramfs -> 4 halaman RWX di FSTEST_PROG_VA
+         * + stack user sendiri (2 halaman RW di bawah FSTEST_STACK_TOP).
+         * Pola salin sama dengan hello di atas. */
+        if (fstest_img_len > FSTEST_PROG_PAGES * 4096u) {
+            puts("  FAIL: fstest image too big\n");
+            fails++;
+        }
+        off = 0u;
+        for (i = 0; i < FSTEST_PROG_PAGES; i++) {
+            pa = vm_page_alloc();
+            va = FSTEST_PROG_VA + i * 4096u;
+            if (pa == 0u ||
+                vm_map(&task_user.vm, va, pa,
+                       VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC) != 0) {
+                puts("  FAIL: map fstest page\n");
+                fails++;
+                break;
+            }
+            if (off < fstest_img_len) {
+                chunk = fstest_img_len - off;
+                if (chunk > 4096u)
+                    chunk = 4096u;
+                memcpy((void *)pa, fstest_img + off, chunk);
+                off += chunk;
+            }
+        }
+        for (i = 0; i < FSTEST_STACK_PAGES; i++) {
+            pa = vm_page_alloc();
+            va = FSTEST_STACK_TOP - (i + 1u) * 4096u;
+            if (pa == 0u ||
+                vm_map(&task_user.vm, va, pa,
+                       VM_PROT_READ | VM_PROT_WRITE) != 0) {
+                puts("  FAIL: map fstest stack\n");
+                fails++;
+                break;
+            }
+        }
         /* Port echo: server di task_kern (usvc_port), user dapat
          * send-right hasil grant (harus = USER_SVC_SEND=1), reply
          * port milik user (harus = USER_SVC_REPLY=2) di-grant balik. */
@@ -1018,10 +1073,14 @@ void kernel_main(void)
               &task_c);
     /* Fase 8: echo server kernel + thread user-mode pertama.
      * sched_add_user: frame CPSR=USR(0x10), pc=USER_PROG_VA,
-     * SP_usr=USER_STACK_TOP. */
+     * SP_usr=USER_STACK_TOP.
+     * Fase 9: thread user kedua (fstest, penguji ramfs) di task yang
+     * sama; program di FSTEST_PROG_VA, stack di FSTEST_STACK_TOP. */
     sched_add(thread_usvc, stack_usvc + sizeof(stack_usvc), &task_kern);
     sched_add_user(stack_uthread + sizeof(stack_uthread), &task_user,
                    USER_PROG_VA, USER_STACK_TOP);
+    sched_add_user(stack_fstest + sizeof(stack_fstest), &task_user,
+                   FSTEST_PROG_VA, FSTEST_STACK_TOP);
     {
         /* 1 ms slice, in timer ticks. */
         uint32_t freq = timer_get_freq();

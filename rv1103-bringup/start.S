@@ -23,6 +23,19 @@ _start:
     cps #0x12
     ldr sp, =irq_stack_top
 
+    /* Fase 9: install ABT + UND stacks. WAJIB: stub data/prefetch
+     * abort (vectors.S: srsdb sp!, #0x17) dan undef (srsdb #0x1b)
+     * memakai sp_abt/sp_und. Tanpa ini sp_abt/sp_und berisi sampah
+     * reset -> push 64 byte + call chain C arm_trap/user_kill menimpa
+     * BSS (nthreads/cur/threads[]) secara non-deterministik. Gejala:
+     * cur menjadi 10 (>= nthreads) lalu abort di sched_on_tick.
+     * Bug laten sejak Fase 7 (pager pakai data abort); Fase 9
+     * menggeser layout BSS sehingga korupsi mengenai cur. */
+    cps #0x17
+    ldr sp, =_abt_stack_top
+    cps #0x1b
+    ldr sp, =_und_stack_top
+
     /* Back to supervisor mode. */
     cps #0x13
 

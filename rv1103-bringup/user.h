@@ -25,6 +25,15 @@
 
 #define USER_BRK_START  0x10050000u
 
+/* Fase 9: program uji filesystem (user/fstest.c). Di dalam demand
+ * range, tidak tabrakan dengan PAGER_VA (0x10010000, task_c),
+ * COW_VA (0x10020000, task_a/b), program hello (0x10030000),
+ * stack hello (0x1003E000) maupun brk (0x10050000). */
+#define FSTEST_PROG_VA     0x10028000u
+#define FSTEST_PROG_PAGES  4u
+#define FSTEST_STACK_TOP   0x1002E000u
+#define FSTEST_STACK_PAGES 2u
+
 /* Nama port well-known di task_user.ipc (diisi kernel saat boot). */
 #define USER_SVC_SEND   1u      /* send-right ke echo server */
 #define USER_SVC_REPLY  2u      /* recv port untuk reply */

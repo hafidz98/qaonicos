@@ -13,12 +13,17 @@
 #include "vm.h"
 #include "ipc.h"
 #include "zone.h"
+#include "fs.h"
 
 struct task {
     unsigned id;
     struct vm_space vm;     /* ruang alamat milik task ini */
     struct ipc_space ipc;   /* namespace port milik task ini */
     uint32_t brk;           /* Fase 8: program break user (0 = belum init) */
+    /* Fase 9: tabel file descriptor per-task (fd 0/1/2 = console,
+     * fd >= 3 = handle ramfs). Konsisten dengan desain Fase 6/8:
+     * task = protection domain pemilik namespace-ne. */
+    struct fs_fd fds[FS_MAX_FD];
     unsigned refs;
 };
 
