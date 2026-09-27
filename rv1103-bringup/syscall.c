@@ -74,10 +74,18 @@ static int sys_yield_user(void)
 {
     unsigned cpsr, t0;
 
+    /*
+     * Menunggu tick timer berikutnya. IRQ diaktifkan sementara agar
+     * tick bisa masuk; CPU di-halt dengan WFI (bukan busy-spin) sampai
+     * IRQ tiba. Busy-spin memanggil sched_ticks() berulang kali terbukti
+     * memicu korupsi register di sched_on_tick pada QEMU (r6=0x80000093).
+     */
     t0 = sched_ticks();
     __asm__ volatile("mrs %0, cpsr" : "=r"(cpsr));
     __asm__ volatile("cpsie i" ::: "memory");
-    while (sched_ticks() == t0) { }
+    while (sched_ticks() == t0) {
+        __asm__ volatile("wfi" ::: "memory");
+    }
     __asm__ volatile("msr cpsr_c, %0" :: "r"(cpsr) : "memory");
     return 0;
 }
