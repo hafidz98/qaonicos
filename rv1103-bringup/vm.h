@@ -33,6 +33,10 @@
 #define VM_PROT_WRITE   0x2u
 #define VM_PROT_EXEC    0x4u    /* without it the page is execute-never */
 
+/* Forward: struct task didefinisikan di task.h (task.h me-include
+ * vm.h, jadi di sini cukup forward declaration). */
+struct task;
+
 /* A task's address space: its own L1 translation table.
  * The table lives in kernel BSS (1:1 mapped), so l1 works as both
  * the virtual address for table edits and the physical address for
@@ -78,6 +82,28 @@ uint32_t vm_lookup(struct vm_space *sp, uint32_t va);
 /* Remove the page mapping for va in sp. Returns 0 on success, -1 when
  * va is not page-mapped. */
 int vm_unmap(struct vm_space *sp, uint32_t va);
+
+/*
+ * Copy-on-write (Fase 7, bring-up).
+ *
+ * Petakan pa FISIK YANG SAMA dari va milik src ke dst, keduanya
+ * read-only, dan catat pasangan (space, va) di tabel COW. Write
+ * pertama ke va di salah satu space memicu permission fault;
+ * vm_page_fault lalu menyalin halaman ke pa baru + remap read/write
+ * di space yang fault (cow_break). Space yang lain tetap menunjuk pa
+ * asal (masih COW sampai ia sendiri menulis).
+ *
+ * Keterbatasan jujur: halaman tidak pernah di-free di desain ini
+ * (pool bump-allocator; vm_unmap pun tidak mengembalikan pa), jadi
+ * tidak ada refcount - halaman COW asal tetap hidup selama masih ada
+ * yang menunjuknya. Jangan panggil vm_unmap pada va COW lalu pakai
+ * lagi: entry COW-nya tidak dibersihkan (didokumentasikan, bukan bug
+ * tersembunyi).
+ *
+ * 0 = ok, -1 = gagal (va tidak ter-map di src / tidak sejajar /
+ * tabel COW penuh).
+ */
+int vm_share_cow(struct task *dst, struct task *src, uint32_t va);
 
 /* Pager: try to resolve a data abort (far = DFAR, fsr = DFSR).
  * Returns 1 when the faulting instruction should be retried, 0 when

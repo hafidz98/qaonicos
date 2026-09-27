@@ -19,7 +19,14 @@
 #include <stdint.h>
 #include "zone.h"
 
-#define IPC_MSG_DATA    224
+/* Fase 7: IPC_MSG_DATA 224 -> 4128. Protokol pager butuh satu halaman
+ * penuh (4096 byte) + header {obj_id, offset} (8 byte) = 4104 byte
+ * dalam satu pesan. msg_pool di kernel_main.c berukuran
+ * 16*sizeof(struct ipc_msg) sehingga ikut membesar otomatis (+-66KB
+ * BSS). Harga: struct ipc_wire kini ~4KB - jangan taruh dua wire di
+ * stack 8KB; thread stack dibesarkan ke 16KB dan jalur abort pakai
+ * buffer statis (stack abort cuma 8KB). */
+#define IPC_MSG_DATA    4128
 #define IPC_QDEPTH      8
 #define IPC_NPORTS      32
 

@@ -42,6 +42,7 @@ $TOOL $COMMON $LDOPT -T kernel/virt.ld -o kernel/mach-kernel.elf \
     kernel/start.S kernel/kernel_main.c \
     $B/vectors.S $B/trap.c $B/pmap.c $B/fpu.c $B/zone.c $B/ipc.c \
     $B/syscall.c $B/lib.c $B/gic.c $B/timer.c $B/vm.c $B/task.c \
+    $B/pager.c \
     $LIBGCC
 
 echo "built kernel/mach-kernel.elf"

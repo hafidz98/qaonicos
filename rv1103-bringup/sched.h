@@ -24,7 +24,8 @@
 #include "fpu.h"
 #include "task.h"
 
-#define SCHED_MAX_THREADS 4u
+/* Fase 7: 4 -> 8 (tambah thread pager + client). */
+#define SCHED_MAX_THREADS 8u
 
 /* Exception frame layout (words). */
 #define FR_WORDS 16u

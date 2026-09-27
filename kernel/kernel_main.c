@@ -23,6 +23,7 @@
 #include "../rv1103-bringup/sched.h"
 #include "../rv1103-bringup/vm.h"
 #include "../rv1103-bringup/task.h"
+#include "../rv1103-bringup/pager.h"
 #include "../rv1103-bringup/lib.h"
 
 /* PL011 (QEMU virt UART0). */
@@ -170,7 +171,9 @@ static void wire_puts(struct ipc_wire *w, uint32_t id, const char *txt)
  * real userspace). Returns number of failed checks. */
 static int ipc_selftest(void)
 {
-    struct ipc_wire w, r;
+    /* Fase 7: statis, bukan di stack - struct ipc_wire kini ~4KB
+     * (IPC_MSG_DATA=4128) sedangkan selftest jalan di stack boot 8KB. */
+    static struct ipc_wire w, r;
     unsigned tp, p_send, p_recv;
     int fails = 0, i, ret;
 
@@ -203,7 +206,7 @@ static int ipc_selftest(void)
         CHECK(r.data[0] == (uint8_t)('A' + i), "fifo payload");
     }
 
-    /* 3. payload integrity: 224-byte pattern, byte-exact */
+    /* 3. payload integrity: IPC_MSG_DATA-byte pattern, byte-exact */
     for (i = 0; i < IPC_MSG_DATA; i++)
         w.data[i] = (uint8_t)(i * 7 + 3);
     w.bits = 0xdead; w.id = 0xbeef; w.size = IPC_MSG_DATA;
@@ -245,12 +248,27 @@ static struct vm_space vm_space_kern;
 /* ------------------------------------------------------------------ */
 /* Fase 4: preemptive threads. No manual yields anywhere.              */
 /* ------------------------------------------------------------------ */
-static unsigned char stack_a[8192] __attribute__((aligned(8)));
-static unsigned char stack_b[8192] __attribute__((aligned(8)));
-static unsigned char stack_server[8192] __attribute__((aligned(8)));
-static unsigned char stack_client[8192] __attribute__((aligned(8)));
+/* Fase 7: 8KB -> 16KB. struct ipc_wire kini ~4KB (IPC_MSG_DATA=4128);
+ * dua wire di satu frame (thread_client) tidak muat di 8KB. */
+static unsigned char stack_a[16384] __attribute__((aligned(8)));
+static unsigned char stack_b[16384] __attribute__((aligned(8)));
+static unsigned char stack_server[16384] __attribute__((aligned(8)));
+static unsigned char stack_client[16384] __attribute__((aligned(8)));
+static unsigned char stack_pager[16384] __attribute__((aligned(8)));
+static unsigned char stack_pclient[16384] __attribute__((aligned(8)));
 
 static volatile unsigned total_lines;
+
+/* ------------------------------------------------------------------ */
+/* Fase 7: external pager (memory object) + copy-on-write.             */
+/* ------------------------------------------------------------------ */
+#define PAGER_VA 0x10010000u   /* jendela object di task_c (2 halaman) */
+#define COW_VA   0x10020000u   /* halaman COW antara task_a dan task_b */
+
+static struct task task_pager, task_c;
+static unsigned pager_req, pager_rep;   /* nama port di task_pager.ipc */
+static unsigned pager_obj;              /* id memory object */
+static volatile unsigned pager_done;    /* diset thread_pclient */
 
 /* Atomically print one status line; the 12th line ends the demo. */
 static void report(const char *tag, unsigned n, uint64_t fpubits,
@@ -265,7 +283,9 @@ static void report(const char *tag, unsigned n, uint64_t fpubits,
     puts("  ticks="); putdec(sched_ticks());
     putc('\n');
     total_lines++;
-    over = (total_lines >= 12);
+    /* Fase 7: jangan halt sebelum pager test selesai (pager_done
+     * diset thread_pclient). Tes lama tidak rusak - hanya menunggu. */
+    over = (total_lines >= 12) && pager_done;
     if (over) {
         puts("PREEMPT+VM OK - halting\n");
         gic_disable_irq(TIMER_PPI_IRQ);
@@ -413,6 +433,80 @@ static void thread_client(void)
         n = svc_recv(rep_b, &r, sizeof(r));  /* block selamanya */
         (void)n;
     }
+}
+
+/* Fase 7: pager thread (task_pager). Loop terima data_request di
+ * pager_req, layani dengan data_supply dari backing store.
+ * Backing store = pola deterministik (offset+i)&0xFF; pemanggil
+ * langsung via C (bukan syscall baru) - brief mengizinkan. */
+static void thread_pager(void)
+{
+    static struct ipc_wire w, r;
+    uint32_t obj_id, off;
+    unsigned i;
+    int n;
+
+    for (;;) {
+        n = ipc_recv(&task_pager.ipc, pager_req, &w, sizeof(w));
+        if (n <= 0 || w.id != MSG_DATA_REQUEST)
+            continue;           /* abaikan pesan asing */
+        obj_id = *(uint32_t *)w.data;
+        off = *(uint32_t *)(w.data + 4);
+        if (obj_id != pager_obj)
+            continue;
+
+        /* Isi halaman dari backing store (pola deterministik). */
+        r.bits = 0;
+        r.id = MSG_DATA_SUPPLY;
+        *(uint32_t *)r.data = obj_id;
+        *(uint32_t *)(r.data + 4) = off;
+        for (i = 0; i < 4096; i++)
+            r.data[8 + i] = (uint8_t)((off + i) & 0xFFu);
+        r.size = 8 + 4096;
+
+        /* Balas ke reply port client di space ini. */
+        (void)ipc_send(&task_pager.ipc, pager_rep, &r, sizeof(r));
+    }
+}
+
+/* Fase 7: client pager (task_c). Sentuh PAGER_VA -> data abort ->
+ * vm_page_fault -> ipc_rpc ke pager thread. Verifikasi byte-exact,
+ * lalu tulis & baca ulang untuk memastikan halaman writable. */
+static void thread_pclient(void)
+{
+    volatile uint8_t *p;
+    unsigned i, fails = 0, s;
+    uint32_t off;
+
+    for (off = 0; off < 2 * 4096; off += 4096) {
+        p = (volatile uint8_t *)(PAGER_VA + off);
+        for (i = 0; i < 4096; i++) {
+            uint8_t want = (uint8_t)((off + i) & 0xFFu);
+            if (p[i] != want) {   /* fault pertama: isi dari pager */
+                fails++;
+                break;
+            }
+        }
+        /* Halaman hasil pager harus writable (prot RW saat map). */
+        for (i = 0; i < 4096; i++)
+            p[i] = (uint8_t)(i & 0xFFu);
+        for (i = 0; i < 4096; i++)
+            if (p[i] != (uint8_t)(i & 0xFFu)) {
+                fails++;
+                break;
+            }
+    }
+
+    s = irq_save();
+    if (fails == 0)
+        puts("PAGER TESTS PASSED\n");
+    else {
+        puts("[pager] FAILURES = "); putdec(fails); putc('\n');
+    }
+    irq_restore(s);
+    pager_done = 1;             /* izinkan report() halt */
+
+    for (;;) { }                /* RUNNABLE: biarkan tick tetap jalan */
 }
 
 void kernel_main(void)
@@ -680,6 +774,118 @@ void kernel_main(void)
         }
     }
 
+    /* 3f. Fase 7: copy-on-write, single-threaded (scheduler belum
+     * jalan). task_a menulis pola ke COW_VA; vm_share_cow() memetakan
+     * pa fisik yang sama secara read-only di task_a dan task_b.
+     * Write dari B memicu permission fault -> cow_break menyalin
+     * halaman privat untuk B; A harus tetap melihat pola aslinya,
+     * dan sebaliknya. */
+    {
+        int fails = 0;
+        volatile uint8_t *pa, *pb;
+        unsigned i;
+
+#define CCHECK(cond, msg) do { \
+            if (!(cond)) { puts("  FAIL: "); puts(msg); putc('\n'); fails++; } \
+        } while (0)
+
+        /* Halaman sumber di task_a (demand zero-fill, lalu tulis). */
+        vm_space_switch(&task_a.vm);
+        pa = (volatile uint8_t *)COW_VA;
+        for (i = 0; i < 4096; i++)
+            pa[i] = (uint8_t)((i * 3 + 1) & 0xFFu);
+
+        /* Share ke task_b secara COW (keduanya jadi read-only). */
+        CCHECK(vm_share_cow(&task_b, &task_a, COW_VA) == 0,
+               "vm_share_cow");
+
+        /* B membaca: harus melihat pola A (fisik sama). */
+        vm_space_switch(&task_b.vm);
+        pb = (volatile uint8_t *)COW_VA;
+        for (i = 0; i < 4096; i++)
+            if (pb[i] != (uint8_t)((i * 3 + 1) & 0xFFu)) {
+                CCHECK(0, "B tidak melihat pola A");
+                break;
+            }
+
+        /* B menulis -> COW break: B dapat salinan privat. */
+        for (i = 0; i < 4096; i++)
+            pb[i] = (uint8_t)(i & 0xFFu);
+        for (i = 0; i < 4096; i++)
+            if (pb[i] != (uint8_t)(i & 0xFFu)) {
+                CCHECK(0, "tulis B tidak persisten");
+                break;
+            }
+
+        /* A harus tidak terpengaruh (masih pola asli). */
+        vm_space_switch(&task_a.vm);
+        for (i = 0; i < 4096; i++)
+            if (pa[i] != (uint8_t)((i * 3 + 1) & 0xFFu)) {
+                CCHECK(0, "A berubah setelah B menulis");
+                break;
+            }
+
+        /* A menulis juga -> break sisi A; B tetap dengan polanya. */
+        for (i = 0; i < 4096; i++)
+            pa[i] = (uint8_t)((i * 5 + 2) & 0xFFu);
+        vm_space_switch(&task_b.vm);
+        for (i = 0; i < 4096; i++)
+            if (pb[i] != (uint8_t)(i & 0xFFu)) {
+                CCHECK(0, "B berubah setelah A menulis");
+                break;
+            }
+
+        vm_space_switch(&vm_space_kern);
+#undef CCHECK
+        puts("[vm  ] copy-on-write: ");
+        if (fails == 0)
+            puts("ALL CHECKS PASSED\n");
+        else {
+            puts("FAILURES = "); putdec((unsigned)fails); putc('\n');
+        }
+    }
+
+    /* 3g. Fase 7: external pager - memory object yang didukung pager
+     * thread. Setup single-threaded (port + object + jendela VA di
+     * task_c); pengisian halaman terjadi malas saat thread_pclient
+     * menyentuh PAGER_VA dan fault. */
+    task_create(&task_pager, &port_zone, &msg_zone);
+    task_create(&task_c, &port_zone, &msg_zone);
+    {
+        int fails = 0;
+
+#define GCHECK(cond, msg) do { \
+            if (!(cond)) { puts("  FAIL: "); puts(msg); putc('\n'); fails++; } \
+        } while (0)
+
+        /* Kedua port dua arah (SEND|RECV): pager thread recv di req +
+         * send di rep; pager_fetch_page (dari fault handler) send di
+         * req + recv di rep - semua di task_pager.ipc. */
+        pager_req = ipc_port_alloc(&task_pager.ipc,
+                                   IPC_SEND | IPC_RECV);
+        GCHECK(pager_req != 0, "pager req port");
+        pager_rep = ipc_port_alloc(&task_pager.ipc,
+                                   IPC_SEND | IPC_RECV);
+        GCHECK(pager_rep != 0, "pager rep port");
+        pager_obj = vm_object_create(&task_c, &task_pager,
+                                     pager_req, pager_rep,
+                                     2u * 4096u);
+        GCHECK(pager_obj != 0, "object create");
+        GCHECK(vm_map_object(&task_c, PAGER_VA, pager_obj, 0, 2,
+                             VM_PROT_READ | VM_PROT_WRITE) == 0,
+               "map object");
+        /* Jendela harus belum ter-map fisik (malas, isi saat fault). */
+        GCHECK(vm_lookup(&task_c.vm, PAGER_VA) == 0u, "belum ter-map");
+
+#undef GCHECK
+        puts("[pager] object + mapping setup: ");
+        if (fails == 0)
+            puts("ALL CHECKS PASSED\n");
+        else {
+            puts("FAILURES = "); putdec((unsigned)fails); putc('\n');
+        }
+    }
+
     /* 4. Preemptive scheduler: GIC + virtual-timer tick. */
     puts("[gic ] init GIC-400\n");
     gic_init();
@@ -692,6 +898,9 @@ void kernel_main(void)
     sched_add(thread_b, stack_b + sizeof(stack_b), &task_kern);
     sched_add(thread_server, stack_server + sizeof(stack_server), &task_a);
     sched_add(thread_client, stack_client + sizeof(stack_client), &task_b);
+    sched_add(thread_pager, stack_pager + sizeof(stack_pager), &task_pager);
+    sched_add(thread_pclient, stack_pclient + sizeof(stack_pclient),
+              &task_c);
     {
         /* 1 ms slice, in timer ticks. */
         uint32_t freq = timer_get_freq();

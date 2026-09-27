@@ -20,11 +20,16 @@
  * descriptor base fields.
  */
 #include "vm.h"
+#include "sched.h"      /* sched_current_task() untuk pager_lookup */
+#include "pager.h"      /* pager_lookup/pager_fetch_page (Fase 7) */
+#include "lib.h"        /* memcpy untuk cow_break */
 
-/* Pool sizes: room for a handful of tasks; bumped up when needed. */
-#define VM_NSPACES  4u
-#define VM_NL2      16u
-#define VM_NPAGES   32u
+/* Pool sizes: room for a handful of tasks; bumped up when needed.
+ * Fase 7: 8 space (kern + kern-thread + A + B + pager + C + cadangan),
+ * halaman 48 (pager + COW butuh beberapa). */
+#define VM_NSPACES  8u
+#define VM_NL2      24u
+#define VM_NPAGES   48u
 
 static uint32_t l1_pool[VM_NSPACES][4096] __attribute__((aligned(16384)));
 static uint32_t l2_pool[VM_NL2][256]      __attribute__((aligned(1024)));
@@ -245,16 +250,123 @@ int vm_unmap(struct vm_space *sp, uint32_t va)
 }
 
 /*
+ * Copy-on-write (Fase 7).
+ *
+ * Tabel kecil {space, va} -> pa asal. vm_share_cow() memetakan pa yang
+ * sama secara read-only di dua space; write pertama ke va memicu
+ * permission fault (FS 0xD/0xF) dan cow_break() menyalin halaman ke pa
+ * baru + remap read/write di space yang fault. Slot space yang break
+ * dilepas; space lain tetap COW terhadap pa asal.
+ */
+#define VM_NCOW 8u
+static struct {
+    struct vm_space *sp;
+    uint32_t va;
+    uint32_t pa;
+} cow_tab[VM_NCOW];
+
+int vm_share_cow(struct task *dst, struct task *src, uint32_t va)
+{
+    uint32_t desc, pa;
+    int i, done = 0;
+
+    if (!dst || !src || dst == src || (va & VM_PAGE_MASK))
+        return -1;
+    desc = vm_lookup(&src->vm, va);
+    if (desc == 0u)
+        return -1;              /* src belum memetakan va */
+    pa = desc & 0xFFFFF000u;
+
+    /* Butuh 2 slot kosong (satu per space). */
+    for (i = 0; i < (int)VM_NCOW; i++)
+        if (cow_tab[i].sp == 0)
+            done++;
+    if (done < 2)
+        return -1;
+    done = 0;
+
+    /* Kedua sisi jadi read-only; write pertama memicu COW break. */
+    if (vm_map(&dst->vm, va, pa, VM_PROT_READ) != 0)
+        return -1;
+    if (vm_map(&src->vm, va, pa, VM_PROT_READ) != 0)
+        return -1;
+    /* vm_map tidak invalidate TLB: paksa sekarang. Tanpa ini entry RW
+     * lama yang masih ke-cache membuat write tidak fault. */
+    vm_tlbimva(va);
+    vm_dsb();
+    vm_isb();
+
+    for (i = 0; i < (int)VM_NCOW && done < 2; i++) {
+        if (cow_tab[i].sp == 0) {
+            cow_tab[i].sp = (done == 0) ? &dst->vm : &src->vm;
+            cow_tab[i].va = va;
+            cow_tab[i].pa = pa;
+            done++;
+        }
+    }
+    return 0;
+}
+
+/* Break COW untuk (sp, va): salin halaman ke pa baru, remap RW.
+ * Return 1 bila di-break, 0 bila va bukan halaman COW (genuine fault).
+ * Dipanggil dari vm_page_fault saat permission fault. */
+static int cow_break(struct vm_space *sp, uint32_t va)
+{
+    int i;
+    uint32_t pa, npa;
+
+    for (i = 0; i < (int)VM_NCOW; i++)
+        if (cow_tab[i].sp == sp && cow_tab[i].va == va)
+            break;
+    if (i == (int)VM_NCOW)
+        return 0;               /* bukan halaman COW */
+    pa = cow_tab[i].pa;
+    cow_tab[i].sp = 0;          /* slot bebas; space lain tidak tersentuh */
+
+    /* Tidak ada refcount: halaman tidak pernah di-free di desain
+     * bump-allocator ini, jadi pa asal tetap valid selama masih ada
+     * space yang menunjuknya. */
+    npa = vm_page_alloc();
+    if (npa == 0u)
+        return 0;
+    memcpy((void *)npa, (void *)pa, VM_PAGE_SIZE);
+    if (vm_map(sp, va, npa, VM_PROT_READ | VM_PROT_WRITE) != 0)
+        return 0;
+    if (sp == vm_cur_space) {
+        vm_tlbimva(va);
+        vm_dsb();
+        vm_isb();
+    }
+    return 1;
+}
+
+/*
  * Pager: resolve a data abort when we can.
  * Returns 1 when the fault is fixed and the faulting instruction should
  * be retried, 0 when it is a genuine bug (caller reports and parks).
  *
- * Handled case: translation fault (section 0x5 / page 0x7) on an address
- * inside VM_DEMAND_BASE..VM_DEMAND_END. We allocate a zeroed page and
- * map it read/write into the current space - demand paging, the seed of
- * every Mach VM feature (lazy allocation, and later COW / pager-backed
- * mappings). Permission faults, alignment faults, and faults outside the
- * demand range are NOT resolved.
+ * Fase 5: translation fault (section 0x5 / page 0x7) di demand range
+ * -> zero-fill (alokasi halaman zeroed + map RW).
+ * Fase 7:
+ *   - translation fault di VA yang terdaftar sebagai object-backed
+ *     (vm_map_object) -> minta halaman ke pager eksternal via IPC
+ *     (data_request/data_supply), map dengan prot tercatat, retry.
+ *     Gagalnya pager = genuine fault (tidak di-zero-fill diam-diam).
+ *   - permission fault (section 0xD / page 0xF) di VA yang terdaftar
+ *     di tabel COW -> cow_break (salin privat + remap RW), retry.
+ * Fault lain (alignment dsb.) tidak diselesaikan.
+ *
+ * CATATAN DEADLOCK (pelajaran Fase 6): abort handler masuk dengan IRQ
+ * ter-mask (hardware ARMv7 men-set I=1 saat exception). pager_fetch_page
+ * memanggil ipc_rpc yang blocking; ipc_recv Fase 6 melakukan cpsie i
+ * sebelum spin dan me-restore mask setelah bangun, sehingga tick timer
+ * tetap bisa menjadwalkan pager thread. Jangan spin dengan IRQ mati
+ * di jalur ini.
+ *
+ * Keterbatasan: abort handler tidak reentrant antar thread (stack abort
+ * global). Selama satu thread ter-block di dalam pager, thread lain
+ * tidak boleh fault - pager thread di tes ini tidak menyentuh VA yang
+ * bisa fault.
  */
 int vm_page_fault(uint32_t far, uint32_t fsr)
 {
@@ -264,27 +376,58 @@ int vm_page_fault(uint32_t far, uint32_t fsr)
 
     /* ARMv7 short-descriptor FS: bits[3:0] + bit[10] -> FS[4]. */
     fs = (fsr & 0xFu) | ((fsr >> 6) & 0x10u);
-    if (fs != 0x5u && fs != 0x7u)
-        return 0;               /* not a translation fault */
-    if (far < VM_DEMAND_BASE || far >= VM_DEMAND_END)
-        return 0;               /* outside the demand range */
-
     sp = vm_cur_space;
     if (!sp)
         return 0;
     va = far & ~VM_PAGE_MASK;
-    if (vm_lookup(sp, va) != 0u)
-        return 0;               /* already mapped: weird, don't loop */
-    pa = vm_page_alloc();
-    if (pa == 0u)
-        return 0;               /* out of pages */
-    if (vm_map(sp, va, pa, VM_PROT_READ | VM_PROT_WRITE) != 0)
-        return 0;
-    /* vm_map did a DSB; make the new entry visible to the walker now. */
-    vm_tlbimva(va);
-    vm_dsb();
-    vm_isb();
-    return 1;
+
+    if (fs == 0x5u || fs == 0x7u) {
+        /* Translation fault: VA belum ter-map. */
+        struct task *t;
+        struct vm_object *o;
+        unsigned oid, prot;
+        uint32_t off;
+
+        if (far < VM_DEMAND_BASE || far >= VM_DEMAND_END)
+            return 0;           /* di luar demand range */
+        if (vm_lookup(sp, va) != 0u)
+            return 0;           /* sudah ter-map: aneh, jangan loop */
+
+        /* Fase 7: object-backed? Minta isi halaman ke pager. */
+        t = sched_current_task();
+        if (t && pager_lookup(t, va, &o, &oid, &off, &prot)) {
+            pa = vm_page_alloc();
+            if (pa == 0u)
+                return 0;
+            if (pager_fetch_page(o, oid, off, (uint8_t *)pa) != 0)
+                return 0;       /* pager gagal: genuine fault */
+            if (vm_map(sp, va, pa, prot) != 0)
+                return 0;
+            /* vm_map hanya DSB: paksa entry terlihat walker sekarang. */
+            vm_tlbimva(va);
+            vm_dsb();
+            vm_isb();
+            return 1;
+        }
+
+        /* Bukan object-backed: zero-fill seperti Fase 5. */
+        pa = vm_page_alloc();
+        if (pa == 0u)
+            return 0;           /* out of pages */
+        if (vm_map(sp, va, pa, VM_PROT_READ | VM_PROT_WRITE) != 0)
+            return 0;
+        vm_tlbimva(va);
+        vm_dsb();
+        vm_isb();
+        return 1;
+    }
+
+    if (fs == 0xDu || fs == 0xFu) {
+        /* Permission fault: mungkin write ke halaman COW. */
+        return cow_break(sp, va);
+    }
+
+    return 0;
 }
 
 int vm_probe(struct vm_space *sp, uint32_t va, uint32_t pattern)
