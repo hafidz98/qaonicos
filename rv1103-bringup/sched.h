@@ -26,7 +26,7 @@
 
 /* Fase 7: 4 -> 8 (tambah thread pager + client).
  * Fase 9: 8 -> 10 (tambah thread user fstest). */
-#define SCHED_MAX_THREADS 10u
+#define SCHED_MAX_THREADS 14u
 
 /* Exception frame layout (words). */
 #define FR_WORDS 16u

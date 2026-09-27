@@ -64,8 +64,35 @@ arm-none-eabi-objcopy -O binary /tmp/mach_fstest.elf /tmp/mach_fstest.bin
 python3 user/embed.py /tmp/mach_fstest.bin /tmp/mach_fstest_img.c fstest_img 16384
 $TOOL $COMMON -c /tmp/mach_fstest_img.c -o /tmp/mach_fstest_img.o
 
+# Fase 10: init userspace + utilitas (ucat/uls/uecho). Di-link di VA
+# tetap masing-masing (_start di awal via .text.start), ulib.c di-link
+# ke dalam tiap biner (self-contained, pola hello/fstest), lalu
+# di-embed sebagai blob -> array C <prog>_img. Entry point dicek
+# terhadap konstanta VA di rv1103-bringup/user.h.
+for prog in init ucat uls uecho; do
+    case $prog in
+        init)  VA=0x10012000 ;;
+        ucat)  VA=0x10018000 ;;
+        uls)   VA=0x10021000 ;;
+        uecho) VA=0x10040000 ;;
+    esac
+    $TOOL $COMMON -T user/$prog.ld -o /tmp/mach_$prog.elf \
+        user/$prog.c user/ulib.c
+    ENTRY=$(arm-none-eabi-readelf -h /tmp/mach_$prog.elf | sed -n 's/.*Entry point address: *//p')
+    if [ "$ENTRY" != "$VA" ]; then
+        echo "FATAL: $prog entry point $ENTRY != $VA" >&2
+        exit 1
+    fi
+    arm-none-eabi-objcopy -O binary /tmp/mach_$prog.elf /tmp/mach_$prog.bin
+    python3 user/embed.py /tmp/mach_$prog.bin /tmp/mach_${prog}_img.c \
+        ${prog}_img 16384
+    $TOOL $COMMON -c /tmp/mach_${prog}_img.c -o /tmp/mach_${prog}_img.o
+done
+
 $TOOL $COMMON $LDOPT -T kernel/virt.ld -o kernel/mach-kernel.elf \
     /tmp/mach_sched.o /tmp/mach_hello_img.o /tmp/mach_fstest_img.o \
+    /tmp/mach_init_img.o /tmp/mach_ucat_img.o /tmp/mach_uls_img.o \
+    /tmp/mach_uecho_img.o \
     kernel/start.S kernel/kernel_main.c \
     $B/vectors.S $B/trap.c $B/pmap.c $B/fpu.c $B/zone.c $B/ipc.c \
     $B/syscall.c $B/lib.c $B/gic.c $B/timer.c $B/vm.c $B/task.c \

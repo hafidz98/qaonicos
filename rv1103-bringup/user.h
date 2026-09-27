@@ -34,6 +34,40 @@
 #define FSTEST_STACK_TOP   0x1002E000u
 #define FSTEST_STACK_PAGES 2u
 
+/* Fase 10: init + utilitas userspace (user/init.c, ucat.c, uls.c,
+ * uecho.c). Semua di dalam demand range, tidak tabrakan dengan
+ * region yang sudah ada:
+ *   0x10012000 init        (4 halaman R+X)
+ *   0x10014000 stack init  (2 halaman RW, top 0x10016000)
+ *   0x10018000 ucat        (4 halaman R+X)
+ *   0x1001C000 stack ucat  (2 halaman RW, top 0x1001E000)
+ *   0x10021000 uls         (4 halaman R+X)
+ *   0x1001E000 stack uls   (2 halaman RW, top 0x10020000;
+ *                           COW_VA 0x10020000 ada di vm task_a/task_b,
+ *                           bukan task_user)
+ *   0x10040000 uecho       (4 halaman R+X; tepat di atas stack hello
+ *                           yang berakhir di 0x10040000)
+ *   0x10044000 stack uecho (2 halaman RW, top 0x10046000) */
+#define INIT_PROG_VA     0x10012000u
+#define INIT_PROG_PAGES  4u
+#define INIT_STACK_TOP   0x10016000u
+#define INIT_STACK_PAGES 2u
+
+#define UCAT_PROG_VA     0x10018000u
+#define UCAT_PROG_PAGES  4u
+#define UCAT_STACK_TOP   0x1001E000u
+#define UCAT_STACK_PAGES 2u
+
+#define ULS_PROG_VA      0x10021000u
+#define ULS_PROG_PAGES   4u
+#define ULS_STACK_TOP    0x10020000u
+#define ULS_STACK_PAGES  2u
+
+#define UECHO_PROG_VA    0x10040000u
+#define UECHO_PROG_PAGES 4u
+#define UECHO_STACK_TOP  0x10046000u
+#define UECHO_STACK_PAGES 2u
+
 /* Nama port well-known di task_user.ipc (diisi kernel saat boot). */
 #define USER_SVC_SEND   1u      /* send-right ke echo server */
 #define USER_SVC_REPLY  2u      /* recv port untuk reply */

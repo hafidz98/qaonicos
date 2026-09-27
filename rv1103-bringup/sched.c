@@ -146,12 +146,6 @@ static void abt_sp_set(uint32_t s)
         :: "r"(s) : "memory", "r4");
 }
 
-/* 1 bila frame exception akan kembali ke USR mode. */
-static int frame_is_user(uint32_t *frame)
-{
-    return frame && ((frame[FR_CPSR] & 0x1Fu) == 0x10u);
-}
-
 void sched_add_user(uint8_t *stack_top, struct task *task,
                     uint32_t user_pc, uint32_t user_sp_top)
 {
@@ -294,9 +288,16 @@ uint32_t *sched_on_tick(uint32_t *frame)
     out->sp = frame;
     /* Fase 10: selamatkan SP_abt thread keluar. */
     abt_sp_save[cur] = abt_sp_get();
-    /* Fase 9: keluar dari USR -> selamatkan banked SP/LR milik thread
-     * ini. Tanpa ini semua thread user berbagi satu SP_usr fisik. */
-    if (frame_is_user(frame))
+    /* Fase 9: selamatkan banked SP/LR bila thread KELUAR adalah
+     * thread user. Syaratnya = thread-nya user (user_sp != 0), BUKAN
+     * frame-nya USR: tick bisa mempreempt thread user di dalam SVC
+     * (tengah syscall) sehingga frame-nya SVC; banked SP/LR fisik
+     * tetap milik thread ini (syscall tak menyentuh SP_usr/LR_usr,
+     * single-CPU) dan wajib diselamatkan. Versi lama memakai
+     * frame_is_user() sehingga thread user yang di-preempt di dalam
+     * syscall tidak di-save dan saat switch-in mewarisi SP_usr fisik
+     * thread user lain -> stack tertukar -> fault misterius. */
+    if (out->user_sp != 0u)
         banked_get(&out->user_sp, &out->user_lr);
     ticks++;
 
@@ -349,8 +350,12 @@ uint32_t *sched_on_tick(uint32_t *frame)
         vm_space_switch(&in->task->vm);
 
     fpu_restore(&in->vfp);
-    /* Fase 9: masuk ke USR -> pulihkan banked SP/LR milik thread ini. */
-    if (frame_is_user(in->sp))
+    /* Fase 9: pulihkan banked SP/LR bila thread MASUK adalah thread
+     * user (user_sp != 0) — tanpa syarat mode frame, simetris dengan
+     * save di atas. Wajib selalu dipulihkan: banked register fisik
+     * itu satu untuk semua thread user, jadi tiap switch-in ke thread
+     * user harus memasang miliknya sendiri. */
+    if (in->user_sp != 0u)
         banked_set(in->user_sp, in->user_lr);
     return in->sp;
 }

@@ -10,7 +10,9 @@
  *   2. write(fd, "isi rahasia") -> 11 byte
  *   3. close, open(O_RDONLY), read -> verifikasi byte-exact
  *   4. ls -> "halo.txt" muncul di daftar
- *   5. delete("/halo.txt") -> ls lagi -> daftar kosong
+ *   5. delete("/halo.txt") -> ls lagi -> "halo.txt" hilang dari
+ *      daftar (daftar TIDAK harus kosong: init/utilitas Fase 10
+ *      berjalan konkuren dan membuat file sendiri)
  *   6. negatif: open tanpa O_CREAT -> -1; read fd tertutup -> -1;
  *      write fd liar -> -1
  *   7. cetak "FS TESTS PASSED", buat sentinel "/.fs_done" (gerbang
@@ -206,7 +208,9 @@ void _start(void)
         put("ls ok\n");
     }
 
-    /* 5. delete -> ls kosong. */
+    /* 5. delete -> halo.txt hilang dari ls. Daftar tidak harus
+     * kosong: init & utilitas Fase 10 berjalan konkuren dan membuat
+     * file sendiri (/motd.txt, /echo.txt, sentinel). */
     if (sys_delete("/halo.txt") != 0) {
         put("FAIL: delete\n");
         fails++;
@@ -214,7 +218,7 @@ void _start(void)
         for (i = 0; i < sizeof(buf); i++)
             buf[i] = 0;   /* jangan baca sisa "halo.txt" dari ls sebelumnya */
         r = sys_ls(buf, sizeof(buf));
-        if (r != 0 || contains(buf, sizeof(buf), "halo.txt")) {
+        if (r < 0 || contains(buf, sizeof(buf), "halo.txt")) {
             put("FAIL: file masih ada sesudah delete\n");
             fails++;
         } else {

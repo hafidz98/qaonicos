@@ -37,6 +37,16 @@ extern const unsigned hello_img_len;
 extern const uint8_t fstest_img[];
 extern const unsigned fstest_img_len;
 
+/* Fase 10: image init + utilitas userspace (user/<prog>.bin). */
+extern const uint8_t init_img[];
+extern const unsigned init_img_len;
+extern const uint8_t ucat_img[];
+extern const unsigned ucat_img_len;
+extern const uint8_t uls_img[];
+extern const unsigned uls_img_len;
+extern const uint8_t uecho_img[];
+extern const unsigned uecho_img_len;
+
 /* PL011 (QEMU virt UART0). */
 #define UARTDR  (*(volatile unsigned *)0x09000000u)
 #define UARTFR  (*(volatile unsigned *)0x09000018u)
@@ -288,6 +298,11 @@ static struct task task_user;           /* protection domain program user */
 static unsigned char stack_usvc[16384] __attribute__((aligned(8)));
 static unsigned char stack_uthread[16384] __attribute__((aligned(8)));
 static unsigned char stack_fstest[16384] __attribute__((aligned(8))); /* Fase 9 */
+/* Fase 10: kernel stack untuk thread user init + utilitas. */
+static unsigned char stack_init[16384] __attribute__((aligned(8)));
+static unsigned char stack_ucat[16384] __attribute__((aligned(8)));
+static unsigned char stack_uls[16384] __attribute__((aligned(8)));
+static unsigned char stack_uecho[16384] __attribute__((aligned(8)));
 static unsigned usvc_port;              /* recv port echo, di task_kern.ipc */
 static unsigned usvc_rep_in_kern;       /* send-right ke reply port user */
 
@@ -327,6 +342,16 @@ static int fs_test_done(void)
     return fs_find(".fs_done") >= 0;
 }
 
+/* Fase 10: 1 bila program init userspace selesai dengan sukses. init
+ * membuat sentinel "/.init_done" HANYA sesudah semua verifikasinya
+ * lolos ("INIT TESTS PASSED"); report() menjadikannya gerbang halt.
+ * Aman dipanggil dengan IRQ ter-mask (alasan sama dengan
+ * fs_test_done). */
+static int init_test_done(void)
+{
+    return fs_find(".init_done") >= 0;
+}
+
 /* Atomically print one status line; the 12th line ends the demo. */
 static void report(const char *tag, unsigned n, uint64_t fpubits,
                    unsigned vmfails)
@@ -343,10 +368,12 @@ static void report(const char *tag, unsigned n, uint64_t fpubits,
     /* Fase 7: jangan halt sebelum pager test selesai (pager_done
      * diset thread_pclient). Fase 8: juga tunggu thread user selesai
      * (user_done diset SYS_EXIT / user_kill). Fase 9: juga tunggu
-     * uji ramfs (sentinel /.fs_done dari thread fstest).
-     * Tes lama tidak rusak - hanya menunggu. */
+     * uji ramfs (sentinel /.fs_done dari thread fstest). Fase 10:
+     * juga tunggu init userspace (sentinel /.init_done dari thread
+     * init, hanya bila INIT TESTS PASSED). Tes lama tidak rusak -
+     * hanya menunggu. */
     over = (total_lines >= 12) && pager_done && user_done &&
-           fs_test_done();
+           fs_test_done() && init_test_done();
     if (over) {
         puts("PREEMPT+VM OK - halting\n");
         gic_disable_irq(TIMER_PPI_IRQ);
@@ -568,6 +595,56 @@ static void thread_pclient(void)
     pager_done = 1;             /* izinkan report() halt */
 
     for (;;) { }                /* RUNNABLE: biarkan tick tetap jalan */
+}
+
+/* Fase 10: muat satu image program userspace ke task_user:
+ * prog_pages halaman R+X di prog_va (salin dari blob embed via alias
+ * fisik 1:1; sisa halaman = NOL dari vm_page_alloc) + stack_pages
+ * halaman stack RW di bawah stack_top. Kembalikan jumlah kegagalan.
+ * Pola yang sama dengan blok hello/fstest inline di bawah. */
+static int load_user_image(const uint8_t *img, unsigned img_len,
+                           uint32_t prog_va, unsigned prog_pages,
+                           uint32_t stack_top, unsigned stack_pages,
+                           const char *tag)
+{
+    uint32_t pa, va, off = 0u, chunk;
+    unsigned i;
+    int fails = 0;
+
+    if (img_len > prog_pages * 4096u) {
+        puts("  FAIL: "); puts(tag); puts(" image too big\n");
+        return 1;
+    }
+    for (i = 0; i < prog_pages; i++) {
+        pa = vm_page_alloc();
+        va = prog_va + i * 4096u;
+        if (pa == 0u ||
+            vm_map(&task_user.vm, va, pa,
+                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC) != 0) {
+            puts("  FAIL: "); puts(tag); puts(" map prog page\n");
+            fails++;
+            break;
+        }
+        if (off < img_len) {
+            chunk = img_len - off;
+            if (chunk > 4096u)
+                chunk = 4096u;
+            memcpy((void *)pa, img + off, chunk);
+            off += chunk;
+        }
+    }
+    for (i = 0; i < stack_pages; i++) {
+        pa = vm_page_alloc();
+        va = stack_top - (i + 1u) * 4096u;
+        if (pa == 0u ||
+            vm_map(&task_user.vm, va, pa,
+                   VM_PROT_READ | VM_PROT_WRITE) != 0) {
+            puts("  FAIL: "); puts(tag); puts(" map stack page\n");
+            fails++;
+            break;
+        }
+    }
+    return fails;
 }
 
 void kernel_main(void)
@@ -1034,6 +1111,26 @@ void kernel_main(void)
                 break;
             }
         }
+        /* Fase 10: init + utilitas userspace (init/ucat/uls/uecho).
+         * VA program + stack lihat rv1103-bringup/user.h; semuanya
+         * dimuat ke task_user yang sama (fd table & ramfs dipakai
+         * bersama; koordinasi antar program via file sentinel). */
+        fails += load_user_image(init_img, init_img_len,
+                                 INIT_PROG_VA, INIT_PROG_PAGES,
+                                 INIT_STACK_TOP, INIT_STACK_PAGES,
+                                 "init");
+        fails += load_user_image(ucat_img, ucat_img_len,
+                                 UCAT_PROG_VA, UCAT_PROG_PAGES,
+                                 UCAT_STACK_TOP, UCAT_STACK_PAGES,
+                                 "ucat");
+        fails += load_user_image(uls_img, uls_img_len,
+                                 ULS_PROG_VA, ULS_PROG_PAGES,
+                                 ULS_STACK_TOP, ULS_STACK_PAGES,
+                                 "uls");
+        fails += load_user_image(uecho_img, uecho_img_len,
+                                 UECHO_PROG_VA, UECHO_PROG_PAGES,
+                                 UECHO_STACK_TOP, UECHO_STACK_PAGES,
+                                 "uecho");
         /* Port echo: server di task_kern (usvc_port), user dapat
          * send-right hasil grant (harus = USER_SVC_SEND=1), reply
          * port milik user (harus = USER_SVC_REPLY=2) di-grant balik. */
@@ -1081,6 +1178,18 @@ void kernel_main(void)
                    USER_PROG_VA, USER_STACK_TOP);
     sched_add_user(stack_fstest + sizeof(stack_fstest), &task_user,
                    FSTEST_PROG_VA, FSTEST_STACK_TOP);
+    /* Fase 10: init userspace pertama + utilitas (ucat/uls/uecho).
+     * Semua di task_user yang sama; init mengoordinasi utilitas
+     * lewat file sentinel di ramfs (bukan syscall spawn/exec —
+     * itu pasca-shell, dan shell paling akhir). */
+    sched_add_user(stack_init + sizeof(stack_init), &task_user,
+                   INIT_PROG_VA, INIT_STACK_TOP);
+    sched_add_user(stack_ucat + sizeof(stack_ucat), &task_user,
+                   UCAT_PROG_VA, UCAT_STACK_TOP);
+    sched_add_user(stack_uls + sizeof(stack_uls), &task_user,
+                   ULS_PROG_VA, ULS_STACK_TOP);
+    sched_add_user(stack_uecho + sizeof(stack_uecho), &task_user,
+                   UECHO_PROG_VA, UECHO_STACK_TOP);
     {
         /* 1 ms slice, in timer ticks. */
         uint32_t freq = timer_get_freq();
