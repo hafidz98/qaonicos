@@ -34,9 +34,10 @@
 #define GICD_BASE       0x08000000u
 #define GICC_BASE       0x08010000u
 
-/* RAM: 512 MiB mapped at 0x40000000. */
+/* RAM: 64 MiB mapped at 0x40000000 (emulasi Luckfox Pico Mini, QEMU -m 64).
+ * Fase 12d: dulu 512MB, diturunkan agar peta memori guest persis 64MB. */
 #define DRAM_BASE       0x40000000u
-#define DRAM_SIZE       (512u * 1024u * 1024u)
+#define DRAM_SIZE       (64u * 1024u * 1024u)
 
 #define BOARD_UART_IS_PL011 1
 

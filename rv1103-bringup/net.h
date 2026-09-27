@@ -7,7 +7,8 @@
  *
  * API:
  *   int  net_init(void);            // 0 = ok, <0 = gagal
- *   void net_poll(void);            // proses RX/TX completion; panggil rutin
+ *   unsigned net_poll(void);       // proses RX/TX completion; panggil rutin
+ *                                  // return: jumlah paket yang diproses
  *   int  net_send(const uint8_t *f, unsigned len); // kirim 1 frame Ethernet
  *   const uint8_t *net_mac(void);   // MAC guest (dari config device)
  *   unsigned net_irq(void);         // GIC ID (valid setelah net_init)
@@ -24,7 +25,7 @@
 #include <stdint.h>
 
 int net_init(void);
-void net_poll(void);
+unsigned net_poll(void);   /* Fase 12d: return jumlah paket diproses */
 int net_send(const uint8_t *frame, unsigned len);
 const uint8_t *net_mac(void);
 unsigned net_irq(void);
@@ -32,5 +33,8 @@ void net_on_rx(void (*cb)(const uint8_t *frame, unsigned len));
 void net_isr(void);
 void net_log(const char *s);
 void net_loghex(uint32_t v);
+/* Fase 12d: counter byte kumulatif untuk bandwidth real. */
+uint64_t net_rx_bytes_get(void);
+uint64_t net_tx_bytes_get(void);
 
 #endif /* MACH_NET_H */

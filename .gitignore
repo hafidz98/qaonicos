@@ -1,5 +1,6 @@
-*.o
-*.elf
 *.bin
+*.elf
 *.map
+*.o
 __pycache__/
+pico128.img

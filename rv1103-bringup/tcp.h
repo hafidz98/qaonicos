@@ -26,4 +26,8 @@ unsigned tcp_rx_segs(void);
 unsigned tcp_tx_segs(void);
 unsigned tcp_conns(void);
 
+/* Fase 12d: 1 bila server dalam keadaan LISTEN (tak ada koneksi aktif)
+ * sehingga thread net boleh block menunggu paket. */
+int tcp_is_listen(void);
+
 #endif /* MACH_TCP_H */

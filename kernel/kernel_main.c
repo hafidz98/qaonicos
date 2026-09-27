@@ -29,6 +29,8 @@
 #include "../rv1103-bringup/fs.h"
 #include "../rv1103-bringup/net.h"
 #include "../rv1103-bringup/netstack.h"
+#include "../rv1103-bringup/blk.h"   /* Fase 12d: virtio-blk storage */
+#include "../rv1103-bringup/tcp.h"   /* Fase 12d: tcp_is_listen() */
 
 /* Fase 8: image program userspace, di-embed dari user/hello.bin oleh
  * build.sh (user/embed.py -> /tmp/mach_hello_img.o). */
@@ -308,6 +310,8 @@ static unsigned char stack_uls[16384] __attribute__((aligned(8)));
 static unsigned char stack_uecho[16384] __attribute__((aligned(8)));
 /* Fase 11: stack thread network (virtio-net + ARP/ICMP). */
 static unsigned char stack_net[16384] __attribute__((aligned(8)));
+/* Fase 12d: stack idle thread (CPU accounting). */
+static unsigned char stack_idle[4096] __attribute__((aligned(8)));
 static volatile unsigned net_test_done;
 static unsigned usvc_port;              /* recv port echo, di task_kern.ipc */
 static unsigned usvc_rep_in_kern;       /* send-right ke reply port user */
@@ -447,11 +451,43 @@ static void thread_net(void)
         net_test_done = 1u;
     }
     {
+        /* Loop utama server: poll RX + tick TCP. Fase 12d: bila tak ada
+         * kerja (tak ada paket) dan TCP dalam keadaan LISTEN (tak ada
+         * koneksi aktif), thread BLOCK agar CPU% idle jujur; dibangunkan
+         * oleh net_isr saat paket tiba. Saat koneksi aktif, tetap poll
+         * rapat demi retransmit (RTO 800ms) & latensi rendah.
+         *
+         * Anti missed-wakeup: cek ulang dengan IRQ ter-mask sebelum
+         * mengubah state (pola yang sama dengan ipc_recv, AGENTS.md):
+         * net_isr tak bisa menyela antara cek dan block. */
         for (;;) {
-            net_poll();
+            unsigned w = net_poll();
             netstack_tick();
+            if (w == 0u && tcp_is_listen()) {
+                struct sched_thread *t = sched_current_thread();
+                unsigned cpsr;
+                __asm__ volatile("mrs %0, cpsr\n\tcpsid i"
+                                 : "=r"(cpsr) :: "memory");
+                if (net_poll() == 0u && tcp_is_listen())
+                    t->state = THREAD_BLOCKED;
+                __asm__ volatile("msr cpsr_c, %0"
+                                 :: "r"(cpsr) : "memory");
+                while (t->state == THREAD_BLOCKED) {
+                    /* IRQ hidup: tick/net_isr bisa membangunkan. */
+                }
+            }
         }
     }
+}
+
+/* Fase 12d: idle thread untuk CPU accounting. Prioritas paling rendah:
+ * scheduler hanya memilihnya bila tak ada thread RUNNABLE lain
+ * (lihat sched_on_tick). wfi menghemat CPU host saat menganggur;
+ * timer tick (1ms) membangunkan tiap slice untuk accounting. */
+static void thread_idle(void)
+{
+    for (;;)
+        __asm__ volatile("wfi");
 }
 
 static void thread_a(void)
@@ -478,6 +514,14 @@ static void thread_a(void)
             report("A", n, dbits_arg(x), vmfails);
             n++;
         }
+        if (server_mode_announced) {
+            /* Fase 12d: demo selesai (semua tes PASS, mode HTTP server
+             * jalan); matikan thread agar CPU% idle jujur. */
+            unsigned s = irq_save();
+            sched_current_thread()->state = THREAD_DEAD;
+            irq_restore(s);
+            for (;;) { }        /* tak dijadwalkan lagi */
+        }
     }
 }
 
@@ -499,6 +543,13 @@ static void thread_b(void)
         if ((i & 0x1FFFFu) == 0) {
             report("B", n, dbits_arg(x), vmfails);
             n++;
+        }
+        if (server_mode_announced) {
+            /* Fase 12d: demo selesai; matikan thread agar CPU% jujur. */
+            unsigned s = irq_save();
+            sched_current_thread()->state = THREAD_DEAD;
+            irq_restore(s);
+            for (;;) { }        /* tak dijadwalkan lagi */
         }
     }
 }
@@ -654,7 +705,14 @@ static void thread_pclient(void)
     irq_restore(s);
     pager_done = 1;             /* izinkan report() halt */
 
-    for (;;) { }                /* RUNNABLE: biarkan tick tetap jalan */
+    /* Fase 12d: kerja selesai; matikan thread agar CPU% idle jujur
+     * (sebelumnya spin kosong selamanya). */
+    {
+        unsigned s2 = irq_save();
+        sched_current_thread()->state = THREAD_DEAD;
+        irq_restore(s2);
+    }
+    for (;;) { }                /* tak dijadwalkan lagi */
 }
 
 /* Fase 10: muat satu image program userspace ke task_user:
@@ -1219,6 +1277,12 @@ void kernel_main(void)
     gic_set_priority(TIMER_PPI_IRQ, 0x80);
     gic_set_level(TIMER_PPI_IRQ);
 
+    /* Fase 12d: storage virtio-blk 128MB (emulasi SPI NAND Pico Mini).
+     * I/O sinkron via polling MMIO; aman dipanggil sebelum scheduler. */
+    puts("[blk ] init virtio-blk\n");
+    if (blk_init() < 0)
+        puts("[blk ] init gagal; storage tidak tersedia\n");
+
     timer_init();
     sched_init();
     sched_add(thread_a, stack_a + sizeof(stack_a), &task_kern);
@@ -1236,6 +1300,8 @@ void kernel_main(void)
     sched_add(thread_usvc, stack_usvc + sizeof(stack_usvc), &task_kern);
     /* Fase 11: thread network (virtio-net + ARP/ICMP). */
     sched_add(thread_net, stack_net + sizeof(stack_net), &task_kern);
+    /* Fase 12d: catat indeks thread net untuk wakeup dari net_isr. */
+    sched_set_net_idx(sched_thread_count() - 1u);
     sched_add_user(stack_uthread + sizeof(stack_uthread), &task_user,
                    USER_PROG_VA, USER_STACK_TOP);
     sched_add_user(stack_fstest + sizeof(stack_fstest), &task_user,
@@ -1252,6 +1318,10 @@ void kernel_main(void)
                    ULS_PROG_VA, ULS_STACK_TOP);
     sched_add_user(stack_uecho + sizeof(stack_uecho), &task_user,
                    UECHO_PROG_VA, UECHO_STACK_TOP);
+    /* Fase 12d: idle thread TERAKHIR (CPU accounting). Scheduler hanya
+     * memilihnya bila tak ada thread RUNNABLE lain. */
+    sched_add(thread_idle, stack_idle + sizeof(stack_idle), &task_kern);
+    sched_set_idle(sched_thread_count() - 1u);
     {
         /* 1 ms slice, in timer ticks. */
         uint32_t freq = timer_get_freq();

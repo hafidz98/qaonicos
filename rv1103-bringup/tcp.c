@@ -416,3 +416,6 @@ void tcp_tick(void)
 unsigned tcp_rx_segs(void) { return st_rx; }
 unsigned tcp_tx_segs(void) { return st_tx; }
 unsigned tcp_conns(void)   { return st_conns; }
+
+/* Fase 12d: 1 bila tak ada koneksi aktif (state LISTEN). */
+int tcp_is_listen(void) { return tc.state == TS_LISTEN; }

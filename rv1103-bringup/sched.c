@@ -15,6 +15,38 @@ static unsigned cur;
 static volatile unsigned ticks;
 static uint32_t slice_ticks;
 
+/* Fase 12d: idle thread untuk CPU accounting. idle_idx = indeks thread
+ * idle (0xFFFFFFFF = belum didaftarkan); idle_ticks = jumlah tick 1ms
+ * yang dijalankan thread idle. net_idx = indeks thread net (untuk
+ * wakeup dari net_isr saat paket tiba). */
+static unsigned idle_idx = 0xFFFFFFFFu;
+static unsigned net_idx = 0xFFFFFFFFu;
+static volatile unsigned idle_ticks;
+
+void sched_set_idle(unsigned idx)
+{
+    idle_idx = idx;
+}
+
+unsigned sched_idle_ticks(void)
+{
+    return idle_ticks;
+}
+
+void sched_set_net_idx(unsigned idx)
+{
+    net_idx = idx;
+}
+
+/* Bangunkan thread net bila sedang BLOCKED. Aman dari konteks IRQ
+ * (net_isr): hanya store satu word ke state. */
+void sched_wakeup_net(void)
+{
+    if (net_idx < nthreads &&
+        threads[net_idx].state == THREAD_BLOCKED)
+        threads[net_idx].state = THREAD_RUNNABLE;
+}
+
 /*
  * Fase 10: stack ABT per-thread.
  *
@@ -315,20 +347,32 @@ uint32_t *sched_on_tick(uint32_t *frame)
 
     /*
      * Round-robin ke thread RUNNABLE berikutnya; yang BLOCKED dilewati.
-     * Kalau semua blocked (tidak terjadi di tes ini - selalu ada yang
-     * runnable), tetap di thread sekarang agar tidak crash.
+     * Fase 12d: thread idle dilewati di sini — ia pilihan terakhir,
+     * dipilih hanya bila tak ada thread RUNNABLE lain (untuk CPU
+     * accounting yang jujur). Kalau semua blocked (tidak terjadi di
+     * tes ini - selalu ada yang runnable), tetap di thread sekarang
+     * agar tidak crash.
      */
     for (i = 0; i < nthreads; i++) {
         nxt++;
         if (nxt >= nthreads)
             nxt = 0;
+        if (nxt == idle_idx)
+            continue;               /* idle: hanya bila tak ada yang lain */
         if (threads[nxt].state == THREAD_RUNNABLE)
             break;
     }
+    if (threads[nxt].state != THREAD_RUNNABLE &&
+        idle_idx < nthreads &&
+        threads[idle_idx].state == THREAD_RUNNABLE)
+        nxt = idle_idx;             /* sistem idle */
     if (threads[nxt].state != THREAD_RUNNABLE)
         nxt = cur;
     cur = nxt;
     in = &threads[cur];
+    /* Fase 12d: hitung tick idle untuk CPU%. */
+    if (cur == idle_idx)
+        idle_ticks++;
 
     /*
      * Fase 10: pulihkan SP_abt milik thread masuk, dengan validasi.

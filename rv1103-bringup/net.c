@@ -17,6 +17,7 @@
  */
 #include "net.h"
 #include "board.h"
+#include "sched.h"   /* Fase 12d: sched_wakeup_net() dari net_isr */
 
 /* --- Register virtio-mmio legacy --- */
 #define VMM_MAGIC       0x000u
@@ -114,6 +115,14 @@ static uint8_t tx_buf[RX_BUFLEN] __attribute__((aligned(16)));
 static uint8_t our_mac[6];
 static void (*rx_cb)(const uint8_t *, unsigned);
 static volatile unsigned rx_pending;
+
+/* Fase 12d: counter byte untuk bandwidth real (emulasi). Diakses hanya
+ * dari konteks thread (net_send/net_poll), bukan IRQ, jadi aman. */
+static uint64_t net_rx_bytes;
+static uint64_t net_tx_bytes;
+
+uint64_t net_rx_bytes_get(void) { return net_rx_bytes; }
+uint64_t net_tx_bytes_get(void) { return net_tx_bytes; }
 
 /* Logging UART langsung (PL011); kernel_main.c tidak mengekspor puts. */
 #define N_UARTDR (*(volatile uint32_t *)0x09000000u)
@@ -360,8 +369,11 @@ void net_isr(void)
     uint32_t s = mmio_r(VMM_INTSTAT);
 
     mmio_w(VMM_INTACK, s);
-    if (s & (VINT_VRING | VINT_CONFIG))
+    if (s & (VINT_VRING | VINT_CONFIG)) {
         rx_pending = 1u;
+        /* Fase 12d: paket tiba -> bangunkan thread net bila ter-block. */
+        sched_wakeup_net();
+    }
 }
 
 /* Header virtio-net legacy: 10 byte nol untuk paket sederhana. */
@@ -407,15 +419,20 @@ int net_send(const uint8_t *frame, unsigned len)
     mem_barrier();
     mmio_w(VMM_QNOTIFY, 1u);
     io_barrier();
+    /* Fase 12d: hitung byte TX (frame Ethernet, tanpa header virtio). */
+    net_tx_bytes += (uint64_t)len;
     return 0;
 }
 
-void net_poll(void)
+/* Fase 12d: kembalikan jumlah paket yang diproses (RX + TX completion)
+ * agar thread net tahu kapan boleh block (tak ada kerja). */
+unsigned net_poll(void)
 {
     unsigned guard;
+    unsigned work = 0u;
 
     if (!vmm)
-        return;
+        return 0u;
     rx_pending = 0u;
     mem_barrier();
 
@@ -424,6 +441,7 @@ void net_poll(void)
     while (vq_tx.used->idx != vq_tx.used_idx && guard < VQ_SIZE) {
         vq_tx.used_idx++;
         guard++;
+        work++;
     }
 
     /* RX completions. */
@@ -438,13 +456,18 @@ void net_poll(void)
         mem_barrier();
         if (bi < RX_NBUF && len <= RX_BUFLEN && rx_cb) {
             /* Lewati header virtio-net 10 byte. */
-            if (len > VNET_HDR_LEN)
+            if (len > VNET_HDR_LEN) {
                 rx_cb(rx_buf[bi] + VNET_HDR_LEN, len - VNET_HDR_LEN);
+                /* Fase 12d: hitung byte RX (frame Ethernet). */
+                net_rx_bytes += (uint64_t)(len - VNET_HDR_LEN);
+            }
         }
         rx_post(bi);
         mem_barrier();
         mmio_w(VMM_QNOTIFY, 0u);
         io_barrier();
         guard++;
+        work++;
     }
+    return work;
 }

@@ -13,6 +13,11 @@
 #include "lib.h"
 #include "tcp.h"
 #include "net.h"
+#include "blk.h"   /* Fase 12d: storage virtio-blk (emulasi SPI NAND) */
+
+/* RAM guest di QEMU: -m 64 (spek Luckfox Pico Mini: 64MB DDR2).
+ * Lihat run-qemu.sh. */
+#define GUEST_RAM_MB 64u
 
 /* --- util string --- */
 static unsigned strapp(uint8_t *d, unsigned off, const char *s)
@@ -58,6 +63,25 @@ static const char *thread_state_cls(unsigned st)
     return "ded";
 }
 
+/* Cetak uint64 desimal (compiler memakai __aeabi_uldivmod). */
+static unsigned u64app(uint8_t *d, unsigned off, uint64_t v)
+{
+    char tmp[20];
+    int n = 0, k;
+
+    if (v == 0u)
+        tmp[n++] = '0';
+    else {
+        while (v > 0u) {
+            tmp[n++] = (char)('0' + v % 10u);
+            v /= 10u;
+        }
+    }
+    for (k = n - 1; k >= 0; k--)
+        d[off++] = (uint8_t)tmp[k];
+    return off;
+}
+
 static unsigned hexapp(uint8_t *d, unsigned off, uint8_t v)
 {
     static const char *hx = "0123456789abcdef";
@@ -66,59 +90,83 @@ static unsigned hexapp(uint8_t *d, unsigned off, uint8_t v)
     return off;
 }
 
-/* --- simulasi spek Luckfox Pico Mini (Fase 12c) ---
- * LCG sederhana + random walk. State persisten antar request sehingga
- * nilai BERUBAH tiap halaman di-refresh. Semua nilai di sini SIMULASI
- * dari spek asli (RV1103 Cortex-A7 @1.2GHz, 64MB DDR2, 128MB SPI NAND),
- * bukan pengukuran nyata. Tanpa rand() libc.
+/* --- pengukuran real dari emulasi QEMU (Fase 12d) ---
+ * Menggantikan modul simulasi LCG Fase 12c. Semua angka di bawah ini
+ * HASIL UKUR dari hardware virtual:
+ *  - CPU %: idle-thread accounting (tick idle vs total per window)
+ *  - Memory: page allocator kernel (used_pages*4KB) vs RAM 64MB (QEMU -m 64)
+ *  - Storage: sektor yang ditulis kernel vs kapasitas REAL dari config
+ *    device virtio-blk (128MB)
+ *  - Bandwidth: counter byte RX/TX di net.c per window waktu
  */
-static uint32_t sim_state = 0u;
-static int sim_cpu = 23;   /* persen, walk 4..87 */
-static int sim_mem = 31;   /* MB terpakai dari 64MB DDR2, walk 18..52 */
-static int sim_stor = 68;  /* MB terpakai dari 128MB SPI NAND, walk 40..110 */
-static int sim_up = 85;    /* 0.1 Mbps, walk 0.2..40.0 */
-static int sim_dn = 142;   /* 0.1 Mbps, walk 0.2..40.0 */
 
-static uint32_t sim_next(void)
+/* CPU%: 100*(1 - idle/total) per window >=500ms. */
+static unsigned cpu_pct_update(void)
 {
-    sim_state = sim_state * 1103515245u + 12345u;
-    return (sim_state >> 16) & 0x7fffu;
-}
+    static unsigned last_t, last_idle, pct;
+    unsigned t = sched_ticks();
+    unsigned it = sched_idle_ticks();
+    unsigned dt = t - last_t;
 
-static int sim_walk(int v, int lo, int hi, int step)
-{
-    int d = (int)(sim_next() % (uint32_t)(2 * step + 1)) - step;
-    v += d;
-    if (v < lo)
-        v = lo;
-    if (v > hi)
-        v = hi;
-    return v;
-}
-
-static void sim_tick(void)
-{
-    int k;
-    if (sim_state == 0u) {
-        sim_state = sched_ticks() | 0x9e3779b9u;
-        if (sim_state == 0u)
-            sim_state = 0x12345678u;
+    if (dt >= 500u) {
+        unsigned di = it - last_idle;
+        pct = (di >= dt) ? 0u : (100u * (dt - di) / dt);
+        last_t = t;
+        last_idle = it;
     }
-    for (k = 0; k < 2; k++) {
-        sim_cpu = sim_walk(sim_cpu, 4, 87, 6);
-        sim_mem = sim_walk(sim_mem, 18, 52, 3);
-        sim_stor = sim_walk(sim_stor, 40, 110, 4);
-        sim_up = sim_walk(sim_up, 2, 400, 25);
-        sim_dn = sim_walk(sim_dn, 2, 400, 30);
-    }
+    return pct;
 }
 
-/* Format persepuluh Mbps: 85 -> "8.5". */
-static unsigned fix1app(uint8_t *d, unsigned off, int tenths)
+/* Bandwidth: persepuluh Kbps per window >=500ms, dari counter byte. */
+static void bw_update(uint32_t *dn, uint32_t *up)
 {
-    off = u32app(d, off, (uint32_t)(tenths / 10));
+    static uint32_t last_t;
+    static uint64_t last_rx, last_tx;
+    static uint32_t dn10, up10;   /* persepuluh Kbps */
+    unsigned t = sched_ticks();
+    unsigned dt = t - last_t;
+
+    if (dt >= 500u) {
+        uint64_t rx = net_rx_bytes_get();
+        uint64_t tx = net_tx_bytes_get();
+        /* Delta per window tak mungkin >4GB: aman cast ke 32-bit.
+         * persepuluh Kbps = byte*8*10/dt_ms = byte*80/dt_ms. */
+        uint32_t drx = (uint32_t)(rx - last_rx);
+        uint32_t dtx = (uint32_t)(tx - last_tx);
+        dn10 = (drx * 80u) / dt;
+        up10 = (dtx * 80u) / dt;
+        last_t = t;
+        last_rx = rx;
+        last_tx = tx;
+    }
+    *dn = dn10;
+    *up = up10;
+}
+
+/* Tampilkan laju (persepuluh Kbps): "N.N Kbps" atau "N.N Mbps". */
+static unsigned rateapp(uint8_t *d, unsigned off, uint32_t tenth_kbps)
+{
+    if (tenth_kbps >= 10000u) {          /* >= 1000 Kbps -> Mbps */
+        uint32_t tm = tenth_kbps / 1000u;
+        off = u32app(d, off, tm / 10u);
+        off = strapp(d, off, ".");
+        off = u32app(d, off, tm % 10u);
+        off = strapp(d, off, " Mbps");
+    } else {
+        off = u32app(d, off, tenth_kbps / 10u);
+        off = strapp(d, off, ".");
+        off = u32app(d, off, tenth_kbps % 10u);
+        off = strapp(d, off, " Kbps");
+    }
+    return off;
+}
+
+/* Persen satu desimal: 23 -> "2.3". Untuk persen kecil (memori). */
+static unsigned pct1app(uint8_t *d, unsigned off, uint32_t tenth_pct)
+{
+    off = u32app(d, off, tenth_pct / 10u);
     off = strapp(d, off, ".");
-    off = u32app(d, off, (uint32_t)(tenths % 10));
+    off = u32app(d, off, tenth_pct % 10u);
     return off;
 }
 
@@ -174,22 +222,42 @@ static unsigned build_metrics(uint8_t *b)
     off = strapp(b, off, "\r\ntcp_conns ");
     off = u32app(b, off, tcp_conns());
     off = strapp(b, off, "\r\n");
+    /* Fase 12d: metrik real emulasi QEMU (key baru, format lama utuh). */
+    off = strapp(b, off, "cpu_pct ");
+    off = u32app(b, off, cpu_pct_update());
+    off = strapp(b, off, "\r\nmem_used_kb ");
+    off = u32app(b, off, vs.pages_used * 4u);
+    off = strapp(b, off, "\r\nmem_total_mb ");
+    off = u32app(b, off, GUEST_RAM_MB);
+    off = strapp(b, off, "\r\nblk_total_sectors ");
+    off = u32app(b, off, blk_total_sectors());
+    off = strapp(b, off, "\r\nblk_used_sectors ");
+    off = u32app(b, off, blk_used_sectors());
+    off = strapp(b, off, "\r\nnet_rx_bytes ");
+    off = u64app(b, off, net_rx_bytes_get());
+    off = strapp(b, off, "\r\nnet_tx_bytes ");
+    off = u64app(b, off, net_tx_bytes_get());
+    off = strapp(b, off, "\r\n");
     return off;
 }
 
 /* --- body / : dashboard HTML system monitor (nilai live per request) ---
- * Dua bagian: "Simulasi" (spek Luckfox Pico Mini, nilai simulasi berlabel
- * jelas) dan "Data kernel (real)" (data nyata dari kernel).
+ * Dua bagian: "Emulasi QEMU" (HASIL UKUR dari hardware virtual yang
+ * dikonfigurasi menyerupai Luckfox Pico Mini — Fase 12d, menggantikan
+ * simulasi acak Fase 12c) dan "Data kernel (real)".
  */
 static unsigned build_dashboard(uint8_t *b)
 {
     unsigned off = 0, i, n, nr = 0, nb = 0, nd = 0, pct;
-    unsigned mempct, stopct;
     struct vm_stats vs;
     uint32_t ms = sched_ticks();
     const uint8_t *mac = net_mac();
+    unsigned cpu, dn10, up10;
+    uint32_t mem_kb, mem_tenth_pct;
+    uint32_t btotal, bused;
 
-    sim_tick(); /* majukan random walk simulasi tiap request */
+    cpu = cpu_pct_update();     /* real: idle-thread accounting */
+    bw_update(&dn10, &up10);    /* real: counter byte RX/TX */
 
     n = sched_thread_count();
     for (i = 0; i < n; i++) {
@@ -204,8 +272,14 @@ static unsigned build_dashboard(uint8_t *b)
     }
     vm_get_stats(&vs);
     pct = vs.pages_total ? (vs.pages_used * 100u / vs.pages_total) : 0;
-    mempct = (unsigned)sim_mem * 100u / 64u;
-    stopct = (unsigned)sim_stor * 100u / 128u;
+
+    /* Memory real: KB terpakai (page allocator) vs RAM 64MB. */
+    mem_kb = vs.pages_used * 4u;    /* 4KB per halaman */
+    mem_tenth_pct = mem_kb * 1000u / (GUEST_RAM_MB * 1024u);
+
+    /* Storage real: sektor terpakai vs kapasitas device. */
+    btotal = blk_total_sectors();
+    bused = blk_used_sectors();
 
     off = strapp(b, off,
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
@@ -223,7 +297,7 @@ static unsigned build_dashboard(uint8_t *b)
         ".card .v{font-size:20px;color:#fff}"
         ".bar{height:8px;background:#263049;border-radius:4px;margin-top:6px}"
         ".bar i{display:block;height:8px;background:#3fb950;border-radius:4px}"
-        ".simtag{font-size:10px;color:#0b0e14;background:#d29922;"
+        ".emutag{font-size:10px;color:#0b0e14;background:#39c5cf;"
         "border-radius:4px;padding:1px 6px;margin-left:6px}"
         "table{border-collapse:collapse;margin-top:8px}"
         "th,td{border:1px solid #263049;padding:3px 10px;text-align:left}"
@@ -232,51 +306,63 @@ static unsigned build_dashboard(uint8_t *b)
         ".note{color:#8fa3c0;font-size:12px;max-width:680px}"
         "</style></head><body>"
         "<h1>QaonicOS System Monitor</h1>"
-        "<h2>Simulasi - spek Luckfox Pico Mini</h2>"
-        "<p class=\"note\">Nilai di bagian ini adalah SIMULASI dari spek asli "
-        "Luckfox Pico Mini (RV1103 Cortex-A7 @1.2GHz, 64MB DDR2, 128MB SPI "
-        "NAND Flash), bukan pengukuran nyata.</p>"
+        "<h2>Emulasi QEMU - spek Luckfox Pico Mini</h2>"
+        "<p class=\"note\">Semua angka di bagian ini adalah HASIL UKUR "
+        "dari hardware virtual QEMU (Cortex-A7, RAM 64MB, storage 128MB "
+        "virtio-blk) — bukan simulasi acak.</p>"
         "<div class=\"cards\">");
 
-    /* Kartu CPU % (simulasi) */
+    /* Kartu CPU % (real: idle-thread accounting) */
     off = strapp(b, off,
-        "<div class=\"card\"><b>CPU<span class=\"simtag\">simulasi</span></b>"
+        "<div class=\"card\"><b>CPU<span class=\"emutag\">emulasi</span></b>"
         "<span class=\"v\">");
-    off = u32app(b, off, (uint32_t)sim_cpu);
+    off = u32app(b, off, cpu);
     off = strapp(b, off, "%</span><div class=\"bar\"><i style=\"width:");
-    off = u32app(b, off, (uint32_t)sim_cpu);
-    off = strapp(b, off, "%\"></i></div>RV1103 @1.2GHz</div>");
+    off = u32app(b, off, cpu > 100u ? 100u : cpu);
+    off = strapp(b, off, "%\"></i></div>idle-thread accounting</div>");
 
-    /* Kartu Memory % + MB (simulasi, 64MB DDR2) */
+    /* Kartu Memory (real: page allocator vs 64MB) */
     off = strapp(b, off,
-        "<div class=\"card\"><b>Memory<span class=\"simtag\">simulasi</span></b>"
+        "<div class=\"card\"><b>Memory<span class=\"emutag\">emulasi</span></b>"
         "<span class=\"v\">");
-    off = u32app(b, off, (uint32_t)sim_mem);
-    off = strapp(b, off, "/64 MB</span><div class=\"bar\"><i style=\"width:");
-    off = u32app(b, off, mempct);
+    off = u32app(b, off, mem_kb);
+    off = strapp(b, off, " KB / ");
+    off = u32app(b, off, GUEST_RAM_MB);
+    off = strapp(b, off, " MB</span><div class=\"bar\"><i style=\"width:");
+    off = u32app(b, off, mem_tenth_pct / 10u);
     off = strapp(b, off, "%\"></i></div>");
-    off = u32app(b, off, mempct);
-    off = strapp(b, off, "% dari 64MB DDR2</div>");
+    off = pct1app(b, off, mem_tenth_pct);
+    off = strapp(b, off, "% dari 64MB DDR2 (QEMU -m 64)</div>");
 
-    /* Kartu Storage % + MB (simulasi, 128MB SPI NAND) */
+    /* Kartu Storage (real: sektor terpakai vs kapasitas device) */
     off = strapp(b, off,
-        "<div class=\"card\"><b>Storage<span class=\"simtag\">simulasi</span></b>"
-        "<span class=\"v\">");
-    off = u32app(b, off, (uint32_t)sim_stor);
-    off = strapp(b, off, "/128 MB</span><div class=\"bar\"><i style=\"width:");
-    off = u32app(b, off, stopct);
-    off = strapp(b, off, "%\"></i></div>");
-    off = u32app(b, off, stopct);
-    off = strapp(b, off, "% dari 128MB SPI NAND</div>");
+        "<div class=\"card\"><b>Storage<span class=\"emutag\">emulasi</span></b>");
+    if (btotal == 0u) {
+        off = strapp(b, off,
+            "<span class=\"v\">tak ada disk</span><br>virtio-blk tak "
+            "terdeteksi</div>");
+    } else {
+        uint32_t tenth_mb = bused * 10u / 2048u;   /* sektor -> MB, 1 des */
+        uint32_t tenth_pct = bused * 1000u / btotal;
+        off = strapp(b, off, "<span class=\"v\">");
+        off = pct1app(b, off, tenth_mb);
+        off = strapp(b, off, "/");
+        off = u32app(b, off, btotal / 2048u);
+        off = strapp(b, off, " MB</span><div class=\"bar\"><i style=\"width:");
+        off = u32app(b, off, tenth_pct / 10u);
+        off = strapp(b, off, "%\"></i></div>");
+        off = pct1app(b, off, tenth_pct);
+        off = strapp(b, off, "% — virtio-blk (emulasi SPI NAND)</div>");
+    }
 
-    /* Kartu Bandwidth up/down (simulasi, link USB 2.0) */
+    /* Kartu Bandwidth up/down (real: counter byte) */
     off = strapp(b, off,
-        "<div class=\"card\"><b>Bandwidth<span class=\"simtag\">simulasi</span></b>"
-        "<span class=\"v\">&darr; ");
-    off = fix1app(b, off, sim_dn);
-    off = strapp(b, off, " Mbps</span><br>&uarr; ");
-    off = fix1app(b, off, sim_up);
-    off = strapp(b, off, " Mbps<br>link USB 2.0</div>");
+        "<div class=\"card\"><b>Bandwidth<span class=\"emutag\">emulasi"
+        "</span></b><span class=\"v\">&darr; ");
+    off = rateapp(b, off, dn10);
+    off = strapp(b, off, "</span><br>&uarr; ");
+    off = rateapp(b, off, up10);
+    off = strapp(b, off, "<br>virtio-net</div>");
 
     /* --- Bagian data kernel (real) --- */
     off = strapp(b, off, "</div><h2>Data kernel (real)</h2><div class=\"cards\">");
@@ -357,8 +443,8 @@ static unsigned build_dashboard(uint8_t *b)
     }
     off = strapp(b, off,
         "</table><p class=\"note\">"
-        "Bagian \"Simulasi\" memakai nilai acak realistis berbasis spek "
-        "Luckfox Pico Mini dan selalu berlabel simulasi. Bagian "
+        "Bagian \"Emulasi\" adalah hasil ukur nyata dari hardware virtual "
+        "QEMU (bukan angka acak). Bagian "
         "\"Data kernel\" adalah data nyata dari kernel. "
         "Format teks: <a href=\"/metrics\">/metrics</a>. "
         "Halaman refresh otomatis tiap 5 detik."
@@ -410,17 +496,20 @@ unsigned http_handle(const uint8_t *req, unsigned reqlen, uint8_t *resp)
         return 0;
 
     if (pathlen == 1 && path[0] == '/') {
+        blk_log_request(sched_ticks(), 200u);  /* access log di disk */
         bodylen = build_dashboard(body);
         if (bodylen >= sizeof(body))
             bodylen = sizeof(body) - 1; /* pengaman: jangan baca lewat buffer */
         return respond(resp, 200, "OK", "text/html", body, bodylen);
     }
     if (pathlen == 8 && memcmp(path, "/metrics", 8) == 0) {
+        blk_log_request(sched_ticks(), 200u);
         bodylen = build_metrics(body);
         return respond(resp, 200, "OK", "text/plain", body, bodylen);
     }
     {
         static const uint8_t nf[] = "Not Found\n";
+        blk_log_request(sched_ticks(), 404u);
         return respond(resp, 404, "Not Found", "text/plain", nf,
                        sizeof(nf) - 1);
     }

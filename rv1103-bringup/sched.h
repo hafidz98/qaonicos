@@ -113,4 +113,15 @@ uint32_t *c_irq_handler(uint32_t *frame);
 unsigned sched_thread_count(void);
 const struct sched_thread *sched_thread_at(unsigned i);
 
+/* Fase 12d: idle thread untuk CPU accounting. Daftarkan indeks thread
+ * idle via sched_set_idle() (dipanggil sekali setelah sched_add).
+ * Scheduler memilih idle HANYA bila tak ada thread RUNNABLE lain;
+ * sched_idle_ticks() menghitung tick (1ms) yang dijalankan idle. */
+void sched_set_idle(unsigned idx);
+unsigned sched_idle_ticks(void);
+
+/* Fase 12d: thread net (dibangunkan net_isr/idle saat ada kerja). */
+void sched_set_net_idx(unsigned idx);
+void sched_wakeup_net(void);
+
 #endif /* _SCHED_H_ */
