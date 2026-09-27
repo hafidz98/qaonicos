@@ -183,6 +183,10 @@ void vm_space_switch(struct vm_space *sp)
      * 14 bits are zero from the 16 KiB alignment. */
     vm_write_ttbr0((uint32_t)sp->l1);
     vm_cur_space = sp;
+    /* ISB (bukan cuma DSB) setelah tulis TTBR0: pastikan nilai baru
+     * terlihat sebelum TLB invalidate. Tanpa ini QEMU Cortex-A7 kadang
+     * (1/15) data abort sporadis pasca-switch. */
+    vm_isb();
     vm_dsb();
     vm_invalidate_tlb();   /* old ASID-less entries must not survive */
     vm_dsb();

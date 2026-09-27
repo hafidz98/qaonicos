@@ -1,13 +1,17 @@
 /*
  * ipc.h - Mach-style IPC (bring-up subset).
  *
- * A port is a kernel-protected queue of messages. Threads (of one task)
+ * A port is a kernel-protected queue of messages. Threads of one task
  * share an ipc_space: a table mapping small integer names to ports with
  * send/receive rights. mach_msg-style traps copy a flat wire message in
  * and out; the kernel queues zone-allocated copies.
  *
- * Non-blocking at this stage: send fails when the queue is full, receive
- * fails when it is empty.
+ * Fase 6: receive is BLOCKING once the scheduler runs (the receiver's
+ * thread is marked BLOCKED and woken by the sender); before the
+ * scheduler starts, recv stays non-blocking so single-threaded
+ * self-tests keep working. Send stays non-blocking (fails when the
+ * queue is full). Ports can be granted into another task's namespace
+ * with independent rights (the Mach way of handing out send rights).
  */
 #ifndef _IPC_H_
 #define _IPC_H_
@@ -21,6 +25,9 @@
 
 #define IPC_SEND        1u
 #define IPC_RECV        2u
+
+/* Forward: waiter tanpa siklus include (sched.h -> task.h -> ipc.h). */
+struct sched_thread;
 
 /* Flat wire format exchanged with userspace (the trap ABI). */
 struct ipc_wire {
@@ -43,6 +50,7 @@ struct ipc_port {
     struct ipc_msg *head, *tail;
     unsigned qlen;
     unsigned refs;
+    struct sched_thread *waiter;  /* blocking receiver, 0 bila kosong */
 };
 
 struct ipc_space {
@@ -62,8 +70,24 @@ unsigned ipc_port_alloc(struct ipc_space *sp, unsigned rights);
 int ipc_send(struct ipc_space *sp, unsigned name,
              const struct ipc_wire *uwire, unsigned ulen);
 
-/* Dequeue one message into uwire. Returns data size, -1 = no right/empty. */
+/* Dequeue one message into uwire. Returns data size, -1 = no right/bad.
+ * Blocking when the queue is empty and the scheduler runs; -1 when the
+ * scheduler is not running yet (single-threaded self-test). */
 int ipc_recv(struct ipc_space *sp, unsigned name,
              struct ipc_wire *uwire, unsigned ulen);
+
+/* Grant: sisipkan port milik src/name ke namespace dst dengan rights
+ * independen (port-nya berbagi, refs++). Cara server memberi
+ * send-right ke client. Mengembalikan nama di dst, 0 bila gagal. */
+unsigned ipc_port_grant(struct ipc_space *dst, struct ipc_space *src,
+                        unsigned name, unsigned rights);
+
+/* Lepas nama dari namespace; bebaskan port bila refs habis. */
+int ipc_port_dealloc(struct ipc_space *sp, unsigned name);
+
+/* RPC sinkron: ipc_send request lalu blocking ipc_recv balasan. */
+int ipc_rpc(struct ipc_space *sp, unsigned send_name,
+            const struct ipc_wire *req, unsigned reqlen,
+            unsigned reply_name, struct ipc_wire *rep, unsigned replen);
 
 #endif /* _IPC_H_ */

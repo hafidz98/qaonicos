@@ -22,6 +22,7 @@
 #include "../rv1103-bringup/timer.h"
 #include "../rv1103-bringup/sched.h"
 #include "../rv1103-bringup/vm.h"
+#include "../rv1103-bringup/task.h"
 #include "../rv1103-bringup/lib.h"
 
 /* PL011 (QEMU virt UART0). */
@@ -84,8 +85,16 @@ static inline void irq_restore(unsigned cpsr)
 static struct zone port_zone, msg_zone;
 static uint8_t port_pool[IPC_NPORTS * sizeof(struct ipc_port)] __attribute__((aligned(8)));
 static uint8_t msg_pool[16 * sizeof(struct ipc_msg)] __attribute__((aligned(8)));
-static struct ipc_space kern_space;
-static unsigned port_ab, port_ba;
+/* Fase 6: task sebagai protection domain. Tiap task punya vm_space +
+ * ipc_space sendiri. task_kern menampung thread-thread lama (preempt
+ * A<->B); task_a = server, task_b = client untuk tes blocking + RPC. */
+static struct task task_kern, task_a, task_b;
+static unsigned port_ab, port_ba;   /* nama di task_kern.ipc */
+/* Nama port Fase 6 (diisi bagian 3e, dipakai thread server/client). */
+static unsigned srv_a;      /* recv port server, di task_a.ipc */
+static unsigned srv_in_b;   /* send-right hasil grant, di task_b.ipc */
+static unsigned rep_b;      /* reply port client, di task_b.ipc */
+static unsigned rep_in_a;   /* send-right hasil grant, di task_a.ipc */
 
 /* mach_msg-style traps. Explicit clobbers (P6 lesson: svc kills lr). */
 static int svc_send(unsigned name, const struct ipc_wire *w, unsigned len)
@@ -101,6 +110,30 @@ static int svc_send(unsigned name, const struct ipc_wire *w, unsigned len)
         : "=r"(ret)
         : "r"(name), "r"(w), "r"(len)
         : "r0", "r1", "r2", "r7", "lr", "memory", "cc");
+    return (int)ret;
+}
+
+/* RPC sinkron: r0 = send name, r1 = req ptr, r2 = req len,
+ * r3 = reply name, r4 = rep buf, r5 = rep len -> size / -1. */
+static int svc_rpc(unsigned send_name, const struct ipc_wire *req,
+                   unsigned reqlen, unsigned rep_name,
+                   struct ipc_wire *rep, unsigned replen)
+{
+    unsigned ret;
+    __asm__ volatile(
+        "mov r0, %1\n\t"
+        "mov r1, %2\n\t"
+        "mov r2, %3\n\t"
+        "mov r3, %4\n\t"
+        "mov r4, %5\n\t"
+        "mov r5, %6\n\t"
+        "mov r7, #12\n\t"
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        : "r"(send_name), "r"(req), "r"(reqlen),
+          "r"(rep_name), "r"(rep), "r"(replen)
+        : "r0", "r1", "r2", "r3", "r4", "r5", "r7", "lr", "memory", "cc");
     return (int)ret;
 }
 
@@ -146,8 +179,8 @@ static int ipc_selftest(void)
     } while (0)
 
     /* 1. rights enforcement */
-    p_send = ipc_port_alloc(&kern_space, IPC_SEND);
-    p_recv = ipc_port_alloc(&kern_space, IPC_RECV);
+    p_send = ipc_port_alloc(&task_kern.ipc, IPC_SEND);
+    p_recv = ipc_port_alloc(&task_kern.ipc, IPC_RECV);
     CHECK(p_send != 0 && p_recv != 0, "port alloc");
     wire_puts(&w, 0x71, "x");
     CHECK(svc_send(p_recv, &w, sizeof(w)) == -1, "send to recv-only port must fail");
@@ -156,7 +189,7 @@ static int ipc_selftest(void)
     CHECK(svc_recv(99, &r, sizeof(r)) == -1, "recv from bad name must fail");
 
     /* 2. FIFO order */
-    tp = ipc_port_alloc(&kern_space, IPC_SEND | IPC_RECV);
+    tp = ipc_port_alloc(&task_kern.ipc, IPC_SEND | IPC_RECV);
     CHECK(tp != 0, "test port alloc");
     for (i = 0; i < 3; i++) {
         wire_puts(&w, 0x10u + (unsigned)i, "fifo");
@@ -207,13 +240,15 @@ static int ipc_selftest(void)
  * diagnostics in trap.c instead of a silent hang). */
 #define VM_TEST_VA 0x10000000u
 
-static struct vm_space vm_space_kern, vm_space_a, vm_space_b;
+static struct vm_space vm_space_kern;
 
 /* ------------------------------------------------------------------ */
 /* Fase 4: preemptive threads. No manual yields anywhere.              */
 /* ------------------------------------------------------------------ */
 static unsigned char stack_a[8192] __attribute__((aligned(8)));
 static unsigned char stack_b[8192] __attribute__((aligned(8)));
+static unsigned char stack_server[8192] __attribute__((aligned(8)));
+static unsigned char stack_client[8192] __attribute__((aligned(8)));
 
 static volatile unsigned total_lines;
 
@@ -300,6 +335,86 @@ static void thread_b(void)
     }
 }
 
+/* ID pesan Fase 6. */
+#define PING_ID     0x0601u
+#define RPC_REQ_ID  0x0602u
+#define RPC_REP_ID  0x0603u
+
+/* Thread server (task A): blocking-recv ping, lalu layani satu RPC.
+ * Setelah itu idle sebagai server: block menunggu request berikutnya
+ * (tidak pernah datang di tes ini), sehingga tick melewatinya dan
+ * thread lama tetap dapat porsi CPU seperti Fase 5. */
+static void thread_server(void)
+{
+    struct ipc_wire w;
+    unsigned s;
+    int n;
+
+    /* 1. Ping dari client via granted send-right: blocking sampai tiba. */
+    n = svc_recv(srv_a, &w, sizeof(w));
+    s = irq_save();
+    if (n > 0 && w.id == PING_ID &&
+        memcmp(w.data, "ping-dari-client", 17) == 0)
+        puts("[task] server: ping diterima via grant\n");
+    else
+        puts("[task] FAIL: ping\n");
+    irq_restore(s);
+
+    /* 2. Request RPC: balas ke reply port client via granted name. */
+    n = svc_recv(srv_a, &w, sizeof(w));
+    s = irq_save();
+    if (n > 0 && w.id == RPC_REQ_ID) {
+        wire_puts(&w, RPC_REP_ID, "rpc-reply-ok");
+        if (svc_send(rep_in_a, &w, sizeof(w)) == 0)
+            puts("TASK TESTS PASSED\n");
+        else
+            puts("[task] FAIL: kirim reply\n");
+    } else {
+        puts("[task] FAIL: rpc request\n");
+    }
+    irq_restore(s);
+
+    for (;;) {
+        n = svc_recv(srv_a, &w, sizeof(w));  /* block selamanya */
+        (void)n;
+    }
+}
+
+/* Thread client (task B): kirim ping, lalu RPC sinkron. Setelah reply
+ * terverifikasi, block selamanya di reply port (tidak ada RPC lagi). */
+static void thread_client(void)
+{
+    struct ipc_wire w, r;
+    unsigned s;
+    int n;
+
+    wire_puts(&w, PING_ID, "ping-dari-client");
+    if (svc_send(srv_in_b, &w, sizeof(w)) != 0) {
+        s = irq_save();
+        puts("[task] FAIL: kirim ping\n");
+        irq_restore(s);
+        for (;;) { }
+    }
+
+    wire_puts(&w, RPC_REQ_ID, "rpc-minta-balasan");
+    n = svc_rpc(srv_in_b, &w, sizeof(w), rep_b, &r, sizeof(r));
+    s = irq_save();
+    if (n > 0 && r.id == RPC_REP_ID &&
+        memcmp(r.data, "rpc-reply-ok", 13) == 0)
+        puts("RPC TESTS PASSED\n");
+    else {
+        puts("[task] FAIL: rpc reply, n=");
+        putdec((unsigned)n);
+        putc('\n');
+    }
+    irq_restore(s);
+
+    for (;;) {
+        n = svc_recv(rep_b, &r, sizeof(r));  /* block selamanya */
+        (void)n;
+    }
+}
+
 void kernel_main(void)
 {
     puts("\nMach-x-Luckfox kernel booting (qemu-virt, cortex-a7)\n");
@@ -319,15 +434,22 @@ void kernel_main(void)
         puts(" (3.25)\n");
     }
 
-    /* 3. IPC: zones, one shared space, one port, syscall dispatch. */
+    /* 2b. VM pools lebih awal: task_create() butuh vm_space_init(). */
+    vm_init();
+    vm_space_kern.l1 = vm_current_l1();
+
+    /* 3. Task + IPC: tiap task = satu protection domain (vm_space +
+     * ipc_space sendiri). Zone port/pesan dipakai bersama semua task. */
     zone_init(&port_zone, port_pool, sizeof(port_pool),
               sizeof(struct ipc_port));
     zone_init(&msg_zone, msg_pool, sizeof(msg_pool),
               sizeof(struct ipc_msg));
-    ipc_space_init(&kern_space, &port_zone, &msg_zone);
-    syscall_init(&kern_space);
-    port_ab = ipc_port_alloc(&kern_space, IPC_SEND | IPC_RECV);
-    port_ba = ipc_port_alloc(&kern_space, IPC_SEND | IPC_RECV);
+    task_create(&task_kern, &port_zone, &msg_zone);
+    task_create(&task_a, &port_zone, &msg_zone);
+    task_create(&task_b, &port_zone, &msg_zone);
+    syscall_init(&task_kern);
+    port_ab = ipc_port_alloc(&task_kern.ipc, IPC_SEND | IPC_RECV);
+    port_ba = ipc_port_alloc(&task_kern.ipc, IPC_SEND | IPC_RECV);
     puts("[ipc ] zones up, ports allocated: A->B name = ");
     putdec(port_ab);
     puts(", B->A name = ");
@@ -354,31 +476,29 @@ void kernel_main(void)
         int fails = 0, rc;
         volatile uint32_t *p = (volatile uint32_t *)VM_TEST_VA;
 
-        vm_init();
-        vm_space_kern.l1 = vm_current_l1();
-
-        rc = vm_space_init(&vm_space_a);
-        rc |= vm_space_init(&vm_space_b);
+        /* vm_space_init sudah dikerjakan task_create(); di sini pakai
+         * langsung vm milik task A/B sebagai ruang alamat yang diuji. */
+        rc = 0;
         pa_a = vm_page_alloc();
         pa_b = vm_page_alloc();
-        rc |= vm_map(&vm_space_a, VM_TEST_VA, pa_a,
+        rc |= vm_map(&task_a.vm, VM_TEST_VA, pa_a,
                      VM_PROT_READ | VM_PROT_WRITE);
-        rc |= vm_map(&vm_space_b, VM_TEST_VA, pa_b,
+        rc |= vm_map(&task_b.vm, VM_TEST_VA, pa_b,
                      VM_PROT_READ | VM_PROT_WRITE);
         if (rc != 0 || pa_a == 0u || pa_b == 0u || pa_a == pa_b) {
             puts("[vm  ] setup FAILED\n");
             fails = 99;
         } else {
-            vm_space_switch(&vm_space_a);
+            vm_space_switch(&task_a.vm);
             *p = 0xAAAAAAAAu;
-            vm_space_switch(&vm_space_b);
+            vm_space_switch(&task_b.vm);
             v = *p;         /* B's page: must NOT see A's pattern */
             if (v == 0xAAAAAAAAu) {
                 puts("  FAIL: B saw A's data\n");
                 fails++;
             }
             *p = 0xBBBBBBBBu;
-            vm_space_switch(&vm_space_a);
+            vm_space_switch(&task_a.vm);
             v = *p;         /* A's page: must be untouched by B */
             if (v != 0xAAAAAAAAu) {
                 puts("  FAIL: A's data corrupted\n");
@@ -390,9 +510,9 @@ void kernel_main(void)
         puts("[vm  ] L1 kern=");
         puthex64((uint32_t)vm_space_kern.l1);
         puts(" A=");
-        puthex64((uint32_t)vm_space_a.l1);
+        puthex64((uint32_t)task_a.vm.l1);
         puts(" B=");
-        puthex64((uint32_t)vm_space_b.l1);
+        puthex64((uint32_t)task_b.vm.l1);
         puts("\n");
         puts("[vm  ] 4 KiB pages, per-task spaces, isolation: ");
         if (fails == 0)
@@ -412,29 +532,29 @@ void kernel_main(void)
 
         /* --- unmap: map a scratch page, verify, unmap, verify gone --- */
         pa_c = vm_page_alloc();
-        vm_space_switch(&vm_space_a);
+        vm_space_switch(&task_a.vm);
         if (pa_c == 0u) {
             puts("  FAIL: unmap test out of pages\n"); fails++;
-        } else if (vm_map(&vm_space_a, VM_TEST_VA + 0x1000u, pa_c,
+        } else if (vm_map(&task_a.vm, VM_TEST_VA + 0x1000u, pa_c,
                           VM_PROT_READ | VM_PROT_WRITE) != 0) {
             puts("  FAIL: map for unmap test\n"); fails++;
         } else {
             q = (volatile uint32_t *)(VM_TEST_VA + 0x1000u);
             *q = 0x12345678u;
             if (*q != 0x12345678u) { puts("  FAIL: pre-unmap rw\n"); fails++; }
-            if (vm_lookup(&vm_space_a, VM_TEST_VA + 0x1000u) == 0u) {
+            if (vm_lookup(&task_a.vm, VM_TEST_VA + 0x1000u) == 0u) {
                 puts("  FAIL: lookup before unmap\n"); fails++;
             }
-            if (vm_unmap(&vm_space_a, VM_TEST_VA + 0x1000u) != 0) {
+            if (vm_unmap(&task_a.vm, VM_TEST_VA + 0x1000u) != 0) {
                 puts("  FAIL: vm_unmap\n"); fails++;
             }
-            if (vm_lookup(&vm_space_a, VM_TEST_VA + 0x1000u) != 0u) {
+            if (vm_lookup(&task_a.vm, VM_TEST_VA + 0x1000u) != 0u) {
                 puts("  FAIL: lookup after unmap\n"); fails++;
             }
-            if (vm_unmap(&vm_space_a, VM_TEST_VA + 0x1000u) == 0) {
+            if (vm_unmap(&task_a.vm, VM_TEST_VA + 0x1000u) == 0) {
                 puts("  FAIL: double unmap succeeded\n"); fails++;
             }
-            if (vm_unmap(&vm_space_a, 0x20000000u) == 0) {
+            if (vm_unmap(&task_a.vm, 0x20000000u) == 0) {
                 puts("  FAIL: unmap of section VA succeeded\n"); fails++;
             }
         }
@@ -443,11 +563,11 @@ void kernel_main(void)
         pa_c = vm_page_alloc();
         if (pa_c == 0u) {
             puts("  FAIL: ro test out of pages\n"); fails++;
-        } else if (vm_map(&vm_space_a, VM_TEST_VA + 0x3000u, pa_c,
+        } else if (vm_map(&task_a.vm, VM_TEST_VA + 0x3000u, pa_c,
                           VM_PROT_READ) != 0) {
             puts("  FAIL: map RO\n"); fails++;
         } else {
-            desc = vm_lookup(&vm_space_a, VM_TEST_VA + 0x3000u);
+            desc = vm_lookup(&task_a.vm, VM_TEST_VA + 0x3000u);
             /* AP[1:0]=0b10 (bits 5:4), APX=1 (bit 9) => read-only for
              * both privileged and user. A write would permission-fault
              * (pager deliberately does not resolve those), so we verify
@@ -456,7 +576,7 @@ void kernel_main(void)
                 puts("  FAIL: RO descriptor AP bits\n"); fails++;
             }
             /* RW page for contrast: AP[1:0]=0b11, APX=0. */
-            desc = vm_lookup(&vm_space_a, VM_TEST_VA);
+            desc = vm_lookup(&task_a.vm, VM_TEST_VA);
             if (((desc >> 4) & 0x3u) != 0x3u || ((desc >> 9) & 0x1u) != 0u) {
                 puts("  FAIL: RW descriptor AP bits\n"); fails++;
             }
@@ -464,7 +584,7 @@ void kernel_main(void)
 
         /* --- demand paging: touch unmapped page, pager maps it --- */
         q = (volatile uint32_t *)(VM_DEMAND_BASE + 0x2000u);
-        if (vm_lookup(&vm_space_a, (uint32_t)q) != 0u) {
+        if (vm_lookup(&task_a.vm, (uint32_t)q) != 0u) {
             puts("  FAIL: demand VA already mapped\n"); fails++;
         } else {
             *q = 0xDEADBEEFu;   /* faults -> pager maps zeroed page -> retry */
@@ -472,7 +592,7 @@ void kernel_main(void)
             if (v != 0xDEADBEEFu) {
                 puts("  FAIL: demand paging write/read\n"); fails++;
             }
-            if (vm_lookup(&vm_space_a, (uint32_t)q) == 0u) {
+            if (vm_lookup(&task_a.vm, (uint32_t)q) == 0u) {
                 puts("  FAIL: pager did not map\n"); fails++;
             }
             *q = 0xCAFEBABEu;   /* second touch: no fault, page persists */
@@ -490,6 +610,76 @@ void kernel_main(void)
         }
     }
 
+    /* 3e. Fase 6: task sebagai protection domain - isolasi namespace,
+     * port grant antar task, dan dealloc. Masih single-threaded
+     * (scheduler belum jalan) sehingga ipc_* non-blocking. */
+    {
+        int fails = 0;
+        struct ipc_wire w, r;
+        unsigned tmp;
+        int n;
+
+#define TCHECK(cond, msg) do { \
+            if (!(cond)) { puts("  FAIL: "); puts(msg); putc('\n'); fails++; } \
+        } while (0)
+
+        /* Server (task A) alokasi recv port; client (task B) dapat
+         * send-right via grant. Reply port sebaliknya. */
+        srv_a = ipc_port_alloc(&task_a.ipc, IPC_RECV);
+        TCHECK(srv_a != 0, "server port alloc");
+        srv_in_b = ipc_port_grant(&task_b.ipc, &task_a.ipc, srv_a,
+                                  IPC_SEND);
+        TCHECK(srv_in_b != 0, "grant send-right ke B");
+        rep_b = ipc_port_alloc(&task_b.ipc, IPC_RECV);
+        TCHECK(rep_b != 0, "reply port alloc");
+        rep_in_a = ipc_port_grant(&task_a.ipc, &task_b.ipc, rep_b,
+                                  IPC_SEND);
+        TCHECK(rep_in_a != 0, "grant send-right ke A");
+
+        /* Isolasi namespace: nama yang sama di task berbeda tidak
+         * saling terlihat. rep_b (=2) di B itu recv-only -> send
+         * harus gagal; srv_a (=1) di A itu recv-only -> send gagal. */
+        wire_puts(&w, 0x61, "x");
+        TCHECK(ipc_send(&task_b.ipc, 99, &w, sizeof(w)) == -1,
+               "send nama liar harus gagal");
+        TCHECK(ipc_send(&task_b.ipc, rep_b, &w, sizeof(w)) == -1,
+               "nama B tidak alias ke port A");
+        TCHECK(ipc_send(&task_a.ipc, srv_a, &w, sizeof(w)) == -1,
+               "A tidak punya send-right ke port sendiri");
+        TCHECK(ipc_send(&task_a.ipc, rep_in_a, &w, sizeof(w)) == 0,
+               "grant rep_in_a harus bisa send (kosongkan lagi)");
+
+        /* Grant benar-benar berbagi port: kirim via nama grant di B,
+         * terima via nama asli di A, payload utuh. */
+        wire_puts(&w, 0xC1, "grant-ok");
+        TCHECK(ipc_send(&task_b.ipc, srv_in_b, &w, sizeof(w)) == 0,
+               "send via granted name");
+        n = ipc_recv(&task_a.ipc, srv_a, &r, sizeof(r));
+        TCHECK(n > 0 && r.id == 0xC1 &&
+               memcmp(r.data, "grant-ok", 9) == 0,
+               "terima via nama asli di A");
+        /* Kosongkan antrean (kirim uji rep_in_a di atas). */
+        n = ipc_recv(&task_b.ipc, rep_b, &r, sizeof(r));
+        TCHECK(n > 0 && r.id == 0x61, "drain antrean uji");
+
+        /* Dealloc: nama mati total setelah dilepas. */
+        tmp = ipc_port_alloc(&task_b.ipc, IPC_SEND);
+        TCHECK(tmp != 0, "dealloc alloc");
+        TCHECK(ipc_port_dealloc(&task_b.ipc, tmp) == 0, "dealloc");
+        TCHECK(ipc_send(&task_b.ipc, tmp, &w, sizeof(w)) == -1,
+               "nama ter-dealloc harus mati");
+        TCHECK(ipc_port_dealloc(&task_b.ipc, tmp) == -1,
+               "double dealloc harus gagal");
+
+#undef TCHECK
+        puts("[task] namespace isolation + grant + dealloc: ");
+        if (fails == 0)
+            puts("ALL CHECKS PASSED\n");
+        else {
+            puts("FAILURES = "); putdec((unsigned)fails); putc('\n');
+        }
+    }
+
     /* 4. Preemptive scheduler: GIC + virtual-timer tick. */
     puts("[gic ] init GIC-400\n");
     gic_init();
@@ -498,8 +688,10 @@ void kernel_main(void)
 
     timer_init();
     sched_init();
-    sched_add(thread_a, stack_a + sizeof(stack_a));
-    sched_add(thread_b, stack_b + sizeof(stack_b));
+    sched_add(thread_a, stack_a + sizeof(stack_a), &task_kern);
+    sched_add(thread_b, stack_b + sizeof(stack_b), &task_kern);
+    sched_add(thread_server, stack_server + sizeof(stack_server), &task_a);
+    sched_add(thread_client, stack_client + sizeof(stack_client), &task_b);
     {
         /* 1 ms slice, in timer ticks. */
         uint32_t freq = timer_get_freq();
