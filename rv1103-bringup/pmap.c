@@ -67,7 +67,8 @@
 #define PMAP_PERIPH_SECTIONS 16u            /* 0xFF000000 .. 0xFFFFFFFF */
 #else
 #define PMAP_PERIPH_BASE    0x08000000u
-#define PMAP_PERIPH_SECTIONS 32u            /* 0x08000000 .. 0x09FFFFFF */
+#define PMAP_PERIPH_SECTIONS 48u   /* 0x08000000..0x0AFFFFFF: GIC+UART (0x08..)
+                                      + virtio-mmio (0x0A000000, Fase 11) */
 #endif
 
 /* ------------------------------------------------------------------ */

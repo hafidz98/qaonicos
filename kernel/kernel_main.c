@@ -27,6 +27,8 @@
 #include "../rv1103-bringup/lib.h"
 #include "../rv1103-bringup/user.h"
 #include "../rv1103-bringup/fs.h"
+#include "../rv1103-bringup/net.h"
+#include "../rv1103-bringup/netstack.h"
 
 /* Fase 8: image program userspace, di-embed dari user/hello.bin oleh
  * build.sh (user/embed.py -> /tmp/mach_hello_img.o). */
@@ -303,6 +305,9 @@ static unsigned char stack_init[16384] __attribute__((aligned(8)));
 static unsigned char stack_ucat[16384] __attribute__((aligned(8)));
 static unsigned char stack_uls[16384] __attribute__((aligned(8)));
 static unsigned char stack_uecho[16384] __attribute__((aligned(8)));
+/* Fase 11: stack thread network (virtio-net + ARP/ICMP). */
+static unsigned char stack_net[16384] __attribute__((aligned(8)));
+static volatile unsigned net_test_done;
 static unsigned usvc_port;              /* recv port echo, di task_kern.ipc */
 static unsigned usvc_rep_in_kern;       /* send-right ke reply port user */
 
@@ -373,7 +378,7 @@ static void report(const char *tag, unsigned n, uint64_t fpubits,
      * init, hanya bila INIT TESTS PASSED). Tes lama tidak rusak -
      * hanya menunggu. */
     over = (total_lines >= 12) && pager_done && user_done &&
-           fs_test_done() && init_test_done();
+           fs_test_done() && init_test_done() && net_test_done;
     if (over) {
         puts("PREEMPT+VM OK - halting\n");
         gic_disable_irq(TIMER_PPI_IRQ);
@@ -394,6 +399,58 @@ static void ipc_note(const char *tag, const struct ipc_wire *w)
 }
 
 /* Thread A: IPC initiator, then VFP compute loop. */
+static void thread_net(void)
+{
+    unsigned irq;
+
+    puts("[net ] thread start\n");
+    if (net_init() < 0) {
+        puts("[net ] init gagal; lewati uji net\n");
+        net_test_done = 1u;
+        for (;;) {
+            volatile unsigned d = 0;
+            while (d++ < 1000000u)
+                __asm__ volatile("" ::: "memory");
+        }
+    }
+    netstack_init();
+    irq = net_irq();
+    irq_dev_register(irq, net_isr);
+    gic_set_priority(irq, 0x80);
+    gic_set_level(irq);
+    gic_enable_irq(irq);
+    puts("[net ] IP 10.0.2.15, menunggu paket (ping dari host)\n");
+    {
+        /* Uji mandiri: ping host 10.0.2.1 (tap0). netstack_ping
+         * mengirim ARP request dulu bila MAC belum dikenal. */
+        unsigned tries = 0;
+        for (;;) {
+            net_poll();
+            netstack_tick();
+            if ((tries % 2000000u) == 0u) {
+                int r = netstack_ping(0x0A000201u);
+                if (r == 0)
+                    net_log("[net] ping -> 10.0.2.1\n");
+            }
+            tries++;
+            if (netstack_ping_got() > 0)
+                break;
+            /* batasi loop uji agar tak selamanya bila host tak ada */
+            if (tries > 20000000u)
+                break;
+        }
+        if (netstack_ping_got() > 0)
+            net_log("[net] PING 10.0.2.1 BERHASIL\n");
+        else
+            net_log("[net] ping timeout (lanjut mode listen)\n");
+        net_test_done = 1u;
+    }
+    for (;;) {
+        net_poll();
+        netstack_tick();
+    }
+}
+
 static void thread_a(void)
 {
     struct ipc_wire w;
@@ -1174,6 +1231,8 @@ void kernel_main(void)
      * Fase 9: thread user kedua (fstest, penguji ramfs) di task yang
      * sama; program di FSTEST_PROG_VA, stack di FSTEST_STACK_TOP. */
     sched_add(thread_usvc, stack_usvc + sizeof(stack_usvc), &task_kern);
+    /* Fase 11: thread network (virtio-net + ARP/ICMP). */
+    sched_add(thread_net, stack_net + sizeof(stack_net), &task_kern);
     sched_add_user(stack_uthread + sizeof(stack_uthread), &task_user,
                    USER_PROG_VA, USER_STACK_TOP);
     sched_add_user(stack_fstest + sizeof(stack_fstest), &task_user,

@@ -25,8 +25,10 @@
 #include "task.h"
 
 /* Fase 7: 4 -> 8 (tambah thread pager + client).
- * Fase 9: 8 -> 10 (tambah thread user fstest). */
-#define SCHED_MAX_THREADS 14u
+ * Fase 9: 8 -> 10 (tambah thread user fstest).
+ * Fase 10: 10 -> 14 (init + ucat/uls/uecho).
+ * Fase 11: 14 -> 16 (thread net/virtio). */
+#define SCHED_MAX_THREADS 16u
 
 /* Exception frame layout (words), dibangun irq_handler (vectors.S)
  * dan sched_add/sched_add_user. 16 word, 8-byte aligned, tanpa pad:
@@ -41,6 +43,9 @@
 #define FR_LR    13u
 #define FR_PC    14u
 #define FR_CPSR  15u
+
+/* Fase 11: registrasi handler IRQ device (SPI). */
+void irq_dev_register(unsigned id, void (*fn)(void));
 
 /* Thread states. THREAD_DEAD: thread selesai/dibunuh; tidak pernah
  * dijadwalkan lagi (dipakai SYS_EXIT + user_kill, Fase 8). */

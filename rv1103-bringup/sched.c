@@ -359,6 +359,17 @@ uint32_t *sched_on_tick(uint32_t *frame)
     return in->sp;
 }
 
+/* Fase 11: dispatch IRQ device (mis. virtio-net). ID 32..159. */
+#define DEV_IRQ_BASE 32u
+#define DEV_IRQ_N    128u
+static void (*dev_irq_fn[DEV_IRQ_N])(void);
+
+void irq_dev_register(unsigned id, void (*fn)(void))
+{
+    if (id >= DEV_IRQ_BASE && id < DEV_IRQ_BASE + DEV_IRQ_N)
+        dev_irq_fn[id - DEV_IRQ_BASE] = fn;
+}
+
 uint32_t *c_irq_handler(uint32_t *frame)
 {
     unsigned id = gic_ack();
@@ -368,6 +379,12 @@ uint32_t *c_irq_handler(uint32_t *frame)
         timer_set_tval(slice_ticks);
         gic_eoi(id);
         return sched_on_tick(frame);
+    }
+    if (id >= DEV_IRQ_BASE && id < DEV_IRQ_BASE + DEV_IRQ_N &&
+        dev_irq_fn[id - DEV_IRQ_BASE]) {
+        dev_irq_fn[id - DEV_IRQ_BASE]();
+        gic_eoi(id);
+        return frame;              /* device IRQ: tak pernah switch */
     }
     gic_eoi(id);
     return frame;
