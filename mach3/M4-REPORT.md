@@ -38,6 +38,43 @@ Lanjutan dari M3 (boot stabil sampai idle loop).
 - Build: MI 94/94, MD 16/16, LINK OK.
 - Boot QEMU: `pmap_selftest: PASS`, stabil 12 detik tanpa panic.
 
-## Item 2: IPC bring-up + task pertama — TODO
+## Item 2: IPC bring-up + task pertama — DONE (parsial)
+
+**Status:** Selesai, terverifikasi hardware. IPC PASS penuh. Task: `task_create`
++ `thread_create` terverifikasi; scheduler dispatch belum (blocker
+terdokumentasi di bawah).
+
+### Yang diimplementasikan (`kernel/arm/ipc_test.c`, hook di `machdep.c`/`clock.c`)
+
+- **`ipc_selftest()`** (dari `machine_init`, setelah `ipc_bootstrap`/`ipc_init`):
+  alokasi port kernel via `ipc_port_alloc_kernel()`, verifikasi
+  `ip_references == 1`, dealokasi. Print `ipc_selftest: PASS` tiap boot.
+- **`task_selftest()`** (dari `startrtclock`, setelah `task_init`/`thread_init`):
+  `task_create(kernel_task, FALSE, &new_task)` → `thread_create` →
+  `thread_start` → `thread_doswapin`. Start routine dijalankan synchronous
+  (verifikasi code path + print). Print `task_selftest: PASS` tiap boot.
+
+### Temuan / bug
+
+1. **`ipc_space_kernel` memang inactive** — `ipc_space_create_special`
+   sengaja set `is_active = FALSE` (special space untuk disembodied rights).
+   Test port-set alloc awal gagal dengan `KERN_INVALID_TASK` (16) — bukan
+   bug, tapi ekspektasi test yang salah. Test diperbaiki: hanya port
+   alloc/dealloc.
+2. **`ipc_port_alloc_special` tidak cek `is_active`** dan tidak insert ke
+   space table — "port alloc works" awal menyesatkan; verifikasi
+   `ip_references` ditambahkan.
+3. **Timer interrupt tidak fire di QEMU virt** (blocker scheduler dispatch):
+   dicoba PPI 27/virtual-timer, PPI 30/physical-timer, GIC Group 0/1 —
+   `ispendr0` tetap 0. `thread_setrun` butuh `current_thread()` valid
+   (`active_threads[cpu]`), yang baru ada setelah `load_context()`.
+   Defer via timer gagal karena IRQ tidak masuk. Full scheduler dispatch
+   (run queue → context switch) = future work.
+
+### Verifikasi
+- Build: MI 94/94, MD 17/17 (file baru `ipc_test.c`), LINK OK. 0 patch MI.
+- Boot QEMU 3x: `pmap_selftest: PASS`, `ipc_selftest: PASS`,
+  `task_selftest: PASS` di semua run, stabil tanpa panic.
+
 ## Item 3: Driver virtio-blk — TODO
 ## Item 4: User mode + syscall interface — TODO

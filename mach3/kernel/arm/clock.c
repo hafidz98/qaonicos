@@ -52,6 +52,8 @@ write_cntv_ctl(unsigned int v)
 void
 startrtclock(void)
 {
+	extern void	task_selftest(void);
+
 	timer_freq = read_cntfrq();
 	if (timer_freq == 0)
 		timer_freq = 62500000u;	/* QEMU virt default */
@@ -62,6 +64,8 @@ startrtclock(void)
 
 	write_cntv_tval(timer_tval);
 	write_cntv_ctl(0x1u);		/* enable, unmasked */
+
+	task_selftest();	/* M4: verify task_create + thread_create */
 }
 
 /*
