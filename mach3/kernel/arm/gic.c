@@ -10,7 +10,7 @@
 /* Distributor registers */
 #define	GICD_CTLR	0x000u
 #define	GICD_ISENABLER(n) (0x100u + ((n) << 2))
-#define	GICD_IPRIORITYR(n) (0x400u + (n))
+#define	GICD_IPRIORITYR(n) (0x400u + ((n) << 2))
 
 /* CPU interface registers */
 #define	GICC_CTLR	0x00u

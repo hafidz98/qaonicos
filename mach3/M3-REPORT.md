@@ -101,3 +101,32 @@ apt-get update too slow (179s for headers). Rebuild pending.
 - Build: `mach3/build-md.sh`, `mach3/build-mi.sh`, `mach3/mach3.ld`
 - Output: `mach3/build/mach3.elf`
 - MI overrides: `mach3/mi-overrides/` (5 varargs conversions + vm_kern debug)
+
+## Debug boot 2026-09-28 (post-commit c376be7)
+
+Tiga bug ditemukan dan difix saat boot test:
+
+1. **MD `pmap_startup` tidak mengisi free list** — override MD me-replace
+   versi generik MI di `vm_resident.c` yang mengisi free list via
+   `pmap_next_page`/`vm_page_init`/`vm_page_release`. Fix: versi MD kini
+   mereplikasi logika populasi MI. (Gejala: `vm_page_bootstrap: 0 free
+   pages` -> `panic: vm_page_grab`)
+
+2. **Dua kursor steal-memory terpisah (KRITIS)** — clang meng-inline MI
+   generik `pmap_steal_memory` ke dalam `vm_page_bootstrap` (satu TU),
+   memakai kursor global `virtual_space_start`, sementara panggilan dari
+   TU lain memakai override MD dengan kursor `virt_steal_next`. Akibatnya
+   array `pages` (1.3MB) menimpa `zdata`/kentry/buckets -> free list
+   terkorup -> `panic: vm_page_grab` yang misterius. Fix: `#define
+   MACHINE_PAGES` di `kernel/arm/pmap.h` (seperti port mips/alpha) agar
+   versi generik MI tidak dikompilasi sama sekali; satu kursor.
+
+3. **Macro GIC salah** — `GICD_IPRIORITYR(n)` = `(0x400u + (n))`, kurang
+   `<< 2`, menyebabkan store word tidak-aligned ke MMIO GIC ->
+   alignment fault (`dfar=0x08000401`). Fix: `(0x400u + ((n) << 2))`.
+
+Hasil: kernel boot stabil sampai idle loop (`setup_main` ->
+`cpu_launch_first_thread` -> `start_kernel_threads` -> idle).
+`vm_page_bootstrap: 12047 free pages`, 3x `kmem_suballoc` sukses,
+tidak ada panic/fault dalam 15 detik run. Idle loop Mach 3.0 adalah
+spin `while(TRUE)` (tanpa WFI), jadi CPU host ~97% adalah normal.

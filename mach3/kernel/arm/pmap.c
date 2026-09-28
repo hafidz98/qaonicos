@@ -23,6 +23,7 @@
 #include <vm/pmap.h>
 
 extern char _end[];
+extern vm_offset_t	avail_start, avail_end;	/* set by arm_init() */
 
 /* Boot L1 table built by locore.s. */
 extern l1_entry_t _l1_table[];
@@ -35,6 +36,7 @@ static vm_offset_t	phys_pool_next;	/* next page to hand out */
 #define	PHYS_POOL_END	((vm_offset_t)0x43000000)
 #define	VIRT_STEAL_START ((vm_offset_t)0x43000000)
 #define	VIRT_STEAL_END	((vm_offset_t)0x44000000)
+static vm_offset_t	virt_steal_next = VIRT_STEAL_START;	/* next steal addr */
 
 static struct pmap	kernel_pmap_store;
 
@@ -45,8 +47,6 @@ static struct pmap	kernel_pmap_store;
 void
 pmap_bootstrap(void)
 {
-	extern vm_offset_t avail_start, avail_end;
-
 	kernel_pmap = &kernel_pmap_store;
 	kernel_pmap->l1 = _l1_table;
 	kernel_pmap->ref_count = 1;
@@ -103,15 +103,41 @@ pmap_free_pages(void)
 /*
  * pmap_startup: initialize physical page structures.
  * Overrides MI generic version in vm_resident.c.
- * Sets *startp/*endp for kmem_init: kernel virtual space is
- * [avail_start, VM_MAX_KERNEL_ADDRESS).
+ *
+ * Same population logic as the MI generic (steal page structs, then
+ * pmap_next_page/vm_page_init/vm_page_release to build the free list),
+ * except the kernel virtual range handed to kmem_init starts at
+ * avail_start (first free page past the kernel image) instead of the
+ * steal-memory pointer -- MI would hand kmem_init a range already
+ * consumed by pmap_steal_memory, starving kmem_suballoc (ipc_map).
  */
 void
 pmap_startup(vm_offset_t *startp, vm_offset_t *endp)
 {
-	/* Physical pages already in free list via pmap_next_page. */
-	/* (MI vm_page_bootstrap calls pmap_next_page to populate). */
-	*startp = avail_start;
+	unsigned int i, npages, pages_initialized;
+	vm_page_t pages;
+	vm_offset_t paddr;
+
+	npages = (ARM_PGBYTES * pmap_free_pages()) /
+		 (ARM_PGBYTES + sizeof *pages);
+
+	pages = (vm_page_t) pmap_steal_memory(npages * sizeof *pages);
+
+	for (i = 0, pages_initialized = 0; i < npages; i++) {
+		if (!pmap_next_page(&paddr))
+			break;
+		vm_page_init(&pages[i], paddr);
+		pages_initialized++;
+	}
+
+	/*
+	 * Release in reverse so physical pages allocate in ascending
+	 * order (keeps devices needing consecutive pages happy).
+	 */
+	for (i = pages_initialized; i > 0; i--)
+		vm_page_release(&pages[i - 1]);
+
+	*startp = round_page(avail_start);
 	*endp = (vm_offset_t)VM_MAX_KERNEL_ADDRESS;
 }
 

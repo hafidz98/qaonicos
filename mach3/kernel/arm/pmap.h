@@ -6,6 +6,15 @@
 #ifndef	_PMAP_MACHINE_
 #define	_PMAP_MACHINE_	1
 
+/*
+ * M3 ARM: MD pmap module implements pmap_steal_memory/pmap_startup
+ * itself (single steal cursor); MI generic versions in vm_resident.c
+ * are not compiled.  (Without this, clang can inline the MI generic
+ * pmap_steal_memory into vm_page_bootstrap while other TUs call the
+ * MD override -- two independent cursors, overlapping allocations.)
+ */
+#define	MACHINE_PAGES	1
+
 #ifndef	ASSEMBLER
 #include <mach/boolean.h>
 #include <machine/pte.h>
