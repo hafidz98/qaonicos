@@ -740,8 +740,11 @@ static struct user_task	uprog_udesc[UPROG_MAX];
  * Called from startrtclock() after the self-tests.  Each program runs
  * to SYS_EXIT before the next is launched.  After the last program,
  * the kernel verifies the sentinel files the programs were supposed
- * to create, prints the verdict, and halts cleanly.
+ * to create, prints the verdict, and continues to the network server
+ * (Fase D, net_main() -- never returns).
  */
+extern void	net_main(void);
+
 void
 user_launch_init(void)
 {
@@ -789,6 +792,7 @@ user_launch_init(void)
 		       (unsigned)(sizeof(want_files) / sizeof(want_files[0])));
 	else
 		printf("user_launch_init: %u FAILs\n", fails);
-	machine_halt();
+	/* Fase D: lanjut ke server network (tak kembali). */
+	net_main();
 	/* NOTREACHED */
 }

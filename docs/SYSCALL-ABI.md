@@ -56,15 +56,36 @@ pointer Mach task). Sinkronisasi via `splhigh()`/`splx()`.
 boot (init, ucat, uls, uecho, umon); thread kernel/MI belum
 terdaftar (Fase D).
 
-## Nomor dicadangkan (Fase D)
+## Syscall GPIO (Fase D ✅)
+
+| No | Nama | Argumen | Kembali | Keterangan |
+|---|---|---|---|---|
+| 40 | `SYS_GPIO_SET` | r0=pin, r1=value (0/1) | `0` / `-1` | Set pin GPIO (bank 0). QEMU: mock RAM; RV1103: register asli |
+| 41 | `SYS_GPIO_GET` | r0=pin | `0`/`1` / `-1` | Baca pin GPIO |
+
+## Syscall SD card (Fase D ✅)
+
+| No | Nama | Argumen | Kembali | Keterangan |
+|---|---|---|---|---|
+| 50 | `SYS_SD_READ` | r0=lba, r1=buf, r2=nsectors | `0` / `-1` | Baca sektor dari SD (dev 1) |
+| 51 | `SYS_SD_WRITE` | r0=lba, r1=buf, r2=nsectors | `0` / `-1` | Tulis sektor ke SD (dev 1) |
+
+## Syscall FAT32 (Fase D ✅)
+
+| No | Nama | Argumen | Kembali | Keterangan |
+|---|---|---|---|---|
+| 52 | `SYS_MKDIR` | r0=path | `0` / `-1` | Buat direktori di `/sd` (path wajib prefix `/sd`) |
+| 53 | `SYS_FAT_WRITE` | r0=path, r1=buf, r2=len | byte / `-1` | Tulis file ke FAT32 |
+| 54 | `SYS_FAT_READ` | r0=path, r1=buf, r2=len | byte / `-1` | Baca file dari FAT32 |
+| 55 | `SYS_FAT_DELETE` | r0=path | `0` / `-1` | Hapus file/direktori kosong |
+| 56 | `SYS_READDIR` | r0=path, r1=buf, r2=max | entri / `-1` | List direktori |
+
+## Nomor dicadangkan
 
 | Rentang | Peruntukan | Status |
 |---|---|---|
-| 10–12 | `SYS_SEND` / `SYS_RECV` / `SYS_RPC` (IPC) | Fase D |
-| 23 | `SYS_RPC_USER` | Fase D |
-| 40–41 | `SYS_GPIO_SET` / `SYS_GPIO_GET` | Fase D |
-| 50–51 | `SYS_SD_READ` / `SYS_SD_WRITE` | Fase D |
-| 52–56 | `SYS_MKDIR` / `FAT_WRITE` / `FAT_READ` / `FAT_DELETE` / `READDIR` | Fase D |
+| 10–12 | `SYS_SEND` / `SYS_RECV` / `SYS_RPC` (IPC) | belum |
+| 23 | `SYS_RPC_USER` | belum |
 
 ## Layout memori user (Fase B/C)
 

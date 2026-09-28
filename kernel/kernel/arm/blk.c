@@ -92,7 +92,7 @@ extern int	printf(const char *, ...);
 /* --- cache maintenance (Cortex-A7, 64B lines) --- */
 #define	CACHE_LINE	64u
 
-static void
+void
 dcache_clean_range(unsigned int va, unsigned int len)
 {
 	unsigned int a, end;
@@ -103,7 +103,7 @@ dcache_clean_range(unsigned int va, unsigned int len)
 	__asm__ volatile ("dsb ish" ::: "memory");
 }
 
-static void
+void
 dcache_inval_range(unsigned int va, unsigned int len)
 {
 	unsigned int a, end;
