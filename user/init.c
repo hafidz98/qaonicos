@@ -20,6 +20,10 @@
  *   ucat  : tunggu /.motd_ready -> cat /motd.txt -> /.ucat_done
  *   uls   : tunggu /.motd_ready -> ls -> /.uls_done
  *   uecho : tulis /echo.txt, verifikasi -> /.uecho_done
+ *   ugpio : (Fase 14) tunggu /.gpio_cmd_ready -> eksekusi /gpio.cmd
+ *           -> tulis /gpio.out -> /.ugpio_done
+ *   usd   : (Fase 15) tunggu /.sd_cmd_ready -> eksekusi /sd.cmd
+ *           (w/r sektor SD) -> tulis /sd.out -> /.usd_done
  *   init  : tunggu 3 sentinel -> verifikasi /echo.txt byte-exact
  *           -> "INIT TESTS PASSED" -> sentinel /.init_done
  *           (/.init_done = gerbang halt kernel di report()).
@@ -38,6 +42,17 @@ static const char GPIO_CMD[] =
     "get 7\n"
     "set 31 1\n"
     "get 31\n";
+
+/* Fase 15: skrip uji SD card untuk usd (pola ugpio). Tulis pola ke
+ * sektor lalu baca balik + verifikasi byte-exact. Sektor 0 tidak
+ * dipakai (superblock "QAONSD01"). */
+static const char SD_CMD[] =
+    "w 10\n"
+    "r 10\n"
+    "w 100\n"
+    "r 100\n"
+    "w 1000\n"
+    "r 1000\n";
 
 __attribute__((section(".text.start")))
 void _start(void)
@@ -90,6 +105,26 @@ void _start(void)
         }
     }
 
+    /* 1c. Fase 15: tulis skrip uji SD untuk usd, lalu sentinel.
+     * usd menunggu /.sd_cmd_ready (pola ucat/uls/ugpio). */
+    fd = u_open("/sd.cmd", O_CREAT | O_RDWR);
+    if (fd < 0) {
+        u_put("FAIL: open /sd.cmd\n");
+        fails++;
+    } else {
+        n = u_strlen(SD_CMD);
+        r = u_write((unsigned)fd, SD_CMD, n);
+        if (r < 0 || (unsigned)r != n) {
+            u_put("FAIL: write /sd.cmd\n");
+            fails++;
+        }
+        u_close((unsigned)fd);
+        if (!u_touch("/.sd_cmd_ready")) {
+            u_put("FAIL: sentinel /.sd_cmd_ready\n");
+            fails++;
+        }
+    }
+
     /* 2. Tunggu ketiga utilitas selesai (dengan timeout). */
     if (!u_wait_file("/.ucat_done")) {
         u_put("FAIL: ucat timeout\n");
@@ -133,6 +168,35 @@ void _start(void)
                 fails++;
             } else {
                 u_put("[init] /gpio.out terverifikasi (set/get roundtrip)\n");
+            }
+        }
+    }
+
+    /* Fase 15: tunggu usd, lalu verifikasi /sd.out memuat hasil
+     * roundtrip sektor yang diharapkan ("r 10=ok", "r 100=ok",
+     * "r 1000=ok"). */
+    if (!u_wait_file("/.usd_done")) {
+        u_put("FAIL: usd timeout\n");
+        fails++;
+    } else {
+        u_put("[init] usd selesai\n");
+        for (i = 0; i < sizeof(buf); i++)
+            buf[i] = 0;
+        fd = u_open("/sd.out", O_RDONLY);
+        if (fd < 0) {
+            u_put("FAIL: open /sd.out\n");
+            fails++;
+        } else {
+            r = u_read((unsigned)fd, buf, sizeof(buf) - 1u);
+            u_close((unsigned)fd);
+            if (r <= 0 ||
+                !u_contains(buf, (unsigned)r, "r 10=ok") ||
+                !u_contains(buf, (unsigned)r, "r 100=ok") ||
+                !u_contains(buf, (unsigned)r, "r 1000=ok")) {
+                u_put("FAIL: /sd.out tidak sesuai roundtrip\n");
+                fails++;
+            } else {
+                u_put("[init] /sd.out terverifikasi (sector roundtrip)\n");
             }
         }
     }

@@ -30,6 +30,7 @@ Diekstrak via `grep` (file tidak dibaca utuh). Salinan file ada di `dts/`.
 | GPIO2 | `rockchip,gpio-bank` (`gpio@ff540000`), 32 pin, GIC_SPI 9 | `0xff540000` | `0x100` | `rv1106.dtsi` (baris 1517-1528) |
 | GPIO3 | `rockchip,gpio-bank` (`gpio@ff550000`), 32 pin, GIC_SPI 11 | `0xff550000` | `0x100` | `rv1106.dtsi` (baris 1530-1541) |
 | GPIO4 | `rockchip,gpio-bank` (`gpio@ff560000`), 32 pin, GIC_SPI 13 | `0xff560000` | `0x100` | `rv1106.dtsi` (baris 1543-1554) |
+| SDMMC | `rockchip,rv1106-dw-mshc`, `rockchip,rk3288-dw-mshc` (`mmc@ffaa0000`), GIC_SPI 52 | `0xffaa0000` | `0x4000` | `rv1106.dtsi` (baris 1404-1406), juga `uboot-rv1106.dtsi` (baris 1123-1126). Catatan: `rv1103.dtsi` tidak mendefinisikan ulang — RV1103 mewarisi `rv1106.dtsi`, jadi base ini diasumsikan berlaku untuk RV1103. Clock: `cru HCLK_SDIO`, `cru CCLK_SRC_SDIO` (rv1106.dtsi baris 1188) |
 
 ## Yang TIDAK ketemu
 

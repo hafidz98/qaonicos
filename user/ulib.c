@@ -193,3 +193,34 @@ int u_gpio_get(unsigned pin)
         : "r0", "r7", "lr", "memory", "cc");
     return ret;
 }
+
+/* Fase 15: kartu SD. */
+int u_sd_read(unsigned sector, unsigned char *buf)
+{
+    int ret;
+    __asm__ volatile(
+        "mov r0, %1\n\t"
+        "mov r1, %2\n\t"
+        "mov r7, #50\n\t"          /* SYS_SD_READ */
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        : "r"(sector), "r"(buf)
+        : "r0", "r1", "r7", "lr", "memory", "cc");
+    return ret;
+}
+
+int u_sd_write(unsigned sector, const unsigned char *buf)
+{
+    int ret;
+    __asm__ volatile(
+        "mov r0, %1\n\t"
+        "mov r1, %2\n\t"
+        "mov r7, #51\n\t"          /* SYS_SD_WRITE */
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        : "r"(sector), "r"(buf)
+        : "r0", "r1", "r7", "lr", "memory", "cc");
+    return ret;
+}

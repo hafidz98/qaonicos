@@ -57,4 +57,9 @@ int u_touch(const char *path);
 int u_gpio_set(unsigned pin, unsigned val);
 int u_gpio_get(unsigned pin);
 
+/* Fase 15: kartu SD (SYS_SD_READ=50, SYS_SD_WRITE=51).
+ * u_sd_read/u_sd_write: 0 ok, -1 gagal. buf = 512 byte di VA user. */
+int u_sd_read(unsigned sector, unsigned char *buf);
+int u_sd_write(unsigned sector, const unsigned char *buf);
+
 #endif /* _ULIB_H_ */

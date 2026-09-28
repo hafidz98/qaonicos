@@ -23,7 +23,9 @@
 #define USER_STACK_TOP   0x10040000u
 #define USER_STACK_PAGES 2u
 
-#define USER_BRK_START  0x10050000u
+#define USER_BRK_START  0x10060000u   /* Fase 15: digeser dari 0x10050000
+                                 * untuk memberi ruang program usd
+                                 * (0x10050000-0x10056000) */
 
 /* Fase 9: program uji filesystem (user/fstest.c). Di dalam demand
  * range, tidak tabrakan dengan PAGER_VA (0x10010000, task_c),
@@ -78,6 +80,16 @@
 #define UGPIO_PROG_PAGES  4u
 #define UGPIO_STACK_TOP   0x1004E000u
 #define UGPIO_STACK_PAGES 2u
+
+/* Fase 15: utilitas SD card userspace (user/usd.c). Di dalam demand
+ * range, tidak tabrakan dengan region yang sudah ada:
+ *   0x10050000 usd        (4 halaman R+X; USER_BRK_START digeser ke
+ *                          0x10060000 agar tidak tabrakan)
+ *   0x10054000 stack usd  (2 halaman RW, top 0x10056000) */
+#define USD_PROG_VA     0x10050000u
+#define USD_PROG_PAGES  4u
+#define USD_STACK_TOP   0x10056000u
+#define USD_STACK_PAGES 2u
 
 /* Nama port well-known di task_user.ipc (diisi kernel saat boot). */
 #define USER_SVC_SEND   1u      /* send-right ke echo server */

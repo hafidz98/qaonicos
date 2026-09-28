@@ -25,6 +25,10 @@
 #define SYS_GPIO_SET 40u
 #define SYS_GPIO_GET 41u
 
+/* Fase 15: kartu SD (DISALIN MANUAL dari syscall.h kernel). */
+#define SYS_SD_READ  50u
+#define SYS_SD_WRITE 51u
+
 #define O_RDONLY 0u
 #define O_WRONLY 1u
 #define O_RDWR   2u

@@ -57,6 +57,10 @@ extern const unsigned uecho_img_len;
 extern const uint8_t ugpio_img[];
 extern const unsigned ugpio_img_len;
 
+/* Fase 15: image utilitas SD card userspace (user/usd.bin -> usd_img). */
+extern const uint8_t usd_img[];
+extern const unsigned usd_img_len;
+
 /* PL011 (QEMU virt UART0). */
 #define UARTDR  (*(volatile unsigned *)0x09000000u)
 #define UARTFR  (*(volatile unsigned *)0x09000018u)
@@ -316,6 +320,8 @@ static unsigned char stack_uls[16384] __attribute__((aligned(8)));
 static unsigned char stack_uecho[16384] __attribute__((aligned(8)));
 /* Fase 14: kernel stack untuk thread user ugpio. */
 static unsigned char stack_ugpio[16384] __attribute__((aligned(8)));
+/* Fase 15: kernel stack untuk thread user usd. */
+static unsigned char stack_usd[16384] __attribute__((aligned(8)));
 /* Fase 11: stack thread network (virtio-net + ARP/ICMP). */
 static unsigned char stack_net[16384] __attribute__((aligned(8)));
 /* Fase 12d: stack idle thread (CPU accounting). */
@@ -1270,6 +1276,11 @@ void kernel_main(void)
                                  UGPIO_PROG_VA, UGPIO_PROG_PAGES,
                                  UGPIO_STACK_TOP, UGPIO_STACK_PAGES,
                                  "ugpio");
+        /* Fase 15: utilitas SD card userspace. */
+        fails += load_user_image(usd_img, usd_img_len,
+                                 USD_PROG_VA, USD_PROG_PAGES,
+                                 USD_STACK_TOP, USD_STACK_PAGES,
+                                 "usd");
         /* Port echo: server di task_kern (usvc_port), user dapat
          * send-right hasil grant (harus = USER_SVC_SEND=1), reply
          * port milik user (harus = USER_SVC_REPLY=2) di-grant balik. */
@@ -1421,6 +1432,59 @@ void kernel_main(void)
     if (blk_init() < 0)
         puts("[blk ] init gagal; storage tidak tersedia\n");
 
+    /* 4b. Fase 15: SD card driver self-test — hanya bila dipilih di
+     * boot menu (opsi 2), single-threaded seperti blok di atas.
+     * Roundtrip tulis->baca->verifikasi byte-exact di sektor 10 +
+     * kasus sektor liar. Isi asli sektor dikembalikan sesudah uji. */
+    if (bootmode == BOOTMODE_SELFTEST) {
+        int fails = 0;
+        uint8_t sd_orig[512], sd_pat[512], sd_back[512];
+        unsigned i;
+        puts("[st  ] sd driver self-test\n");
+        if (!sd_present()) {
+            puts("  FAIL: sd tidak ada\n");
+            fails++;
+        } else {
+            if (sd_read(10u, sd_orig) != 0) {
+                puts("  FAIL: sd baca awal\n");
+                fails++;
+            }
+            for (i = 0u; i < 512u; i++)
+                sd_pat[i] = (uint8_t)(0xA5u ^ (i * 3u) ^ (i >> 4));
+            if (sd_write(10u, sd_pat) != 0) {
+                puts("  FAIL: sd tulis\n");
+                fails++;
+            }
+            for (i = 0u; i < 512u; i++)
+                sd_back[i] = 0u;
+            if (sd_read(10u, sd_back) != 0) {
+                puts("  FAIL: sd baca balik\n");
+                fails++;
+            }
+            for (i = 0u; i < 512u; i++) {
+                if (sd_back[i] != sd_pat[i]) {
+                    puts("  FAIL: sd pola rusak\n");
+                    fails++;
+                    break;
+                }
+            }
+            if (sd_write(10u, sd_orig) != 0) {
+                puts("  FAIL: sd restore\n");
+                fails++;
+            }
+            if (sd_read(1u << 31, sd_back) != -1) {
+                puts("  FAIL: sd sektor liar diterima\n");
+                fails++;
+            }
+            puts("[st  ] sd driver self-test: ");
+            if (fails == 0)
+                puts("ALL CHECKS PASSED\n");
+            else {
+                puts("FAILURES = "); putdec((unsigned)fails); putc('\n');
+            }
+        }
+    }
+
     timer_init();
     sched_init();
     sched_add(thread_a, stack_a + sizeof(stack_a), &task_kern);
@@ -1459,6 +1523,9 @@ void kernel_main(void)
     /* Fase 14: utilitas GPIO (dikoordinasi init via /gpio.cmd). */
     sched_add_user(stack_ugpio + sizeof(stack_ugpio), &task_user,
                    UGPIO_PROG_VA, UGPIO_STACK_TOP);
+    /* Fase 15: utilitas SD card (dikoordinasi init via /sd.cmd). */
+    sched_add_user(stack_usd + sizeof(stack_usd), &task_user,
+                   USD_PROG_VA, USD_STACK_TOP);
     /* Fase 12d: idle thread TERAKHIR (CPU accounting). Scheduler hanya
      * memilihnya bila tak ada thread RUNNABLE lain. */
     sched_add(thread_idle, stack_idle + sizeof(stack_idle), &task_kern);

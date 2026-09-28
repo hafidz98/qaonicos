@@ -57,13 +57,14 @@ $TOOL $COMMON -c /tmp/mach_fstest_img.c -o /tmp/mach_fstest_img.o
 # ke dalam tiap biner (self-contained, pola hello/fstest), lalu
 # di-embed sebagai blob -> array C <prog>_img. Entry point dicek
 # terhadap konstanta VA di rv1103-bringup/user.h.
-for prog in init ucat uls uecho ugpio; do
+for prog in init ucat uls uecho ugpio usd; do
     case $prog in
         init)  VA=0x10012000 ;;
         ucat)  VA=0x10018000 ;;
         uls)   VA=0x10021000 ;;
         uecho) VA=0x10040000 ;;
         ugpio) VA=0x10048000 ;;   # UGPIO_PROG_VA, Fase 14
+        usd)   VA=0x10050000 ;;   # USD_PROG_VA, Fase 15
     esac
     $TOOL $COMMON -T user/$prog.ld -o /tmp/mach_$prog.elf \
         user/$prog.c user/ulib.c
@@ -81,7 +82,7 @@ done
 $TOOL $COMMON $LDOPT -T kernel/virt.ld -o kernel/mach-kernel.elf \
     /tmp/mach_sched.o /tmp/mach_hello_img.o /tmp/mach_fstest_img.o \
     /tmp/mach_init_img.o /tmp/mach_ucat_img.o /tmp/mach_uls_img.o \
-    /tmp/mach_uecho_img.o /tmp/mach_ugpio_img.o \
+    /tmp/mach_uecho_img.o /tmp/mach_ugpio_img.o /tmp/mach_usd_img.o \
     kernel/start.S kernel/kernel_main.c \
     $B/vectors.S $B/trap.c $B/pmap.c $B/fpu.c $B/zone.c $B/ipc.c \
     $B/syscall.c $B/lib.c $B/gic.c $B/timer.c $B/vm.c $B/task.c \

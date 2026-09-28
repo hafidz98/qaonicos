@@ -12,6 +12,7 @@
 #include "fs.h"
 #include "lib.h"
 #include "gpio.h"   /* Fase 14 */
+#include "blk.h"    /* Fase 15: sd_read/sd_write */
 
 static struct task *kern_task;
 
@@ -227,8 +228,47 @@ static int sys_delete_user(struct task *t, struct trap_regs *regs)
         return -1;
     return fs_delete(kpath);
 }
-/* SYS_SBRK (user only): naikkan program break (lihat aslinya). */
-static int sys_sbrk_user(struct task *t, struct trap_regs *regs)
+/* ------------------------------------------------------------------ */
+/* Fase 15: SYS_SD_READ / SYS_SD_WRITE (user only): raw sector I/O    */
+/* ke kartu SD (dev 1). Bounce buffer kernel statis 512B (pola       */
+/* SYS_RPC_USER): pointer user tidak dioper mentah ke driver;        */
+/* buffer user divalidasi user_range_ok dulu.                         */
+/* ------------------------------------------------------------------ */
+static uint8_t sd_kbuf[512] __attribute__((aligned(16)));
+
+static int sys_sd_read_user(struct trap_regs *regs)
+{
+    uint32_t sector = regs->r[0];
+    uint32_t va = regs->r[1];
+    unsigned i;
+
+    if (!user_range_ok(va, 512u))
+        return -1;
+    if (!sd_present())
+        return -1;
+    if (sd_read((uint64_t)sector, sd_kbuf) != 0)
+        return -1;
+    for (i = 0; i < 512u; i++)
+        ((uint8_t *)va)[i] = sd_kbuf[i];
+    return 0;
+}
+
+static int sys_sd_write_user(struct trap_regs *regs)
+{
+    uint32_t sector = regs->r[0];
+    uint32_t va = regs->r[1];
+    unsigned i;
+
+    if (!user_range_ok(va, 512u))
+        return -1;
+    if (!sd_present())
+        return -1;
+    for (i = 0; i < 512u; i++)
+        sd_kbuf[i] = ((const uint8_t *)va)[i];
+    return sd_write((uint64_t)sector, sd_kbuf) == 0 ? 0 : -1;
+}
+
+/* SYS_SBRK (user only): naikkan program break (lihat aslinya). */static int sys_sbrk_user(struct task *t, struct trap_regs *regs)
 {
     int inc;
     uint32_t old, n, i, pa;
@@ -306,6 +346,10 @@ void svc_dispatch(struct trap_regs *regs)
         ret = u ? gpio_set(0u, regs->r[0], regs->r[1]) : -1;
     } else if (num == SYS_GPIO_GET) {
         ret = u ? gpio_get(0u, regs->r[0]) : -1;
+    } else if (num == SYS_SD_READ) {
+        ret = u ? sys_sd_read_user(regs) : -1;
+    } else if (num == SYS_SD_WRITE) {
+        ret = u ? sys_sd_write_user(regs) : -1;
     }
     if (ret != -2)
         regs->r[0] = (uint32_t)ret;

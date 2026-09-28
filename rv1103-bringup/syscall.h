@@ -47,6 +47,11 @@
 #define SYS_GPIO_SET 40u   /* r0=pin r1=val(0/1) -> 0 / -1 */
 #define SYS_GPIO_GET 41u   /* r0=pin -> 0/1 / -1 */
 
+/* Fase 15: kartu SD (user only, seperti SYS_GPIO_*).
+ * Nomor DISALIN MANUAL ke user/usys.h. */
+#define SYS_SD_READ  50u   /* r0=sector(u32) r1=buf_va(512B) -> 0 / -1 */
+#define SYS_SD_WRITE 51u   /* r0=sector(u32) r1=buf_va(512B) -> 0 / -1 */
+
 void syscall_init(struct task *kern_task);
 void svc_dispatch(struct trap_regs *regs);
 
