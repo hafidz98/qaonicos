@@ -6,6 +6,12 @@
 # 3. Links with mach3.ld -> build/mach3.elf.
 set -u
 
+# Portable toolchain (survive VM reset): prefer ~/workspace/toolchain.
+if [ -f "$HOME/workspace/toolchain/env.sh" ]; then
+    # shellcheck disable=SC1091
+    . "$HOME/workspace/toolchain/env.sh"
+fi
+
 MACH3_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC="${MACH3_SRC:-$HOME/workspace/mach3-src}/kernel"
 BUILD="$MACH3_DIR/build"
