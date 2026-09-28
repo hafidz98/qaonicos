@@ -1,11 +1,7 @@
-/*
- * mach3/kernel/arm/ast_types.h -- kerangka M1 (port Mach 3 asli ke ARMv7).
- *
- * Header machine-dependent, di-include kernel MI via <machine/ast_types.h>.
- * Dimodelkan dari Prajna/mach kernel/mips/ast_types.h.
- *
- * WAJIB disediakan:
- * - Tipe ast_t dan konstanta AST.
- *
- * Adaptasi dari: mips/ast.h sebagai pola
- */
+/* mach3/kernel/arm/ast_types.h -- ARM AST types. */
+#ifndef	_MACHINE_AST_TYPES_H_
+#define	_MACHINE_AST_TYPES_H_
+
+/* ast_t is defined by MI <kern/ast.h>; nothing MD needed. */
+
+#endif	/* _MACHINE_AST_TYPES_H_ */

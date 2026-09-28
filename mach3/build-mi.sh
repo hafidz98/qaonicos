@@ -30,10 +30,10 @@ command -v clang >/dev/null 2>&1 || { echo "FATAL: clang unavailable"; exit 1; }
 
 # --- directory layout ---
 mkdir -p "$GEN" "$OBJ" "$INC" "$INC/mach"
-# <machine/*.h>  -> mips port headers (M2 stand-in; ARM headers are M3)
-ln -sfn "$SRC/mips" "$INC/machine"
-# <mach/machine/*.h> -> mips mach/machine headers
-ln -sfn "$SRC/mach/mips" "$INC/mach/machine"
+# <machine/*.h>  -> ARM MD headers (M3: real, was mips stand-in in M2)
+ln -sfn "$MACH3_DIR/kernel/arm" "$INC/machine"
+# <mach/machine/*.h> -> ARM mach/machine headers
+ln -sfn "$MACH3_DIR/kernel/mach/arm" "$INC/mach/machine"
 
 # --- generated headers ---
 python3 "$MACH3_DIR/tools/gen_config.py" "$GEN"
@@ -42,8 +42,11 @@ python3 "$MACH3_DIR/tools/gen_mig_stubs.py" "$GEN"
 # --- compiler flags ---
 # -DKERNEL is MANDATORY (mach/vm_param.h deliberately #errors without it).
 # -Wno-implicit-function-declaration: 1990s C predates C99 prototypes.
-CFLAGS="--target=arm-none-eabi -DKERNEL -O1 -fno-builtin"
-CFLAGS="$CFLAGS -I$GEN -I$INC -I$SRC"
+CFLAGS="--target=arm-none-eabi -DKERNEL -O1 -fno-builtin -fcommon"
+# M3: mi-overrides/ first so converted headers (e.g. ddb/db_output.h)
+# shadow pristine MI headers.
+OVR="$MACH3_DIR/mi-overrides"
+CFLAGS="$CFLAGS -I$OVR -I$GEN -I$INC -I$SRC"
 CFLAGS="$CFLAGS -Wno-implicit-function-declaration"
 # clang >= 16 promotes implicit-int to a hard error; 1990s C uses it.
 CFLAGS="$CFLAGS -Wno-implicit-int"
@@ -62,13 +65,15 @@ SRCS="$(python3 "$MACH3_DIR/tools/mi_sources.py" "$SRC")"
 # (it is a generic server-loop template, not in conf/files upstream).
 SERVER_DEFS=""
 if echo "$SRCS" | grep -q "^kern/server_loop.c$"; then
-    SERVER_DEFS='-DSERVER_NAME="\"mach_kernel\""'
+    SERVER_DEFS='-DSERVER_NAME="\"mach_kernel\"" -DSERVER_DISPATCH=mach_server_routine'
 fi
 
 : > "$LOG"
 pass=0; fail=0; failed=""
 for rel in $SRCS; do
     src="$SRC/$rel"
+    # M3: MI override copies (varargs->stdarg.h conversions) win over pristine source.
+    if [ -f "$OVR/$rel" ]; then src="$OVR/$rel"; fi
     obj="$OBJ/${rel%.c}.o"
     mkdir -p "$(dirname "$obj")"
     extra=""

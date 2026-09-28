@@ -1,11 +1,19 @@
-/*
- * mach3/kernel/arm/asm.h -- kerangka M1 (port Mach 3 asli ke ARMv7).
- *
- * Header machine-dependent, di-include kernel MI via <machine/asm.h>.
- * Dimodelkan dari Prajna/mach kernel/mips/asm.h.
- *
- * WAJIB disediakan:
- * - Makro assembler: ENTRY/LEAF/END, eksport simbol ke C.
- *
- * Adaptasi dari: rv1103-bringup/vectors.S, start.S (konvensi label)
- */
+/* mach3/kernel/arm/asm.h -- ARM assembler macros. */
+#ifndef	_MACHINE_ASM_H_
+#define	_MACHINE_ASM_H_
+
+#define	LEAF(name)			\
+	.text;				\
+	.align 2;			\
+	.globl name;			\
+	.type name, %function;		\
+name:
+
+#define	END(name)			\
+	.size name, .-name
+
+#define	EXPORT(name)			\
+	.globl name;			\
+name:
+
+#endif	/* _MACHINE_ASM_H_ */

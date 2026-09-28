@@ -1,11 +1,4 @@
-/*
- * mach3/kernel/arm/xpr.h -- kerangka M1 (port Mach 3 asli ke ARMv7).
- *
- * Header machine-dependent, di-include kernel MI via <machine/xpr.h>.
- * Dimodelkan dari Prajna/mach kernel/mips/xpr.h.
- *
- * WAJIB disediakan:
- * - Buffer trace XPR khusus mesin.
- *
- * Adaptasi dari: opsional; stub dulu
- */
+/* mach3/kernel/arm/xpr.h -- xpr tracing disabled (XPR_DEBUG off). */
+#ifndef	_MACHINE_XPR_H_
+#define	_MACHINE_XPR_H_
+#endif	/* _MACHINE_XPR_H_ */

@@ -1,11 +1,5 @@
-/*
- * mach3/kernel/arm/regdef.h -- kerangka M1 (port Mach 3 asli ke ARMv7).
- *
- * Header machine-dependent, di-include kernel MI via <machine/regdef.h>.
- * Dimodelkan dari Prajna/mach kernel/mips/regdef.h.
- *
- * WAJIB disediakan:
- * - Nama register untuk file .s.
- *
- * Adaptasi dari: sebaris, dari nol
- */
+/* mach3/kernel/arm/regdef.h -- ARM register names for asm. */
+#ifndef	_MACHINE_REGDEF_H_
+#define	_MACHINE_REGDEF_H_
+/* standard ARM register names r0-r15 are used directly */
+#endif	/* _MACHINE_REGDEF_H_ */

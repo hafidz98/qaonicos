@@ -1,11 +1,5 @@
-/*
- * mach3/kernel/arm/cpu_number.h -- kerangka M1 (port Mach 3 asli ke ARMv7).
- *
- * Header machine-dependent, di-include kernel MI via <machine/cpu_number.h>.
- * Dimodelkan dari Prajna/mach kernel/mips/cpu_number.h.
- *
- * WAJIB disediakan:
- * - cpu_number() untuk uniprocessor (return 0).
- *
- * Adaptasi dari: sebaris, dari nol
- */
+/* mach3/kernel/arm/cpu_number.h -- UP: cpu is always 0. */
+#ifndef	_MACHINE_CPU_NUMBER_H_
+#define	_MACHINE_CPU_NUMBER_H_
+/* kern/cpu_number.h already #defines cpu_number() to 0 for NCPUS==1 */
+#endif	/* _MACHINE_CPU_NUMBER_H_ */

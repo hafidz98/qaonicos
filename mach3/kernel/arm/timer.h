@@ -1,11 +1,5 @@
-/*
- * mach3/kernel/arm/timer.h -- kerangka M1 (port Mach 3 asli ke ARMv7).
- *
- * Header machine-dependent, di-include kernel MI via <machine/timer.h>.
- * Dimodelkan dari Prajna/mach kernel/mips/timer.h.
- *
- * WAJIB disediakan:
- * - Interface timer MD (set_timer, timer_intr).
- *
- * Adaptasi dari: rv1103-bringup/timer.c
- */
+/* mach3/kernel/arm/timer.h -- ARM timer (STAT_TIME path unused; kept minimal). */
+#ifndef	_MACHINE_TIMER_H_
+#define	_MACHINE_TIMER_H_
+/* kern/timer.h uses TIMER_RATE path when STAT_TIME; nothing MD needed. */
+#endif	/* _MACHINE_TIMER_H_ */

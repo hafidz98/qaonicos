@@ -1,10 +1,63 @@
 /*
- * mach3/kernel/arm/machdep.c -- kerangka M1 (port Mach 3 asli ke ARMv7).
- *
- * File machine-dependent, dimodelkan dari Prajna/mach kernel/mips/.
- *
- * WAJIB disediakan:
- * - Rutin misc MD: cpu_sleep, halts, panic MD.
- *
- * Adaptasi dari: rv1103-bringup/lib.c
+ * mach3/kernel/arm/machdep.c -- ARM machine-dependent misc routines.
  */
+#include <mach/machine/vm_types.h>
+#include <machine/machine_routines.h>
+#include <machine/machspl.h>
+
+/* from uart.c */
+extern void	uart_putc(char c);
+
+/* MI */
+extern int	cold;
+
+unsigned int
+htonl(unsigned int x)
+{
+	return ((x & 0xffu) << 24) | ((x & 0xff00u) << 8) |
+	       ((x & 0xff0000u) >> 8) | ((x & 0xff000000u) >> 24);
+}
+
+unsigned int
+ntohl(unsigned int x)
+{
+	return htonl(x);
+}
+
+unsigned short
+htons(unsigned short x)
+{
+	return (unsigned short)(((x & 0xffu) << 8) | ((x & 0xff00u) >> 8));
+}
+
+unsigned short
+ntohs(unsigned short x)
+{
+	return htons(x);
+}
+extern void	panic(const char *, ...);
+extern void	printf(const char *, ...);
+
+void
+machine_init(void)
+{
+	extern void	fpu_init(void);
+
+	fpu_init();
+	cold = 0;
+}
+
+void
+halt_cpu(void)
+{
+	(void) splhigh();
+	printf("halting cpu\n");
+	for (;;)
+		__asm__ volatile ("wfi");
+}
+
+void
+halt_all_cpus(void)
+{
+	halt_cpu();
+}
