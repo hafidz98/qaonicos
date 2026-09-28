@@ -44,10 +44,12 @@ machine_init(void)
 	extern void	fpu_init(void);
 	extern void	pmap_selftest(void);
 	extern void	ipc_selftest(void);
+	extern void	blk_selftest(void);
 
 	fpu_init();
 	pmap_selftest();	/* M4: verify L2 small-page path */
 	ipc_selftest();		/* M4: verify IPC ports/port sets */
+	blk_selftest();		/* M4: verify virtio-blk read/write */
 	cold = 0;
 }
 

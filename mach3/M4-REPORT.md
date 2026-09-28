@@ -118,5 +118,43 @@ terdokumentasi di bawah).
 - Boot QEMU 3x: `pmap_selftest: PASS`, `ipc_selftest: PASS`,
   `task_selftest: PASS` di semua run, stabil tanpa panic.
 
-## Item 3: Driver virtio-blk — TODO
+## Item 3: Driver virtio-blk — SELESAI (2026-09-28)
+
+**File baru:** `mach3/kernel/arm/blk.c` (~420 baris). Hook `blk_selftest()`
+di `machine_init()` (machdep.c).
+
+**Yang diimplementasikan:**
+- Probe 32 slot virtio-mmio @0x0a000000 (magic "virtio" + DeviceID 2),
+  negosiasi feature legacy, 1 virtqueue 128-entry, I/O sinkron polled.
+- API: `blk_read_sector()` / `blk_write_sector()` (512B),
+  `blk_total_sectors()`.
+- `blk_selftest()`: tulis pola `i ^ 0xa5` ke sektor terakhir → baca
+  balik → verifikasi byte-exact → `blk_selftest: PASS`.
+
+**Perubahan pendukung:**
+- `locore.s` + `pmap.c`: device window diperluas 0x08000000-0x0A000000
+  → 0x08000000-**0x0B000000** (33 section) agar slot virtio-mmio
+  (0x0a000000-0x0a004000) ter-map sebagai device memory.
+
+**Isu DMA coherency (penting):** port ini jalan dengan D-cache ON
+(SCTLR.C, RAM write-back) — beda dengan QaonicOS yang D-cache-nya
+mati. QEMU virtio akses RAM langsung (bypass cache), jadi tiap request
+lakukan cache maintenance: DCCMVAC (clean) deskriptor/avail/request
+sebelum kick; DCIMVAC (invalidate) used ring saat polling + data/status
+sesudah completion. Tanpa ini device baca data basi / CPU baca
+completion basi.
+
+**Pelajaran dari referensi yang dipakai:**
+- `VMM_GUESTPAGESZ = 0x028` (bukan 0x024) — bug QaonicOS Fase 11.
+- `used->idx` dibaca via pointer volatile + invalidate per iterasi
+  (pelajaran hoisting clang -O2 Fase 12d, diperketat untuk D-cache).
+- Spin timeout 100M (TCG lambat di bawah beban I/O).
+
+### Verifikasi
+- Build: MI 94/94, MD 18/18, LINK OK. 0 patch MI.
+- Boot QEMU 3x dengan `-device virtio-blk-device` (image 16MB):
+  `blk_selftest: PASS` di semua run (32768 sektor terdeteksi).
+- Boot tanpa device: `blk_selftest: FAIL (no device)` — graceful,
+  tidak panic, boot lanjut.
+
 ## Item 4: User mode + syscall interface — TODO

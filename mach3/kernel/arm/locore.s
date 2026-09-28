@@ -3,7 +3,7 @@
  *
  * QEMU -M virt: loaded at 0x40000000 (ELF e_entry = _start).
  * Sets up an identity-mapped L1 (RAM 0x40000000-0x44000000 as normal WB,
- * devices 0x08000000-0x0A000000 as device memory), enables the MMU,
+ * devices 0x08000000-0x0B000000 as device memory), enables the MMU,
  * then calls arm_init().
  *
  * Exception model: all handlers use SRS to build a trap frame on the
@@ -105,7 +105,7 @@ _reset:
 /* ------------------------------------------------------------------ */
 /* _build_l1: fill the 16KB L1 table.                                  */
 /*   RAM  0x40000000-0x44000000 : 64 x 1MB sections, normal WB, AP=rw   */
-/*   DEV  0x08000000-0x0A000000 : 32 x 1MB sections, device, XN, AP=rw  */
+/*   DEV  0x08000000-0x0B000000 : 33 x 1MB sections, device, XN, AP=rw  */
 /* Clobbers r0-r4.                                                     */
 /* ------------------------------------------------------------------ */
 _build_l1:
@@ -134,7 +134,7 @@ _build_l1:
 	 * (S=1, TEX=000, AP=0b11, XN=1, C=0, B=0, domain 0, section) */
 	ldr	r1, =0x08000000
 	ldr	r2, =0x10C12
-	mov	r3, #32			/* 32 sections = 32 MB */
+	mov	r3, #33			/* 33 sections = 33 MB (covers virtio-mmio @0x0a000000) */
 	add	r4, r0, r1, lsr #18
 1:	orr	r5, r1, r2
 	str	r5, [r4], #4

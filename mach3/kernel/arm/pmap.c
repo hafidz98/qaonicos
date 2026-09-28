@@ -2,7 +2,7 @@
  * mach3/kernel/arm/pmap.c -- ARMv7 pmap (identity-mapped kernel).
  *
  * The boot L1 (locore.s) section-maps all of RAM (0x40000000-0x44000000)
- * and the device window (0x08000000-0x0A000000) with VA == PA.
+ * and the device window (0x08000000-0x0B000000) with VA == PA.
  * This pmap therefore treats kernel virtual addresses as physical:
  * pmap_enter() is a no-op for in-RAM addresses, and the early
  * allocation path (pmap_virtual_space / pmap_next_page / pmap_free_pages)
@@ -319,7 +319,7 @@ pmap_enter(pmap_t pmap, vm_offset_t va, vm_offset_t pa,
 
 	if (va >= 0x40000000u && va < 0x44000000u)
 		return;		/* RAM: identity section-mapped */
-	if (va >= 0x08000000u && va < 0x0A000000u)
+	if (va >= 0x08000000u && va < 0x0B000000u)
 		return;		/* device window: section-mapped */
 
 	l1 = pmap->l1;
@@ -387,7 +387,7 @@ pmap_remove(pmap_t pmap, vm_offset_t s, vm_offset_t e)
 	for (; s < e; s += ARM_PGBYTES) {
 		if (s >= 0x40000000u && s < 0x44000000u)
 			continue;	/* identity: no L2 entry */
-		if (s >= 0x08000000u && s < 0x0A000000u)
+		if (s >= 0x08000000u && s < 0x0B000000u)
 			continue;	/* device window: no L2 entry */
 		l1i = s >> 20;
 		if ((l1[l1i] & L1_TYPE_MASK) != L1_TYPE_TABLE)
@@ -418,7 +418,7 @@ pmap_protect(pmap_t pmap, vm_offset_t s, vm_offset_t e, vm_prot_t prot)
 	for (; s < e; s += ARM_PGBYTES) {
 		if (s >= 0x40000000u && s < 0x44000000u)
 			continue;
-		if (s >= 0x08000000u && s < 0x0A000000u)
+		if (s >= 0x08000000u && s < 0x0B000000u)
 			continue;
 		l1i = s >> 20;
 		if ((l1[l1i] & L1_TYPE_MASK) != L1_TYPE_TABLE)
