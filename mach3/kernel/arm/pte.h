@@ -47,7 +47,8 @@
 #define	L2_SP_AP2		(1<<9)
 #define	L2_SP_S			(1<<10)
 #define	L2_SP_nG		(1<<11)
-#define	L2_SP_XN		(1<<0)	/* v7: XN is bit 0 for small pages */
+#define	L2_SP_XN		(1<<0)	/* NOT USED: would corrupt L1_TYPE bits[1:0];
+					   ARMv7 short-desc small pages have no XN bit */
 
 #define	ARM_L1_TABLE_ENTRIES	4096
 #define	ARM_L1_TABLE_SIZE	(ARM_L1_TABLE_ENTRIES*4)

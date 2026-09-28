@@ -42,8 +42,10 @@ void
 machine_init(void)
 {
 	extern void	fpu_init(void);
+	extern void	pmap_selftest(void);
 
 	fpu_init();
+	pmap_selftest();	/* M4: verify L2 small-page path */
 	cold = 0;
 }
 

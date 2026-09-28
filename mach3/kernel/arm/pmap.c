@@ -17,10 +17,12 @@
 #include <mach/machine/vm_param.h>
 #include <machine/pmap.h>
 #include <machine/pte.h>
+#include <machine/machspl.h>	/* splhigh/splx (M4) */
 #include <kern/assert.h>
 #include <vm/vm_page.h>
 #include <mach/vm_attributes.h>
 #include <vm/pmap.h>
+#include <vm/vm_kern.h>		/* kmem_alloc (M4: L2/L1 table allocation) */
 
 extern char _end[];
 extern vm_offset_t	avail_start, avail_end;	/* set by arm_init() */
@@ -39,6 +41,78 @@ static vm_offset_t	phys_pool_next;	/* next page to hand out */
 static vm_offset_t	virt_steal_next = VIRT_STEAL_START;	/* next steal addr */
 
 static struct pmap	kernel_pmap_store;
+
+/*
+ * M4: L2 page-table pool.
+ *
+ * Each 4KB page (from kmem_alloc) yields four 1KB L2 tables.
+ * In our identity-mapped kernel VA == PA and the RAM section mappings
+ * already cover kmem_alloc'd memory, so allocating here cannot recurse
+ * into pmap_enter.  Protected by splhigh (UP).
+ */
+static l2_entry_t	*l2_freelist = 0;
+
+static l2_entry_t *
+alloc_l2(void)
+{
+	l2_entry_t	*l2;
+	vm_offset_t	page;
+	kern_return_t	kr;
+	int		i;
+	spl_t		s;
+
+	s = splhigh();
+	if (l2_freelist != 0) {
+		l2 = l2_freelist;
+		l2_freelist = (l2_entry_t *)*l2;
+		(void) splx(s);
+		bzero((void *)l2, ARM_L2_TABLE_SIZE);
+		return l2;
+	}
+	(void) splx(s);
+
+	/* Refill outside the critical section (kmem_alloc may block). */
+	kr = kmem_alloc(kernel_map, &page, ARM_PGBYTES);
+	if (kr != KERN_SUCCESS)
+		panic("alloc_l2: kmem_alloc failed");
+	page = trunc_page(page);
+
+	s = splhigh();
+	for (i = 3; i >= 1; i--) {
+		l2 = (l2_entry_t *)(page + i * ARM_L2_TABLE_SIZE);
+		*l2 = (l2_entry_t)l2_freelist;
+		l2_freelist = l2;
+	}
+	(void) splx(s);
+
+	l2 = (l2_entry_t *)page;
+	bzero((void *)l2, ARM_L2_TABLE_SIZE);
+	return l2;
+}
+
+static void
+free_l2(l2_entry_t *l2)
+{
+	spl_t s;
+
+	s = splhigh();
+	*l2 = (l2_entry_t)l2_freelist;
+	l2_freelist = l2;
+	(void) splx(s);
+}
+
+/*
+ * tlb_invalidate_page: invalidate TLB entry for one page.
+ */
+static void
+tlb_invalidate_page(vm_offset_t va)
+{
+	__asm__ volatile (
+		"mcr p15, 0, %0, c8, c7, 1\n"	/* TLBIMVA */
+		"dsb\n"
+		"isb"
+		:: "r" (va) : "memory");
+}
 
 /*
  * pmap_bootstrap: adopt the boot L1, set up the physical page pool.
@@ -167,18 +241,37 @@ pmap_init(void)
 }
 
 /*
- * pmap_create: user pmaps share the boot L1 on this UP port
- * (no user address spaces in M3).
+ * pmap_create: allocate a private L1 (16KB-aligned), initialized as a
+ * copy of the kernel's L1 so kernel mappings (RAM sections, device
+ * window, vectors) are visible.  User mappings go into L2 tables under
+ * the low L1 entries.  (M4)
  */
 pmap_t
 pmap_create(vm_size_t size)
 {
-	pmap_t pmap;
+	pmap_t		pmap;
+	vm_offset_t	l1mem, l1aligned;
+	kern_return_t	kr;
 
 	pmap = (pmap_t)kalloc(sizeof *pmap);
 	if (pmap == PMAP_NULL)
 		return PMAP_NULL;
-	pmap->l1 = _l1_table;
+
+	/*
+	 * 16KB alignment: allocate 32KB and round up.
+	 * (kmem_alloc guarantees only page alignment.)
+	 */
+	kr = kmem_alloc(kernel_map, &l1mem, 2 * ARM_L1_TABLE_SIZE);
+	if (kr != KERN_SUCCESS) {
+		kfree((vm_offset_t)pmap, sizeof *pmap);
+		return PMAP_NULL;
+	}
+	l1mem = trunc_page(l1mem);
+	l1aligned = (l1mem + ARM_L1_TABLE_SIZE - 1) & ~(ARM_L1_TABLE_SIZE - 1);
+	bcopy((void *)_l1_table, (void *)l1aligned, ARM_L1_TABLE_SIZE);
+
+	pmap->l1 = (l1_entry_t *)l1aligned;
+	pmap->l1_alloc = l1mem;
 	pmap->ref_count = 1;
 	return pmap;
 }
@@ -188,8 +281,13 @@ pmap_destroy(pmap_t pmap)
 {
 	if (pmap == PMAP_NULL)
 		return;
-	if (--pmap->ref_count == 0 && pmap != kernel_pmap)
+	if (--pmap->ref_count == 0 && pmap != kernel_pmap) {
+		/* M4: L2 tables are leaked (pool); free the L1 allocation. */
+		if (pmap->l1_alloc != 0)
+			kmem_free(kernel_map, pmap->l1_alloc,
+				  2 * ARM_L1_TABLE_SIZE);
 		kfree((vm_offset_t)pmap, sizeof *pmap);
+	}
 }
 
 void
@@ -200,38 +298,164 @@ pmap_reference(pmap_t pmap)
 }
 
 /*
- * pmap_enter: identity map -- addresses in RAM/device window are already
- * valid.  Anything else is a port limitation in M3.
+ * pmap_enter: map va -> pa with 4KB small pages (M4).
+ *
+ * Addresses in the kernel identity range (RAM sections) or the device
+ * window are already section-mapped in every L1 (copied from the boot
+ * table): nothing to do.  All other addresses get an L2 page table
+ * under the pmap's private L1.
  */
 void
 pmap_enter(pmap_t pmap, vm_offset_t va, vm_offset_t pa,
 	   vm_prot_t prot, boolean_t wired)
 {
+	unsigned int	l1i, l2i, ap;
+	l1_entry_t	*l1, l1e;
+	l2_entry_t	*l2, pte;
+	spl_t		s;
+
+	va = trunc_page(va);
+	pa = trunc_page(pa);
+
 	if (va >= 0x40000000u && va < 0x44000000u)
-		return;		/* RAM: identity-mapped */
+		return;		/* RAM: identity section-mapped */
 	if (va >= 0x08000000u && va < 0x0A000000u)
 		return;		/* device window: section-mapped */
-	panic("pmap_enter: va 0x%x not identity-mapped (M3 limitation)",
-	      va);
+
+	l1 = pmap->l1;
+	l1i = va >> 20;
+
+	s = splhigh();
+	l1e = l1[l1i];
+	if ((l1e & L1_TYPE_MASK) != L1_TYPE_TABLE) {
+		/* Need an L2 table; allocate without holding spl. */
+		(void) splx(s);
+		l2 = alloc_l2();
+		s = splhigh();
+		l1e = l1[l1i];
+		if ((l1e & L1_TYPE_MASK) != L1_TYPE_TABLE) {
+			/*
+			 * L1 page-table descriptor: bits[31:10] = table
+			 * base (1KB-aligned), domain 0, type 0b01.
+			 * (VA == PA here, so the virtual address is
+			 * the physical table address.)
+			 */
+			l1[l1i] = ((unsigned int)l2 & ~0x3FFu)
+				| L1_SEC_DOMAIN(0) | L1_TYPE_TABLE;
+			__asm__ volatile ("dsb" ::: "memory");
+		} else {
+			/* Lost the race; recycle ours. */
+			free_l2(l2);
+		}
+	}
+	l2 = (l2_entry_t *)(l1[l1i] & ~0x3FFu);
+	l2i = (va >> 12) & 0xFFu;
+
+	/* Access permissions from prot. */
+	ap = (prot & VM_PROT_WRITE) ? AP_KRW_URW : AP_KRW_URO;
+
+	pte = (pa & ~0xFFFu)
+	    | L2_SP_S			/* shareable */
+	    | (0x1u << L2_SP_TEX_SHIFT)	/* TEX=001: write-back */
+	    | L2_SP_C | L2_SP_B
+	    | L2_SP_AP(ap)
+	    | L2_TYPE_SMALL;
+	/*
+	 * NOTE: no XN bit for ARMv7 short-descriptor small pages;
+	 * L2_SP_XN (bit 0) would corrupt the type field (bits[1:0]).
+	 * All user pages are executable in M4.
+	 */
+
+	l2[l2i] = pte;
+	tlb_invalidate_page(va);
+	(void) splx(s);
 }
 
 void
 pmap_remove(pmap_t pmap, vm_offset_t s, vm_offset_t e)
 {
-	/* identity-mapped: nothing to remove */
+	unsigned int	l1i, l2i;
+	l1_entry_t	*l1;
+	l2_entry_t	*l2;
+	spl_t		spl;
+
+	s = trunc_page(s);
+	e = round_page(e);
+	l1 = pmap->l1;
+
+	spl = splhigh();
+	for (; s < e; s += ARM_PGBYTES) {
+		if (s >= 0x40000000u && s < 0x44000000u)
+			continue;	/* identity: no L2 entry */
+		if (s >= 0x08000000u && s < 0x0A000000u)
+			continue;	/* device window: no L2 entry */
+		l1i = s >> 20;
+		if ((l1[l1i] & L1_TYPE_MASK) != L1_TYPE_TABLE)
+			continue;
+		l2 = (l2_entry_t *)(l1[l1i] & ~0x3FFu);
+		l2i = (s >> 12) & 0xFFu;
+		l2[l2i] = L2_TYPE_FAULT;
+		tlb_invalidate_page(s);
+	}
+	(void) splx(spl);
 }
 
 void
 pmap_protect(pmap_t pmap, vm_offset_t s, vm_offset_t e, vm_prot_t prot)
 {
-	/* identity-mapped: protection is fixed at section granularity */
+	unsigned int	l1i, l2i, ap;
+	l1_entry_t	*l1;
+	l2_entry_t	*l2, pte;
+	spl_t		spl;
+
+	s = trunc_page(s);
+	e = round_page(e);
+	l1 = pmap->l1;
+
+	ap = (prot & VM_PROT_WRITE) ? AP_KRW_URW : AP_KRW_URO;
+
+	spl = splhigh();
+	for (; s < e; s += ARM_PGBYTES) {
+		if (s >= 0x40000000u && s < 0x44000000u)
+			continue;
+		if (s >= 0x08000000u && s < 0x0A000000u)
+			continue;
+		l1i = s >> 20;
+		if ((l1[l1i] & L1_TYPE_MASK) != L1_TYPE_TABLE)
+			continue;
+		l2 = (l2_entry_t *)(l1[l1i] & ~0x3FFu);
+		l2i = (s >> 12) & 0xFFu;
+		pte = l2[l2i];
+		if ((pte & L2_TYPE_MASK) != L2_TYPE_SMALL)
+			continue;
+		pte &= ~L2_SP_AP(0x7u);
+		pte |= L2_SP_AP(ap);
+		l2[l2i] = pte;
+		tlb_invalidate_page(s);
+	}
+	(void) splx(spl);
 }
 
 vm_offset_t
 pmap_extract(pmap_t pmap, vm_offset_t va)
 {
-	/* identity map */
-	return va;
+	unsigned int	l1i, l2i;
+	l1_entry_t	l1e;
+	l2_entry_t	pte;
+
+	l1i = va >> 20;
+	l1e = pmap->l1[l1i];
+	switch (l1e & L1_TYPE_MASK) {
+	case L1_TYPE_SECTION:
+		return (l1e & 0xFFF00000u) | (va & 0x000FFFFFu);
+	case L1_TYPE_TABLE:
+		l2i = (va >> 12) & 0xFFu;
+		pte = ((l2_entry_t *)(l1e & ~0x3FFu))[l2i];
+		if ((pte & L2_TYPE_MASK) == L2_TYPE_SMALL)
+			return (pte & 0xFFFFF000u) | (va & 0xFFFu);
+		break;
+	}
+	return 0;
 }
 
 vm_offset_t
@@ -327,19 +551,91 @@ pmap_copy(pmap_t dst_pmap, pmap_t src_pmap, vm_offset_t dst_va,
 }
 
 /*
- * PMAP_ACTIVATE helpers (UP: TTBR0 never changes in M3).
+ * PMAP_ACTIVATE helpers (M4: TTBR0 switches between the shared kernel
+ * L1 and each user pmap's private L1).
  */
+static void
+set_ttbr0(l1_entry_t *l1)
+{
+	__asm__ volatile (
+		"orr	%0, %0, #0x08\n"	/* TTBR0[5:3] = 0b001 (outer WB), as in locore.s */
+		"mcr	p15, 0, %0, c2, c0, 0\n"	/* TTBR0 */
+		"mcr	p15, 0, %0, c8, c7, 0\n"	/* TLBIALL */
+		"dsb\n"
+		"isb"
+		:: "r" (l1) : "memory");
+}
+
 void
 arm_pmap_activate_kernel(void)
 {
+	set_ttbr0(_l1_table);
 }
 
 void
 arm_pmap_activate_user(pmap_t pmap)
 {
+	set_ttbr0((pmap != PMAP_NULL) ? pmap->l1 : _l1_table);
 }
 
 void
 arm_pmap_activate(pmap_t pmap)
 {
+	if (pmap == kernel_pmap)
+		arm_pmap_activate_kernel();
+	else
+		arm_pmap_activate_user(pmap);
+}
+
+/*
+ * pmap_selftest (M4): verify the L2 small-page path on every boot.
+ * Creates a user pmap, maps a page at a low VA, switches TTBR0 to the
+ * user L1, writes/reads through the mapping, switches back, and cleans
+ * up.  Panics on any mismatch.
+ */
+void
+pmap_selftest(void)
+{
+	pmap_t		pmap;
+	vm_offset_t	pa, va = 0x100000u;
+	kern_return_t	kr;
+	unsigned int	magic = 0x4D340001u, readback;
+	spl_t		s;
+
+	printf("pmap_selftest: mapping 4KB page...\n");
+
+	kr = kmem_alloc(kernel_map, &pa, ARM_PGBYTES);
+	if (kr != KERN_SUCCESS)
+		panic("pmap_selftest: kmem_alloc failed");
+	pa = trunc_page(pa);
+
+	pmap = pmap_create(0);
+	if (pmap == PMAP_NULL)
+		panic("pmap_selftest: pmap_create failed");
+
+	pmap_enter(pmap, va, pa, VM_PROT_READ | VM_PROT_WRITE, FALSE);
+	if (pmap_extract(pmap, va) != pa)
+		panic("pmap_selftest: extract mismatch (got 0x%x, want 0x%x)",
+		      pmap_extract(pmap, va), pa);
+
+	/* Access through the user L1 with IRQs off. */
+	s = splhigh();
+	arm_pmap_activate_user(pmap);
+	*(volatile unsigned int *)va = magic;
+	readback = *(volatile unsigned int *)va;
+	arm_pmap_activate_kernel();
+	(void) splx(s);
+
+	if (readback != magic)
+		panic("pmap_selftest: readback 0x%x != 0x%x", readback, magic);
+
+	pmap_remove(pmap, va, va + ARM_PGBYTES);
+	if (pmap_extract(pmap, va) != 0)
+		panic("pmap_selftest: remove failed");
+
+	pmap_protect(pmap, va, va + ARM_PGBYTES, VM_PROT_READ);
+	pmap_destroy(pmap);
+	kmem_free(kernel_map, pa, ARM_PGBYTES);
+
+	printf("pmap_selftest: PASS (4KB L2 mapping, TTBR0 switch, R/W)\n");
 }

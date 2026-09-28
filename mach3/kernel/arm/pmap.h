@@ -25,6 +25,7 @@
 
 struct pmap {
 	l1_entry_t	*l1;		/* L1 table (kernel: shared boot L1) */
+	vm_offset_t	l1_alloc;	/* base of L1 allocation (for free; 0 = static) */
 	int		ref_count;
 	decl_simple_lock_data(,lock)
 	struct pmap_statistics stats;
