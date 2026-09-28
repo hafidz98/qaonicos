@@ -13,7 +13,7 @@
  * Bare-metal, tanpa libc. Di-link di UMON_PROG_VA (0x10060000) via
  * umon.ld, di-embed sebagai blob -> umon_img.
  */
-#include "ulib.h"
+#include "ulib/ulib.h"
 #include "tui.h"
 
 static struct qaon_stat st;
@@ -144,10 +144,14 @@ static void draw_frame(int nte)
 
     /* Baris 3-6: panel statistik. */
     tui_at(3u, 2u, "CPU  ");
-    tui_bar(62u, st.cpu_pct);
-    tui_puts(" ");
-    tui_putu(st.cpu_pct);
-    tui_puts("%");
+    if (st.cpu_pct == QAON_UNKNOWN) {
+        tui_puts("n/a (belum diukur di port ini)");
+    } else {
+        tui_bar(62u, st.cpu_pct);
+        tui_puts(" ");
+        tui_putu(st.cpu_pct);
+        tui_puts("%");
+    }
 
     mem_pct = st.mem_total_kb ?
         (st.mem_used_kb * 100u / st.mem_total_kb) : 0u;
@@ -161,17 +165,23 @@ static void draw_frame(int nte)
     tui_putu(st.mem_total_kb);
     tui_puts(" KB");
 
-    blk_pct = st.blk_total_sec ?
-        (st.blk_used_sec * 100u / st.blk_total_sec) : 0u;
     tui_at(5u, 2u, "DISK ");
-    tui_bar(62u, blk_pct);
-    tui_puts(" ");
-    tui_putu(blk_pct);
-    tui_puts("% ");
-    tui_putu(st.blk_used_sec);
-    tui_puts("/");
-    tui_putu(st.blk_total_sec);
-    tui_puts(" sec");
+    if (st.blk_used_sec == QAON_UNKNOWN) {
+        tui_puts("n/a (belum ada FS) /");
+        tui_putu(st.blk_total_sec);
+        tui_puts(" sec total");
+    } else {
+        blk_pct = st.blk_total_sec ?
+            (st.blk_used_sec * 100u / st.blk_total_sec) : 0u;
+        tui_bar(62u, blk_pct);
+        tui_puts(" ");
+        tui_putu(blk_pct);
+        tui_puts("% ");
+        tui_putu(st.blk_used_sec);
+        tui_puts("/");
+        tui_putu(st.blk_total_sec);
+        tui_puts(" sec");
+    }
 
     tui_at(6u, 2u, "NET  RX ");
     tui_putu(st.net_rx_kb);

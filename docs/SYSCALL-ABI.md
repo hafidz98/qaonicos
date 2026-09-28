@@ -1,4 +1,4 @@
-# QaonicOS Syscall ABI (Fase B, kernel Mach 3)
+# QaonicOS Syscall ABI (Fase B/C, kernel Mach 3)
 
 Konvensi pemanggilan (ARM, EABI-like):
 
@@ -18,41 +18,76 @@ nomor di bawah pada Fase B.
 
 | No | Nama | Argumen | Kembali | Keterangan |
 |---|---|---|---|---|
-| 20 | `SYS_WRITE` | r0=fd (1/2 konsol), r1=buf, r2=len | byte tertulis / `-1` | Tulis ke UART. Buffer harus dalam window VA user `[0x100000, 0x130000)` |
+| 20 | `SYS_WRITE` | r0=fd (1/2 konsol, ≥3 file), r1=buf, r2=len | byte tertulis / `-1` | Tulis ke UART / ramfs. Buffer harus dalam window VA user `[0x100000, 0x130000)` |
 | 21 | `SYS_YIELD` | — | `0` | Kooperatif: tunggu 1 tick timer 100 Hz (wfi, IRQ hidup) |
-| 22 | `SYS_EXIT` | r0=code | tidak kembali | Akhiri task user; kernel lanjut halt |
+| 22 | `SYS_EXIT` | r0=code | tidak kembali | Akhiri task user; kernel lanjut ke program berikutnya |
 | 24 | `SYS_SBRK` | r0=inkremen byte | brk lama / `(void*)-1` | `incr=0` = query. Heap 64 KB pre-alloc per task |
 
-## Nomor dicadangkan (Fase C/D)
+## Syscall file + ramfs (Fase C ✅)
+
+| No | Nama | Argumen | Kembali | Keterangan |
+|---|---|---|---|---|
+| 30 | `SYS_OPEN` | r0=path, r1=flags | fd ≥3 / `-1` | Flag: `O_RDONLY=0`, `O_WRONLY=1`, `O_RDWR=2`, `O_CREAT=0x40` |
+| 31 | `SYS_READ` | r0=fd, r1=buf, r2=len | byte / `-1` | fd 0 → 0 (EOF); fd 1/2 → `-1`; fd ≥3 → ramfs |
+| 32 | `SYS_CLOSE` | r0=fd | `0` / `-1` | fd 0/1/2 → `-1` |
+| 33 | `SYS_LS` | r0=buf, r1=max | jumlah file / `-1` | Format `"nama\n"` per file |
+| 34 | `SYS_DELETE` | r0=path | `0` / `-1` | fd terbuka ke file tsb jadi basi (gen counter) |
+
+ramfs: flat, 16 file × 64 KB, tabel fd per-task (16 fd, diindeks
+pointer Mach task). Sinkronisasi via `splhigh()`/`splx()`.
+
+## Syscall monitor (Fase C ✅)
+
+| No | Nama | Argumen | Kembali | Keterangan |
+|---|---|---|---|---|
+| 57 | `SYS_STAT` | r0=buf, r1=len (≥36) | `0` / `-1` | Isi `struct qaon_stat` (lihat bawah) |
+| 58 | `SYS_TLIST` | r0=buf, r1=max_entri | jumlah / `-1` | Isi array `struct qaon_tentry` |
+| 59 | `SYS_READ_CONSOLE` | — | byte 0–255 / `-1` | UART non-blocking (polled) |
+
+`struct qaon_stat` (36 byte): `uptime_ms` (real, tick×10),
+`cpu_pct`, `mem_used_kb` (real), `mem_total_kb` (real, 65536),
+`blk_total_sec` (real), `blk_used_sec`, `net_rx_kb`, `net_tx_kb`,
+`nthreads` (real). Field yang belum tersedia diisi
+`QAON_UNKNOWN` (`0xFFFFFFFF`): `cpu_pct` (belum ada idle accounting),
+`blk_used_sec` (belum ada FS di disk); net = 0 (belum ada driver).
+
+`struct qaon_tentry` (12 byte): `id`, `state` (`0`=RUNNABLE,
+`2`=EXITED), `user` (`1`). Hanya task user yang diluncurkan saat
+boot (init, ucat, uls, uecho, umon); thread kernel/MI belum
+terdaftar (Fase D).
+
+## Nomor dicadangkan (Fase D)
 
 | Rentang | Peruntukan | Status |
 |---|---|---|
 | 10–12 | `SYS_SEND` / `SYS_RECV` / `SYS_RPC` (IPC) | Fase D |
 | 23 | `SYS_RPC_USER` | Fase D |
-| 30–34 | `SYS_OPEN` / `READ` / `CLOSE` / `LS` / `DELETE` (ramfs) | Fase C |
 | 40–41 | `SYS_GPIO_SET` / `SYS_GPIO_GET` | Fase D |
 | 50–51 | `SYS_SD_READ` / `SYS_SD_WRITE` | Fase D |
 | 52–56 | `SYS_MKDIR` / `FAT_WRITE` / `FAT_READ` / `FAT_DELETE` / `READDIR` | Fase D |
-| 57–59 | `SYS_STAT` / `SYS_TLIST` / `SYS_READ_CONSOLE` | Fase D |
 
-## Layout memori user (Fase B)
+## Layout memori user (Fase B/C)
 
 | VA | Isi |
 |---|---|
-| `0x100000` | Kode init (di-embed dari `user/init.c`, N halaman) |
+| `0x100000` | Kode program (di-embed, N halaman; tiap program task sendiri) |
 | `0x110000` | Stack user 1 halaman (SP awal `0x111000`) |
 | `0x120000`–`0x130000` | Heap sbrk, 16 halaman (64 KB), zeroed |
 
-Task user berjalan di **USR mode (PL0)**, genuinely unprivileged.
-Kernel tetap ter-map (identity, priv-only) di L1 user sehingga trap
-handler jalan normal; fault user (abort/undef) hanya membunuh task
-tersebut, bukan panic kernel.
+Program user diluncurkan **berurutan** saat boot: `init` (setup
+ramfs) → `ucat` → `uls` → `uecho` → `umon` (one-shot). Koordinasi
+antar program via file sentinel ramfs (tanpa argv/spawn — shell
+paling akhir). Tiap task berjalan di **USR mode (PL0)**, genuinely
+unprivileged. Kernel tetap ter-map (identity, priv-only) di L1 user
+sehingga trap handler jalan normal; fault user (abort/undef) hanya
+membunuh task tersebut, bukan panic kernel.
 
-## Batasan Fase B (jujur)
+## Batasan Fase C (jujur)
 
-- Validasi buffer `SYS_WRITE` = cek range VA, bukan walk page table.
-- Satu task user (init); `brk` disimpan per-task di `struct user_task`
-  (siap multi-task di Fase C).
-- `SYS_YIELD` menunggu 1 tick; tidak ada penjadwalan antar task user
-  (scheduler masih kooperatif).
-- `hello.c` hanya cek build; yang diluncurkan saat boot adalah `init`.
+- Validasi buffer = cek range VA, bukan walk page table.
+- `SYS_YIELD` menunggu 1 tick; tidak ada preemption antar task user
+  (scheduler masih kooperatif; program jalan satu per satu).
+- Trampoline `user_exit_trampoline` me-restore **semua** register
+  callee-saved (r4–r11) — bug Fase C awal hanya me-restore r4,
+  merusak variabel compiler di r6 setelah program pertama exit.
+- `hello.c` hanya cek build; tidak diluncurkan saat boot.

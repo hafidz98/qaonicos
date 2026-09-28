@@ -18,8 +18,14 @@
 	.globl user_enter_test
 	.type user_enter_test, %function
 user_enter_test:
-	/* r0 = user_sp, r1 = user_pc */
-	push	{r4, lr}
+	/* r0 = user_sp, r1 = user_pc.
+	 * Fase C: save/restore SEMUA register callee-saved (r4-r11),
+	 * bukan hanya r4.  Trampoline bukan return normal — ia harus
+	 * me-restore semuanya agar compiler bebas menaruh variabel
+	 * live di r5-r11 melewati panggilan ini.
+	 * Catatan: 10 register (40 byte) agar stack tetap 8-byte
+	 * aligned sesuai ARM EABI (9 register = 36 byte = misaligned!). */
+	push	{r4-r12, lr}
 	ldr	r4, =_user_test_ksp
 	str	sp, [r4]		/* save kernel sp (after push) */
 
@@ -49,11 +55,13 @@ user_enter_test:
 	.globl user_exit_trampoline
 	.type user_exit_trampoline, %function
 user_exit_trampoline:
-	/* r0 = exit/fault code.  SVC mode, IRQs on (spsr was 0x13). */
+	/* r0 = exit/fault code.  SVC mode, IRQs on (spsr was 0x13).
+	 * Restore semua callee-saved (simetris dengan push di atas:
+	 * 10 register agar 8-byte aligned). */
 	ldr	r1, =_user_test_ksp
 	ldr	sp, [r1]		/* restore test's kernel sp */
 	mov	r2, r0			/* save code across pop */
-	pop	{r4, lr}
+	pop	{r4-r12, lr}
 	mov	r0, r2
 	bx	lr			/* return to test, r0 = code */
 	.size user_exit_trampoline, .-user_exit_trampoline

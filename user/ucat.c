@@ -8,7 +8,7 @@
  * Alur: tunggu /.motd_ready (init selesai menulis) -> baca
  * /motd.txt -> tulis ke console (fd 1) -> sentinel /.ucat_done.
  */
-#include "ulib.h"
+#include "ulib/ulib.h"
 
 __attribute__((section(".text.start")))
 void _start(void)

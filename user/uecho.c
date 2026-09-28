@@ -9,7 +9,7 @@
  * Alur: tulis UECHO_STR ke /echo.txt -> baca balik -> verifikasi
  * byte-exact -> sentinel /.uecho_done (hanya bila verifikasi lolos).
  */
-#include "ulib.h"
+#include "ulib/ulib.h"
 
 __attribute__((section(".text.start")))
 void _start(void)

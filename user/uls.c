@@ -14,7 +14,7 @@
  * lalu panjang output dihitung dengan scan terbatas (nama file tak
  * mengandung NUL, jadi NUL pertama = akhir data).
  */
-#include "ulib.h"
+#include "ulib/ulib.h"
 
 __attribute__((section(".text.start")))
 void _start(void)

@@ -7,7 +7,7 @@
  * jadi satu frame tak terpotong thread lain).
  */
 #include "tui.h"
-#include "ulib.h"
+#include "ulib/ulib.h"
 
 #define TUI_OB_SZ 2048u
 

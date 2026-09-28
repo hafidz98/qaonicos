@@ -109,10 +109,15 @@ arm_trap_handler(struct arm_trap_frame *frame, int trapno)
 			timer_ticks++;	/* M4: verification counter */
 			/* M5 Phase 4: scheduler demo runs from startrtclock
 			 * (thread context), not from IRQ.  Timer just ticks. */
+			gic_eoi(irq);
 		} else if (irq != 1023) {
 			printf("arm_trap: unexpected irq %u\n", irq);
+			gic_eoi(irq);
 		}
-		gic_eoi(irq);
+		/* Fase C: jangan EOI untuk spurious (1023).  Menulis
+		 * EOIR=1023 saat tidak ada interupsi aktif adalah
+		 * UNPREDICTABLE pada GICv2 (implementasi boleh
+		 * mengabaikan, tapi jangan andalkan). */
 		return;
 	}
 
