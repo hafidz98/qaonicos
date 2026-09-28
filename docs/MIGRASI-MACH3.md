@@ -146,3 +146,42 @@ cache ops, atau virtio). Perlu investigasi dengan GDB stub QEMU.
 
 **Catatan**: ping ke 10.0.2.2 BERHASIL (ICMP RX path OK). Bug TCP asli
 (SYN via hostfwd tak sampai) belum bisa diuji karena blocker ini.
+
+---
+
+### Investigasi GDB stub (2026-09-28, subagent qaonic-mach3-tcpfix)
+
+**Crash signatures** (12+ run, semua non-deterministik):
+- `undefined instruction at pc=0x40296eb8` (= `_user_test_ksp`, .bss)
+- `undefined instruction at pc=0x40298b92` (.bss, odd address)
+- `undefined instruction at pc=0x417e9800` / `0x41816000` (heap)
+- `prefetch abort: pc=0x0` / `0x4` / `0x8` / `0x70`
+- `prefetch abort: pc=0x102960` / `0x120000` (user VA!)
+- `data abort: pc=0x4000987c dfar=0x400537ea dfsr=0x1` (alignment fault,
+  r6 korup 0x40298a04 → 0x400537ea = nilai lama r5)
+
+**Temuan GDB** (break di `user_exit_trampoline`, `panic`, trap handler):
+- `_user_test_ksp` VALID (0x40078f78 / 0x417c0f78, alamat stack sah),
+  hanya ditulis 2x oleh `str sp,[r4]` di `user_enter_test`.
+- Save area 40-byte VALID saat pre-pop (lr = 0x4000bd58, alamat kode sah).
+- Crash terjadi SETELAH trampoline kembali (pesan PASS terpotong
+  mid-printf), atau di lokasi lain (sched_selftest, net_main).
+- PABT trap frame: spsr=0x411c0fd3 (SVC), sp 4 byte short dari ekspektasi
+  post-pop → pop {r4-r12,lr} seolah tak komplit, atau sp korup.
+- r6 (callee-saved, live across call) korup oleh thread_create/
+  thread_start/thread_doswapin — nilai baru = nilai lama r5.
+
+**Hipotesis yang disingkirkan via test build** (6 run per konfigurasi):
+- Timer IRQ dimatikan: 6/6 TETAP crash → bukan IRQ.
+- blk+gpio+fat32 dimatikan: 6/6 TETAP crash → bukan driver Fase D.
+- QEMU cmdline lama (1 blk, tanpa net): 6/6 TETAP crash → bukan device.
+- D-cache dimatikan: 6/6 TETAP crash → bukan koherensi D-cache.
+- I-cache + D-cache dimatikan: 3/3 TETAP crash → bukan I-cache.
+- `set_ttbr0` sudah TLBIALL → bukan TLB stale.
+
+**Kesimpulan sementara**: bug di CORE kernel (bukan kode Fase D),
+dipicu oleh perubahan layout binary (Fase C 10/10 stabil, kode
+user_selftest identik). Kandidat: buffer overflow laten yang kini
+mengenai korban kritis, atau bug TCG QEMU 8.2.2 pada `ldmia`/`stmia`
+dengan writeback di bawah interupsi. Perlu: (1) ASan-like poisoning,
+(2) coba QEMU versi lain, atau (3) bisect instruksi via singlestep.
