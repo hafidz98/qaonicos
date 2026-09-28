@@ -147,57 +147,61 @@ _build_l1:
 /* ------------------------------------------------------------------ */
 /* Exception handlers.  Build trap frame on SVC stack via SRS,         */
 /* then call arm_trap_handler(frame, trapno).                          */
-/* Frame layout (struct arm_trap_frame): r0-r12, lr (return addr), spsr */
+/* Frame layout (struct arm_trap_frame): r0-r12, svc_lr, lr (ret addr), spsr.
+ * Fase D fix: lr_svc ikut di-push agar "bl arm_trap_handler" tidak
+ * merusaknya.  Tanpa ini, IRQ yang menyela kode kernel (mis. uart_putc,
+ * leaf function yang return via "bx lr") membuat "bx lr" lompat ke
+ * alamat sampah -> prefetch abort non-deterministik. */
 /* ------------------------------------------------------------------ */
 _undef_handler:
 	sub	lr, lr, #4
 	srsdb	sp!, #0x13
 	cps	#0x13
-	push	{r0-r12}
+	push	{r0-r12, lr}
 	mov	r0, sp
 	mov	r1, #TRAP_UNDEF
 	bl	arm_trap_handler
-	pop	{r0-r12}
+	pop	{r0-r12, lr}
 	rfefd	sp!
 
 _svc_handler:
 	/* No lr adjustment: on SVC, lr = address after the svc already. */
 	srsdb	sp!, #0x13
 	cps	#0x13
-	push	{r0-r12}
+	push	{r0-r12, lr}
 	mov	r0, sp
 	mov	r1, #TRAP_SVC
 	bl	arm_trap_handler
-	pop	{r0-r12}
+	pop	{r0-r12, lr}
 	rfefd	sp!
 
 _pabt_handler:
 	sub	lr, lr, #4
 	srsdb	sp!, #0x13
 	cps	#0x13
-	push	{r0-r12}
+	push	{r0-r12, lr}
 	mov	r0, sp
 	mov	r1, #TRAP_PABT
 	bl	arm_trap_handler
-	pop	{r0-r12}
+	pop	{r0-r12, lr}
 	rfefd	sp!
 
 _dabt_handler:
 	sub	lr, lr, #8
 	srsdb	sp!, #0x13
 	cps	#0x13
-	push	{r0-r12}
+	push	{r0-r12, lr}
 	mov	r0, sp
 	mov	r1, #TRAP_DABT
 	bl	arm_trap_handler
-	pop	{r0-r12}
+	pop	{r0-r12, lr}
 	rfefd	sp!
 
 _irq_handler:
 	sub	lr, lr, #4
 	srsdb	sp!, #0x13
 	cps	#0x13
-	push	{r0-r12}
+	push	{r0-r12, lr}
 	mov	r0, sp
 	mov	r1, #TRAP_IRQ
 	bl	arm_trap_handler
@@ -210,18 +214,18 @@ _irq_handler:
 	ldr	r0, [r0]		/* need_ast[0] (UP) */
 	cmp	r0, #0
 	blne	ast_taken
-	pop	{r0-r12}
+	pop	{r0-r12, lr}
 	rfefd	sp!
 
 _fiq_handler:
 	sub	lr, lr, #4
 	srsdb	sp!, #0x13
 	cps	#0x13
-	push	{r0-r12}
+	push	{r0-r12, lr}
 	mov	r0, sp
 	mov	r1, #TRAP_FIQ
 	bl	arm_trap_handler
-	pop	{r0-r12}
+	pop	{r0-r12, lr}
 	rfefd	sp!
 
 /* ------------------------------------------------------------------ */

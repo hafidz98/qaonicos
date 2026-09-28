@@ -179,9 +179,24 @@ cache ops, atau virtio). Perlu investigasi dengan GDB stub QEMU.
 - I-cache + D-cache dimatikan: 3/3 TETAP crash → bukan I-cache.
 - `set_ttbr0` sudah TLBIALL → bukan TLB stale.
 
-**Kesimpulan sementara**: bug di CORE kernel (bukan kode Fase D),
-dipicu oleh perubahan layout binary (Fase C 10/10 stabil, kode
-user_selftest identik). Kandidat: buffer overflow laten yang kini
-mengenai korban kritis, atau bug TCG QEMU 8.2.2 pada `ldmia`/`stmia`
-dengan writeback di bawah interupsi. Perlu: (1) ASan-like poisoning,
-(2) coba QEMU versi lain, atau (3) bisect instruksi via singlestep.
+**ROOT CAUSE KETEMU (2026-09-28)**: `_irq_handler` (dan 5 handler
+lain) di `locore.s` tidak menyimpan `lr_svc` sebelum `bl
+arm_trap_handler`.  `bl` selalu menimpa `lr`, sehingga kalau IRQ
+menyela kode kernel yang sedang di dalam leaf function (mis.
+`uart_putc`, return via `bx lr`), `lr` yang kembali sudah korup
+(menunjuk ke tengah `_irq_handler`).  `bx lr` lalu mengeksekusi
+`pop {r0-r12}` + `rfefd sp!` dengan stack yang salah -> `pc` =
+sampah (kebetulan user VA 0x102960 sekali waktu) -> prefetch abort
+non-deterministik.  Cocok dengan semua signature: crash di tengah
+`printf`, `r6` <- nilai lama `r5` (off-by-one sejenis), dan fakta
+bahwa menonaktifkan SATU sumber IRQ tak cukup (timer DAN virtio-blk
+sama-sama bisa memicu).
+
+**Bisect yang menentukan**: caf52ad 10/10 stabil; 281b5ea 9/10
+(1 crash: `launch_uprog: creating taspanic: prefetch abort:
+pc=0x102960`); setelah fix 10/10 bersih.
+
+**Fix**: semua 6 exception handler kini `push {r0-r12, lr}` /
+`pop {r0-r12, lr}`; `struct arm_trap_frame` tambah field `svc_lr`
+(di antara `r[13]` dan `lr`).  Akses `frame->lr`/`frame->spsr`
+yang ada tetap benar.

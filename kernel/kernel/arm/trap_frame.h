@@ -10,6 +10,8 @@
 
 struct arm_trap_frame {
 	unsigned int	r[13];	/* r0-r12 */
+	unsigned int	svc_lr;	/* SVC-mode lr saat trap (di-push agar tak
+				 * dirusak "bl arm_trap_handler"; Fase D fix) */
 	unsigned int	lr;	/* adjusted return address */
 	unsigned int	spsr;
 };
