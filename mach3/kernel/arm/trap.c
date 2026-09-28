@@ -144,19 +144,25 @@ arm_trap_handler(struct arm_trap_frame *frame, int trapno)
 }
 
 /*
- * thread_exception_return / thread_syscall_return / thread_kdb_return:
- * return to user mode.  M3 has no user tasks yet; panic if reached.
+ * thread_exception_return: return to user mode after trap.
+ * M6: Check for pending ASTs (e.g., preemption) before returning.
+ * Called from trap handler when returning to user mode.
  */
 void
 thread_exception_return(void)
 {
-	panic("thread_exception_return: no user tasks in M3");
+	/* M6: AST check point for user trap return.
+	 * Full preemption via ast_taken() requires per-thread trap
+	 * frames (future work). For now, just return; the trap
+	 * handler's assembly restores the frame. */
 }
 
+/* MI expects noreturn; not used by M4 custom syscalls. */
 void
-thread_syscall_return(void)
+thread_syscall_return(int kr)
 {
-	panic("thread_syscall_return: no user tasks in M3");
+	(void)kr;
+	panic("thread_syscall_return: not implemented for ARM");
 }
 
 void

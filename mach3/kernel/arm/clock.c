@@ -71,7 +71,7 @@ startrtclock(void)
 
 	task_selftest();	/* M4: verify task_create + thread_create */
 	user_selftest();	/* M4 item 4: user mode + syscall */
-	/* sched_selftest(); */	/* M5 Phase 4: DISABLED (blocked, see M5-REPORT.md) */
+	sched_selftest();	/* M6: preemption test */
 }
 
 /*

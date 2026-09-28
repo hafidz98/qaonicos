@@ -2,8 +2,8 @@
  * mach3/kernel/arm/context.s -- ARM context switch primitives.
  *
  * struct pcb layout (machine/thread.h):
- *   0x00: iss (struct arm_saved_state = 23 words)
- *   0x5C: kss (struct arm_kernel_state: r4-r11, sp, lr)
+ *   0x00: iss (struct arm_saved_state = 20 words = 80 bytes)
+ *   0x50: kss (struct arm_kernel_state: r4-r11, sp, lr)
  *
  * pcb.c's switch_context() extracts pcbs and calls:
  *   thread_t __Switch_context(pcb_t old_pcb, continuation_t cont,
@@ -13,7 +13,7 @@
 	.text
 	.align 2
 
-	.set PCB_KSS, 92
+	.set PCB_KSS, 80	/* offsetof(struct pcb, kss) = sizeof(iss) = 20*4 */
 
 /*
  * __Switch_context: switch kernel context.

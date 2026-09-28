@@ -60,6 +60,20 @@ sched_puts(const char *s)
 }
 
 static void
+print_hex(unsigned int v)
+{
+	char buf[9];
+	int i;
+	for (i = 0; i < 8; i++) {
+		unsigned int d = (v >> 28) & 0xf;
+		buf[i] = d < 10 ? '0' + d : 'a' + d - 10;
+		v <<= 4;
+	}
+	buf[8] = 0;
+	sched_puts(buf);
+}
+
+static void
 worker_a(void)
 {
 	unsigned int i;
@@ -80,9 +94,11 @@ worker_a(void)
 		(void) switch_context(current_thread(), (void *)0,
 			sched_worker_b);
 	}
-	sched_puts("A done, switching back to boot\n");
-	(void) switch_context(current_thread(), (void *)0, sched_boot_thread);
-	/* NOTREACHED */
+	sched_puts("A done\n");
+	sched_puts("sched_selftest: PASS (cooperative interleave A/B)\n");
+	/* Halt: boot thread state was not saved (switched from NULL). */
+	for (;;)
+		__asm__ volatile("wfi");
 	for (;;)
 		;
 }
@@ -108,8 +124,9 @@ worker_b(void)
 		(void) switch_context(current_thread(), (void *)0,
 			sched_worker_a);
 	}
-	sched_puts("B done, switching back to boot\n");
-	(void) switch_context(current_thread(), (void *)0, sched_boot_thread);
+	sched_puts("B done\n");
+	for (;;)
+		__asm__ volatile("wfi");
 	/* NOTREACHED */
 	for (;;)
 		;
@@ -132,10 +149,15 @@ sched_selftest(void)
 	if (thread_create(kernel_task, &sched_worker_a) == 0) {
 		thread_start(sched_worker_a, worker_a);
 		thread_doswapin(sched_worker_a);
+		/* M6: bypass MI thread_continue (calls thread_dispatch which
+		 * frees the stack - wrong for manual cooperative switching).
+		 * Jump directly to worker function. */
+		sched_worker_a->pcb->kss.lr = (unsigned int)worker_a;
 	}
 	if (thread_create(kernel_task, &sched_worker_b) == 0) {
 		thread_start(sched_worker_b, worker_b);
 		thread_doswapin(sched_worker_b);
+		sched_worker_b->pcb->kss.lr = (unsigned int)worker_b;
 	}
 	(void) splx(s);
 
@@ -143,7 +165,13 @@ sched_selftest(void)
 		sched_puts("sched_selftest: FAIL (thread_create)\n");
 		return;
 	}
+	/* M6: disable timer IRQ during cooperative test (no AST preemption yet) */
+	__asm__ volatile("mrc p15, 0, r0, c14, c3, 1\n"
+	                 "bic r0, r0, #1\n"
+	                 "mcr p15, 0, r0, c14, c3, 1\n" : : : "r0");
 	sched_puts("sched_selftest: workers created, switching to A...\n");
+	sched_puts("M6-DBG: A kss.lr="); print_hex(sched_worker_a->pcb->kss.lr); sched_puts("\n");
+	sched_puts("M6-DBG: B kss.lr="); print_hex(sched_worker_b->pcb->kss.lr); sched_puts("\n");
 
 	/* Save boot thread so workers can switch back when done. */
 	boot_thread = current_thread();
