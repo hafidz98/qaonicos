@@ -224,3 +224,80 @@ int u_sd_write(unsigned sector, const unsigned char *buf)
         : "r0", "r1", "r7", "lr", "memory", "cc");
     return ret;
 }
+
+/* Fase 16: filesystem FAT32 di /sd. */
+int u_mkdir(const char *path)
+{
+    int ret;
+    __asm__ volatile(
+        "mov r0, %1\n\t"
+        "mov r7, #52\n\t"          /* SYS_MKDIR */
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        : "r"(path)
+        : "r0", "r7", "lr", "memory", "cc");
+    return ret;
+}
+
+int u_fat_write(const char *path, const unsigned char *buf, unsigned len)
+{
+    int ret;
+    __asm__ volatile(
+        "mov r0, %1\n\t"
+        "mov r1, %2\n\t"
+        "mov r2, %3\n\t"
+        "mov r7, #53\n\t"          /* SYS_FAT_WRITE */
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        : "r"(path), "r"(buf), "r"(len)
+        : "r0", "r1", "r2", "r7", "lr", "memory", "cc");
+    return ret;
+}
+
+int u_fat_read(const char *path, unsigned char *buf, unsigned max)
+{
+    int ret;
+    __asm__ volatile(
+        "mov r0, %1\n\t"
+        "mov r1, %2\n\t"
+        "mov r2, %3\n\t"
+        "mov r7, #54\n\t"          /* SYS_FAT_READ */
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        : "r"(path), "r"(buf), "r"(max)
+        : "r0", "r1", "r2", "r7", "lr", "memory", "cc");
+    return ret;
+}
+
+int u_fat_delete(const char *path)
+{
+    int ret;
+    __asm__ volatile(
+        "mov r0, %1\n\t"
+        "mov r7, #55\n\t"          /* SYS_FAT_DELETE */
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        : "r"(path)
+        : "r0", "r7", "lr", "memory", "cc");
+    return ret;
+}
+
+int u_readdir(const char *path, char *buf, unsigned max)
+{
+    int ret;
+    __asm__ volatile(
+        "mov r0, %1\n\t"
+        "mov r1, %2\n\t"
+        "mov r2, %3\n\t"
+        "mov r7, #56\n\t"          /* SYS_READDIR */
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        : "r"(path), "r"(buf), "r"(max)
+        : "r0", "r1", "r2", "r7", "lr", "memory", "cc");
+    return ret;
+}

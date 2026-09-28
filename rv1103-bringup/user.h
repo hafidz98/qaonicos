@@ -91,6 +91,17 @@
 #define USD_STACK_TOP   0x10056000u
 #define USD_STACK_PAGES 2u
 
+/* Fase 16: utilitas uji FAT32 userspace (user/ufs.c). Di dalam demand
+ * range, tidak tabrakan dengan region yang sudah ada:
+ *   0x10058000 ufs        (4 halaman R+X; di atas stack usd yang
+ *                          berakhir di 0x10056000)
+ *   0x1005C000 stack ufs  (2 halaman RW, top 0x1005E000; di bawah
+ *                          USER_BRK_START 0x10060000) */
+#define UFS_PROG_VA     0x10058000u
+#define UFS_PROG_PAGES  4u
+#define UFS_STACK_TOP   0x1005E000u
+#define UFS_STACK_PAGES 2u
+
 /* Nama port well-known di task_user.ipc (diisi kernel saat boot). */
 #define USER_SVC_SEND   1u      /* send-right ke echo server */
 #define USER_SVC_REPLY  2u      /* recv port untuk reply */

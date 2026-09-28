@@ -24,6 +24,9 @@
  *           -> tulis /gpio.out -> /.ugpio_done
  *   usd   : (Fase 15) tunggu /.sd_cmd_ready -> eksekusi /sd.cmd
  *           (w/r sektor SD) -> tulis /sd.out -> /.usd_done
+ *   ufs   : (Fase 16) tunggu /.fat_cmd_ready -> eksekusi /fat.cmd
+ *           (mkdir/w/r/ls/d di /sd FAT32) -> tulis /fat.out
+ *           -> /.ufs_done
  *   init  : tunggu 3 sentinel -> verifikasi /echo.txt byte-exact
  *           -> "INIT TESTS PASSED" -> sentinel /.init_done
  *           (/.init_done = gerbang halt kernel di report()).
@@ -53,6 +56,32 @@ static const char SD_CMD[] =
     "r 100\n"
     "w 1000\n"
     "r 1000\n";
+
+/* Fase 16: skrip uji FAT32 untuk ufs (pola usd). mkdir + tulis/baca
+ * byte-exact + readdir + hapus, termasuk uji fragmentasi: A/B/C
+ * masing-masing 1 cluster, B dihapus, D (6000 byte = 2 cluster)
+ * memakai ulang cluster B -> chain tak-kontigu. */
+static const char FAT_CMD[] =
+    "mkdir /sd/T1\n"
+    "w /sd/T1/A.TXT 3000\n"
+    "r /sd/T1/A.TXT 3000\n"
+    "ls /sd/T1\n"
+    "d /sd/T1/A.TXT\n"
+    "mkdir /sd/FRAG\n"
+    "w /sd/FRAG/A.BIN 4096\n"
+    "w /sd/FRAG/B.BIN 4096\n"
+    "w /sd/FRAG/C.BIN 4096\n"
+    "d /sd/FRAG/B.BIN\n"
+    "w /sd/FRAG/D.BIN 6000\n"
+    "r /sd/FRAG/D.BIN 6000\n"
+    "r /sd/FRAG/A.BIN 4096\n"
+    "r /sd/FRAG/C.BIN 4096\n"
+    "ls /sd/FRAG\n"
+    "ls /sd\n";
+
+/* Buffer baca /fat.out (isinya ~600 byte: hasil semua perintah ufs
+ * + listing direktori; buf[128] di _start tak cukup). */
+static char fatbuf[1024];
 
 __attribute__((section(".text.start")))
 void _start(void)
@@ -121,6 +150,26 @@ void _start(void)
         u_close((unsigned)fd);
         if (!u_touch("/.sd_cmd_ready")) {
             u_put("FAIL: sentinel /.sd_cmd_ready\n");
+            fails++;
+        }
+    }
+
+    /* 1d. Fase 16: tulis skrip uji FAT32 untuk ufs, lalu sentinel.
+     * ufs menunggu /.fat_cmd_ready (pola ucat/uls/ugpio/usd). */
+    fd = u_open("/fat.cmd", O_CREAT | O_RDWR);
+    if (fd < 0) {
+        u_put("FAIL: open /fat.cmd\n");
+        fails++;
+    } else {
+        n = u_strlen(FAT_CMD);
+        r = u_write((unsigned)fd, FAT_CMD, n);
+        if (r < 0 || (unsigned)r != n) {
+            u_put("FAIL: write /fat.cmd\n");
+            fails++;
+        }
+        u_close((unsigned)fd);
+        if (!u_touch("/.fat_cmd_ready")) {
+            u_put("FAIL: sentinel /.fat_cmd_ready\n");
             fails++;
         }
     }
@@ -197,6 +246,41 @@ void _start(void)
                 fails++;
             } else {
                 u_put("[init] /sd.out terverifikasi (sector roundtrip)\n");
+            }
+        }
+    }
+
+    /* Fase 16: tunggu ufs, lalu verifikasi /fat.out memuat hasil
+     * operasi FAT32 yang diharapkan. */
+    if (!u_wait_file("/.ufs_done")) {
+        u_put("FAIL: ufs timeout\n");
+        fails++;
+    } else {
+        u_put("[init] ufs selesai\n");
+        for (i = 0; i < sizeof(fatbuf); i++)
+            fatbuf[i] = 0;
+        fd = u_open("/fat.out", O_RDONLY);
+        if (fd < 0) {
+            u_put("FAIL: open /fat.out\n");
+            fails++;
+        } else {
+            r = u_read((unsigned)fd, fatbuf, sizeof(fatbuf) - 1u);
+            u_close((unsigned)fd);
+            if (r <= 0 ||
+                !u_contains(fatbuf, (unsigned)r, "mkdir /sd/T1=ok") ||
+                !u_contains(fatbuf, (unsigned)r, "w /sd/T1/A.TXT 3000=ok") ||
+                !u_contains(fatbuf, (unsigned)r, "r /sd/T1/A.TXT 3000=ok") ||
+                !u_contains(fatbuf, (unsigned)r, "ls> A.TXT") ||
+                !u_contains(fatbuf, (unsigned)r, "d /sd/T1/A.TXT=ok") ||
+                !u_contains(fatbuf, (unsigned)r, "mkdir /sd/FRAG=ok") ||
+                !u_contains(fatbuf, (unsigned)r, "w /sd/FRAG/D.BIN 6000=ok") ||
+                !u_contains(fatbuf, (unsigned)r, "r /sd/FRAG/D.BIN 6000=ok") ||
+                !u_contains(fatbuf, (unsigned)r, "ls> D.BIN") ||
+                !u_contains(fatbuf, (unsigned)r, "ls> HELLO.TXT")) {
+                u_put("FAIL: /fat.out tidak sesuai operasi FAT32\n");
+                fails++;
+            } else {
+                u_put("[init] /fat.out terverifikasi (FAT32 roundtrip)\n");
             }
         }
     }

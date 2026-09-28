@@ -16,11 +16,14 @@ if [ ! -f "$IMG" ]; then
     truncate -s 128M "$IMG"
 fi
 
-# Fase 15: kartu SD (emulasi) — image terpisah dari storage internal.
+# Fase 16: kartu SD (emulasi) — image FAT32 dibuat tools/mkfat32.py.
+# Bila image belum ada ATAU bukan FAT32 valid (mis. image mentah
+# peninggalan Fase 15), buat ulang. Kernel juga mengenali image lama
+# via magic sektor 0, tapi tanpa FAT valid /sd tak bisa di-mount.
 SD_IMG="${SD_IMG:-$HOME/workspace/mach-luckfox/sd128.img}"
-if [ ! -f "$SD_IMG" ]; then
-    echo "[run] membuat SD image 128MB (sparse): $SD_IMG"
-    truncate -s 128M "$SD_IMG"
+if ! python3 tools/mkfat32.py check "$SD_IMG" 2>/dev/null; then
+    echo "[run] membuat SD image FAT32 128MB: $SD_IMG"
+    python3 tools/mkfat32.py create "$SD_IMG" 128
 fi
 
 # Fase 15: kartu SD (emulasi) — image terpisah dari storage internal.

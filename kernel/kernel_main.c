@@ -33,6 +33,7 @@
 #include "../rv1103-bringup/tcp.h"   /* Fase 12d: tcp_is_listen() */
 #include "../rv1103-bringup/bootmenu.h" /* Fase 13: boot menu */
 #include "../rv1103-bringup/gpio.h"    /* Fase 14: GPIO */
+#include "../rv1103-bringup/fat32.h"   /* Fase 16: FAT32 di /sd */
 
 /* Fase 8: image program userspace, di-embed dari user/hello.bin oleh
  * build.sh (user/embed.py -> /tmp/mach_hello_img.o). */
@@ -60,6 +61,10 @@ extern const unsigned ugpio_img_len;
 /* Fase 15: image utilitas SD card userspace (user/usd.bin -> usd_img). */
 extern const uint8_t usd_img[];
 extern const unsigned usd_img_len;
+
+/* Fase 16: image utilitas uji FAT32 userspace (user/ufs.bin -> ufs_img). */
+extern const uint8_t ufs_img[];
+extern const unsigned ufs_img_len;
 
 /* PL011 (QEMU virt UART0). */
 #define UARTDR  (*(volatile unsigned *)0x09000000u)
@@ -322,6 +327,8 @@ static unsigned char stack_uecho[16384] __attribute__((aligned(8)));
 static unsigned char stack_ugpio[16384] __attribute__((aligned(8)));
 /* Fase 15: kernel stack untuk thread user usd. */
 static unsigned char stack_usd[16384] __attribute__((aligned(8)));
+/* Fase 16: kernel stack untuk thread user ufs. */
+static unsigned char stack_ufs[16384] __attribute__((aligned(8)));
 /* Fase 11: stack thread network (virtio-net + ARP/ICMP). */
 static unsigned char stack_net[16384] __attribute__((aligned(8)));
 /* Fase 12d: stack idle thread (CPU accounting). */
@@ -1281,6 +1288,11 @@ void kernel_main(void)
                                  USD_PROG_VA, USD_PROG_PAGES,
                                  USD_STACK_TOP, USD_STACK_PAGES,
                                  "usd");
+        /* Fase 16: utilitas uji FAT32 userspace. */
+        fails += load_user_image(ufs_img, ufs_img_len,
+                                 UFS_PROG_VA, UFS_PROG_PAGES,
+                                 UFS_STACK_TOP, UFS_STACK_PAGES,
+                                 "ufs");
         /* Port echo: server di task_kern (usvc_port), user dapat
          * send-right hasil grant (harus = USER_SVC_SEND=1), reply
          * port milik user (harus = USER_SVC_REPLY=2) di-grant balik. */
@@ -1432,51 +1444,101 @@ void kernel_main(void)
     if (blk_init() < 0)
         puts("[blk ] init gagal; storage tidak tersedia\n");
 
-    /* 4b. Fase 15: SD card driver self-test — hanya bila dipilih di
+    /* 4a2. Fase 16: mount FAT32 dari kartu SD (dev 1). */
+    if (fat32_mount() == 0)
+        puts("[fat ] mount /sd ok\n");
+    else
+        puts("[fat ] mount /sd gagal; lanjut tanpa /sd\n");
+
+    /* 4b. Fase 16: filesystem FAT32 self-test — hanya bila dipilih di
      * boot menu (opsi 2), single-threaded seperti blok di atas.
-     * Roundtrip tulis->baca->verifikasi byte-exact di sektor 10 +
-     * kasus sektor liar. Isi asli sektor dikembalikan sesudah uji. */
+     * (Self-test sektor mentah Fase 15 dihapus: sektor 10 kini bagian
+     * dari volume FAT32, menulis pola mentah akan merusaknya.)
+     * Uji: mkdir bersarang, tulis/baca byte-exact, fragmentasi
+     * (hapus file tengah lalu tulis file lebih besar -> chain
+     * tak-kontigu), readdir, delete, dan penolakan path liar. */
     if (bootmode == BOOTMODE_SELFTEST) {
         int fails = 0;
-        uint8_t sd_orig[512], sd_pat[512], sd_back[512];
+        static uint8_t st_w[6144];
+        static uint8_t st_r[6144];
+        static char st_ls[512];
         unsigned i;
-        puts("[st  ] sd driver self-test\n");
-        if (!sd_present()) {
-            puts("  FAIL: sd tidak ada\n");
+        puts("[st  ] fat32 self-test\n");
+        if (!sd_present() || !fat32_mounted()) {
+            puts("  FAIL: sd/fat tidak siap\n");
             fails++;
         } else {
-            if (sd_read(10u, sd_orig) != 0) {
-                puts("  FAIL: sd baca awal\n");
+            for (i = 0u; i < sizeof(st_w); i++)
+                st_w[i] = (uint8_t)(0x5Au ^ (i * 7u) ^ (i >> 5));
+            if (fat32_mkdir("/sd/SELFTEST") != 0) {
+                puts("  FAIL: mkdir\n");
                 fails++;
             }
-            for (i = 0u; i < 512u; i++)
-                sd_pat[i] = (uint8_t)(0xA5u ^ (i * 3u) ^ (i >> 4));
-            if (sd_write(10u, sd_pat) != 0) {
-                puts("  FAIL: sd tulis\n");
+            /* A/B/C masing-masing 1 cluster (4KB); lalu B dihapus. */
+            if (fat32_write_file("/sd/SELFTEST/A.BIN", st_w, 4096) != 4096 ||
+                fat32_write_file("/sd/SELFTEST/B.BIN", st_w, 4096) != 4096 ||
+                fat32_write_file("/sd/SELFTEST/C.BIN", st_w, 4096) != 4096) {
+                puts("  FAIL: tulis A/B/C\n");
                 fails++;
             }
-            for (i = 0u; i < 512u; i++)
-                sd_back[i] = 0u;
-            if (sd_read(10u, sd_back) != 0) {
-                puts("  FAIL: sd baca balik\n");
+            if (fat32_delete("/sd/SELFTEST/B.BIN") != 0) {
+                puts("  FAIL: hapus B\n");
                 fails++;
             }
-            for (i = 0u; i < 512u; i++) {
-                if (sd_back[i] != sd_pat[i]) {
-                    puts("  FAIL: sd pola rusak\n");
-                    fails++;
-                    break;
+            /* D = 6000 byte = 2 cluster: cluster bekas B + 1 baru
+             * (chain terfragmentasi, tak kontigu). */
+            if (fat32_write_file("/sd/SELFTEST/D.BIN", st_w, 6000) != 6000) {
+                puts("  FAIL: tulis D (fragmented)\n");
+                fails++;
+            }
+            for (i = 0u; i < sizeof(st_r); i++)
+                st_r[i] = 0u;
+            if (fat32_read_file("/sd/SELFTEST/D.BIN", st_r, sizeof(st_r))
+                    != 6000) {
+                puts("  FAIL: baca D\n");
+                fails++;
+            } else {
+                for (i = 0u; i < 6000u; i++) {
+                    if (st_r[i] != st_w[i]) {
+                        puts("  FAIL: D pola rusak\n");
+                        fails++;
+                        break;
+                    }
                 }
             }
-            if (sd_write(10u, sd_orig) != 0) {
-                puts("  FAIL: sd restore\n");
+            if (fat32_read_file("/sd/SELFTEST/A.BIN", st_r, 4096)
+                    != 4096) {
+                puts("  FAIL: baca A\n");
                 fails++;
             }
-            if (sd_read(1u << 31, sd_back) != -1) {
+            /* readdir: A, C, D ada; B tidak. */
+            for (i = 0u; i < sizeof(st_ls); i++)
+                st_ls[i] = 0;
+            if (fat32_listdir("/sd/SELFTEST", st_ls, sizeof(st_ls) - 1u)
+                    != 3) {
+                puts("  FAIL: readdir count\n");
+                fails++;
+            }
+            /* Kasus liar: path di luar /sd, mkdir root, tulis ke dir. */
+            if (fat32_write_file("/etc/passwd", st_w, 10) != -1 ||
+                fat32_mkdir("/sd") != -1 ||
+                fat32_write_file("/sd/SELFTEST", st_w, 10) != -1 ||
+                fat32_delete("/sd/SELFTEST") != -1) {
+                puts("  FAIL: kasus liar diterima\n");
+                fails++;
+            }
+            /* Bersih-bersih. */
+            if (fat32_delete("/sd/SELFTEST/A.BIN") != 0 ||
+                fat32_delete("/sd/SELFTEST/C.BIN") != 0 ||
+                fat32_delete("/sd/SELFTEST/D.BIN") != 0) {
+                puts("  FAIL: bersih-bersih\n");
+                fails++;
+            }
+            if (sd_read(1u << 31, st_r) != -1) {
                 puts("  FAIL: sd sektor liar diterima\n");
                 fails++;
             }
-            puts("[st  ] sd driver self-test: ");
+            puts("[st  ] fat32 self-test: ");
             if (fails == 0)
                 puts("ALL CHECKS PASSED\n");
             else {
@@ -1526,6 +1588,9 @@ void kernel_main(void)
     /* Fase 15: utilitas SD card (dikoordinasi init via /sd.cmd). */
     sched_add_user(stack_usd + sizeof(stack_usd), &task_user,
                    USD_PROG_VA, USD_STACK_TOP);
+    /* Fase 16: utilitas uji FAT32 (dikoordinasi init via /fat.cmd). */
+    sched_add_user(stack_ufs + sizeof(stack_ufs), &task_user,
+                   UFS_PROG_VA, UFS_STACK_TOP);
     /* Fase 12d: idle thread TERAKHIR (CPU accounting). Scheduler hanya
      * memilihnya bila tak ada thread RUNNABLE lain. */
     sched_add(thread_idle, stack_idle + sizeof(stack_idle), &task_kern);

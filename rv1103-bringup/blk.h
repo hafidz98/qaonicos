@@ -9,9 +9,11 @@
  *           Kapasitas dari config space device (REAL). Superblock
  *           "QAONBLK1" sektor 0; API blk_* melayani dev 0 (semantik
  *           Fase 12d UTUH).
- *   dev 1 = kartu SD: `-drive file=sd128.img,if=none,id=sd0,format=raw`
- *           + `-device virtio-blk-device,drive=sd0`. Superblock
- *           "QAONSD01" sektor 0; raw sector I/O via sd_read/sd_write.
+ *   dev 1 = kartu SD: `-drive file=sd128.img,if=none,id=hd1,format=raw`
+ *           + `-device virtio-blk-device,drive=hd1`. Berisi FAT32
+ *           (Fase 16, dibuat tools/mkfat32.py); superblock
+ *           "QAONSD01" di sektor TERAKHIR image (bukan sektor 0);
+ *           raw sector I/O via sd_read/sd_write.
  *
  * I/O sinkron 1 sektor (512B) via polling used ring (tanpa IRQ).
  */

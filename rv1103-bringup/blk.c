@@ -9,14 +9,25 @@
  *   dev 1 = kartu SD (sd128.img, superblock "QAONSD01", raw sector I/O
  *           via sd_read/sd_write).
  *
+ * Fase 16: dev 1 berisi filesystem FAT32 (tools/mkfat32.py). Magic
+ * "QAONSD01" TIDAK ditulis ke kartu SD sama sekali (sektor 0 adalah
+ * boot sector FAT32; write ke sektor terakhir terbukti flaky di
+ * virtio-blk QEMU). Identifikasi peran: cek magic "QAONSD01" di
+ * sektor 0 (gaya lama, image mentah Fase 15), magic di sektor
+ * terakhir (kompatibilitas: pernah ditulis oleh build Fase 16 awal),
+ * atau signature boot sector FAT32 ("FAT32   " + 0x55AA).
+ *
  * Pola yang sama dengan net.c (driver ditulis mandiri agar net.c yang
  * sudah terverifikasi tak tersentuh): probe 32 slot MMIO untuk DeviceID
  * 2 (block), negosiasi feature kosong, 1 virtqueue per device, I/O
  * sinkron per sektor 512B dengan polling used ring.
  *
- * Urutan slot = urutan -device di command line QEMU: run-qemu.sh
- * memasang hd0 (pico128.img) SEBELUM sd0 (sd128.img), sehingga probe
- * slot-naik memberi dev 0 = pico128.img, dev 1 = sd128.img.
+ * PERINGATAN (temuan Fase 15): urutan slot TIDAK SAMA dengan urutan
+ * -device di command line QEMU — QEMU 8.2.2 memberi "-device" TERAKHIR
+ * slot MMIO TERENDAH (terbalik). Karena itu peran dev 0/dev 1 SELALU
+ * diidentifikasi dari ISI (superblock "QAONBLK1"/"QAONSD01" atau
+ * signature FAT32), bukan dari nomor slot. Urutan -device hanya
+ * dipakai sebagai tiebreak di boot pertama (image masih kosong).
  *
  * Format request virtio-blk:
  *   desc[0]: header 16B (type u32, ioprio u32, sector u64), device-read
@@ -214,18 +225,18 @@ static int blk_request(struct blk_dev *d, uint32_t type, uint64_t sector,
     {
         volatile uint16_t *uidx = (volatile uint16_t *)&d->used->idx;
         spin = 0u;
-        while (*uidx == d->used_idx && spin < 10000000u)
+        /* Fase 16: 10M -> 100M spin. QEMU TCG kadang lambat memproses
+         * virtio-blk di bawah beban I/O beruntun (timeout palsu:
+         * data sebenarnya tertulis, tapi completion terdeteksi
+         * terlambat). 100M spin ~1-2 dtk, wajar untuk SD card
+         * (write fisik bisa ratusan ms). */
+        while (*uidx == d->used_idx && spin < 100000000u)
             spin++;
         if (*uidx == d->used_idx)
             return -2;              /* timeout */
         d->used_idx = *uidx;
     }
     mem_barrier();
-    if (d->req_status != BLK_S_OK) {
-        blk_log("[blk] DBG status=");
-        blk_loghex(d->req_status);
-        blk_log("\n");
-    }
     return (d->req_status == BLK_S_OK) ? 0 : -3;
 }
 
@@ -458,16 +469,17 @@ static int dev_transport_init(struct blk_dev *d, volatile uint32_t *base,
     return 0;
 }
 
-/* Tulis + verifikasi read-back superblock sektor 0 device d. */
-static int dev_write_sb(struct blk_dev *d, const char *tag,
-                        const char *magic, uint32_t m0, uint32_t m1)
+/* Tulis + verifikasi read-back superblock device d.
+ * sector: sektor tujuan (0 untuk dev 0, storage internal). */
+static int dev_write_sb_at(struct blk_dev *d, uint64_t sector,
+                           const char *tag, const char *magic,
+                           uint32_t m0, uint32_t m1)
 {
     unsigned i;
     static uint8_t sb[BLK_SECTOR] __attribute__((aligned(16)));
 
-    d->next_free = 1u;          /* sektor 0 dipesan untuk superblock */
     sb_write(sb, magic, d->total_sectors, m0, m1);
-    if (dev_write(d, 0u, sb) != 0) {
+    if (dev_write(d, sector, sb) != 0) {
         blk_log("[blk] ");
         blk_log(tag);
         blk_log(" tulis superblock gagal\n");
@@ -475,7 +487,7 @@ static int dev_write_sb(struct blk_dev *d, const char *tag,
     }
     for (i = 0; i < BLK_SECTOR; i++)
         sb[i] = 0u;
-    if (dev_read(d, 0u, sb) != 0 ||
+    if (dev_read(d, sector, sb) != 0 ||
         sb_check(sb, magic, d->total_sectors, m0, m1) != 0) {
         blk_log("[blk] ");
         blk_log(tag);
@@ -488,15 +500,33 @@ static int dev_write_sb(struct blk_dev *d, const char *tag,
     return 0;
 }
 
-/* Identifikasi peran device dari magic superblock sektor 0 yang
- * SUDAH ADA (ditulis boot sebelumnya):
- *   "QAONBLK1" -> storage internal (dev 0)
- *   "QAONSD01" -> SD card (dev 1)
- * Kembalikan 0 = storage, 1 = SD, -1 = belum ada superblock valid. */
+static int dev_write_sb(struct blk_dev *d, const char *tag,
+                        const char *magic, uint32_t m0, uint32_t m1)
+{
+    d->next_free = 1u;          /* sektor 0 dipesan untuk superblock */
+    return dev_write_sb_at(d, 0u, tag, magic, m0, m1);
+}
+
+/* Fase 16: superblock SD di sektor TERAKHIR DIHAPUS — write ke sektor
+ * terakhir terbukti flaky di virtio-blk QEMU (data tertulis tapi
+ * completion tak kunjung tiba -> timeout palsu). Kartu SD kini
+ * diidentifikasi murni dari signature boot sector FAT32 (atau magic
+ * QAONSD01 sektor 0 untuk image mentah peninggalan Fase 15); tidak
+ * ada magic yang ditulis ke SD. next_free TIDAK dipakai (API sd_*
+ * tak pakai bump allocator). */
+
+/* Identifikasi peran device dari magic superblock:
+ *   "QAONBLK1" di sektor 0            -> storage internal (dev 0)
+ *   "QAONSD01" di sektor 0 (gaya lama, Fase 15) atau di sektor
+ *     terakhir (kompatibilitas)       -> SD card (dev 1)
+ *   signature boot sector FAT32 di sektor 0 ("FAT32   " + 0x55AA)
+ *                                     -> SD card (dev 1)
+ * Kembalikan 0 = storage, 1 = SD, -1 = belum ada penanda valid. */
 static int dev_identify(struct blk_dev *d)
 {
     unsigned i;
     static uint8_t s0[BLK_SECTOR] __attribute__((aligned(16)));
+    int r;
 
     for (i = 0; i < BLK_SECTOR; i++)
         s0[i] = 0u;
@@ -507,6 +537,25 @@ static int dev_identify(struct blk_dev *d)
         return 0;
     if (sb_check(s0, "QAONSD01", d->total_sectors,
                  0x51414f4eu, 0x53443031u) == 0)
+        return 1;
+    /* Fase 16: magic di sektor terakhir (kompatibilitas; tidak lagi
+     * ditulis sejak write ke sektor terakhir terbukti flaky). */
+    if (d->total_sectors > 1u) {
+        for (i = 0; i < BLK_SECTOR; i++)
+            s0[i] = 0u;
+        r = dev_read(d, (uint64_t)d->total_sectors - 1u, s0);
+        if (r == 0 &&
+            sb_check(s0, "QAONSD01", d->total_sectors,
+                     0x51414f4eu, 0x53443031u) == 0)
+            return 1;
+    }
+    /* Fase 16: boot sector FAT32 valid -> kartu SD. */
+    for (i = 0; i < BLK_SECTOR; i++)
+        s0[i] = 0u;
+    if (dev_read(d, 0u, s0) == 0 &&
+        s0[510] == 0x55u && s0[511] == 0xAAu &&
+        s0[82] == 'F' && s0[83] == 'A' && s0[84] == 'T' &&
+        s0[85] == '3' && s0[86] == '2')
         return 1;
     return -1;
 }
@@ -595,12 +644,14 @@ int blk_init(void)
                          0x51414f4eu, 0x424c4b31u) != 0)
             return -1;
         if (sd) {
-            if (dev_write_sb(sd, "sd", "QAONSD01",
-                             0x51414f4eu, 0x53443031u) != 0) {
-                blk_log("[blk] SD gagal superblock; lanjut tanpa SD\n");
-                sd->role = -1;
-                sd->vmm = 0;
-            }
+            /* Fase 16: TIDAK menulis magic apa pun ke kartu SD.
+             * Sektor 0 adalah boot sector FAT32 (jangan ditimpa) dan
+             * write ke sektor terakhir terbukti flaky di virtio-blk
+             * QEMU (data tertulis tapi completion tak kunjung tiba).
+             * Identifikasi SD murni dari signature boot sector FAT32
+             * di dev_identify (atau magic QAONSD01 sektor 0 untuk
+             * image mentah peninggalan Fase 15). */
+            (void)sd;
         } else {
             blk_log("[blk] SD card (dev 1) tidak ditemukan; lanjut tanpa SD\n");
         }

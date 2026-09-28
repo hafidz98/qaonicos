@@ -29,6 +29,13 @@
 #define SYS_SD_READ  50u
 #define SYS_SD_WRITE 51u
 
+/* Fase 16: filesystem FAT32 di /sd (DISALIN MANUAL dari syscall.h). */
+#define SYS_MKDIR      52u
+#define SYS_FAT_WRITE  53u
+#define SYS_FAT_READ   54u
+#define SYS_FAT_DELETE 55u
+#define SYS_READDIR    56u
+
 #define O_RDONLY 0u
 #define O_WRONLY 1u
 #define O_RDWR   2u

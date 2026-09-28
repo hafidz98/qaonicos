@@ -13,6 +13,7 @@
 #include "lib.h"
 #include "gpio.h"   /* Fase 14 */
 #include "blk.h"    /* Fase 15: sd_read/sd_write */
+#include "fat32.h"  /* Fase 16: filesystem FAT32 di /sd */
 
 static struct task *kern_task;
 
@@ -267,6 +268,94 @@ static int sys_sd_write_user(struct trap_regs *regs)
         sd_kbuf[i] = ((const uint8_t *)va)[i];
     return sd_write((uint64_t)sector, sd_kbuf) == 0 ? 0 : -1;
 }
+/* ------------------------------------------------------------------ */
+/* Fase 16: syscall filesystem FAT32 (user only). Path absolut        */
+/* "/sd/..." disalin dari user via copy_path_user (maks 63+NUL).      */
+/* Buffer data divalidasi user_range_ok lalu dioper langsung sebagai   */
+/* pointer ke fat32_* (halaman user ter-map; pola sys_sd_read_user).  */
+/* ------------------------------------------------------------------ */
+
+/* Batas ukuran file per syscall (1MB; transfer per sektor, tanpa
+ * bounce buffer raksasa). */
+#define FAT_XFER_MAX (1024u * 1024u)
+
+static int sys_mkdir_user(struct task *t, struct trap_regs *regs)
+{
+    char kpath[FS_PATH_MAX];
+
+    (void)t;
+    if (!fat32_mounted())
+        return -1;
+    if (copy_path_user(regs->r[0], kpath) != 0)
+        return -1;
+    return fat32_mkdir(kpath);
+}
+
+static int sys_fat_write_user(struct task *t, struct trap_regs *regs)
+{
+    char kpath[FS_PATH_MAX];
+    uint32_t va = regs->r[1];
+    uint32_t len = regs->r[2];
+
+    (void)t;
+    if (!fat32_mounted())
+        return -1;
+    if (len > FAT_XFER_MAX)
+        return -1;
+    if (!user_range_ok(va, len))
+        return -1;
+    if (copy_path_user(regs->r[0], kpath) != 0)
+        return -1;
+    return fat32_write_file(kpath, (const uint8_t *)va, len);
+}
+
+static int sys_fat_read_user(struct task *t, struct trap_regs *regs)
+{
+    char kpath[FS_PATH_MAX];
+    uint32_t va = regs->r[1];
+    uint32_t max = regs->r[2];
+
+    (void)t;
+    if (!fat32_mounted())
+        return -1;
+    if (max > FAT_XFER_MAX)
+        return -1;
+    if (!user_range_ok(va, max))
+        return -1;
+    if (copy_path_user(regs->r[0], kpath) != 0)
+        return -1;
+    return fat32_read_file(kpath, (uint8_t *)va, max);
+}
+
+static int sys_fat_delete_user(struct task *t, struct trap_regs *regs)
+{
+    char kpath[FS_PATH_MAX];
+
+    (void)t;
+    if (!fat32_mounted())
+        return -1;
+    if (copy_path_user(regs->r[0], kpath) != 0)
+        return -1;
+    return fat32_delete(kpath);
+}
+
+static int sys_readdir_user(struct task *t, struct trap_regs *regs)
+{
+    char kpath[FS_PATH_MAX];
+    uint32_t va = regs->r[1];
+    uint32_t max = regs->r[2];
+
+    (void)t;
+    if (!fat32_mounted())
+        return -1;
+    if (max > FAT_XFER_MAX)
+        return -1;
+    if (!user_range_ok(va, max))
+        return -1;
+    if (copy_path_user(regs->r[0], kpath) != 0)
+        return -1;
+    return fat32_listdir(kpath, (char *)va, max);
+}
 
 /* SYS_SBRK (user only): naikkan program break (lihat aslinya). */static int sys_sbrk_user(struct task *t, struct trap_regs *regs)
 {
@@ -350,6 +439,16 @@ void svc_dispatch(struct trap_regs *regs)
         ret = u ? sys_sd_read_user(regs) : -1;
     } else if (num == SYS_SD_WRITE) {
         ret = u ? sys_sd_write_user(regs) : -1;
+    } else if (num == SYS_MKDIR) {
+        ret = u ? sys_mkdir_user(t, regs) : -1;
+    } else if (num == SYS_FAT_WRITE) {
+        ret = u ? sys_fat_write_user(t, regs) : -1;
+    } else if (num == SYS_FAT_READ) {
+        ret = u ? sys_fat_read_user(t, regs) : -1;
+    } else if (num == SYS_FAT_DELETE) {
+        ret = u ? sys_fat_delete_user(t, regs) : -1;
+    } else if (num == SYS_READDIR) {
+        ret = u ? sys_readdir_user(t, regs) : -1;
     }
     if (ret != -2)
         regs->r[0] = (uint32_t)ret;

@@ -52,6 +52,15 @@
 #define SYS_SD_READ  50u   /* r0=sector(u32) r1=buf_va(512B) -> 0 / -1 */
 #define SYS_SD_WRITE 51u   /* r0=sector(u32) r1=buf_va(512B) -> 0 / -1 */
 
+/* Fase 16: filesystem FAT32 di /sd (user only). Path absolut
+ * "/sd/..." (maks 63 char + NUL, via copy_path_user).
+ * Nomor DISALIN MANUAL ke user/usys.h. */
+#define SYS_MKDIR      52u /* r0=path_va -> 0 / -1 */
+#define SYS_FAT_WRITE  53u /* r0=path_va r1=buf_va r2=len -> byte tertulis / -1 */
+#define SYS_FAT_READ   54u /* r0=path_va r1=buf_va r2=max -> byte dibaca / -1 */
+#define SYS_FAT_DELETE 55u /* r0=path_va -> 0 / -1 */
+#define SYS_READDIR    56u /* r0=path_va r1=buf_va r2=max -> jumlah entri / -1 */
+
 void syscall_init(struct task *kern_task);
 void svc_dispatch(struct trap_regs *regs);
 

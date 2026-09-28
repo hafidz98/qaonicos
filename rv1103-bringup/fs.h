@@ -25,7 +25,9 @@
 struct task;    /* task.h; dihindari include sirkular */
 
 /* Batas-batas bring-up. */
-#define FS_MAX_FILES  16u
+#define FS_MAX_FILES  32u   /* Fase 16: 16 -> 32; koordinasi init +
+                           * utilitas kini butuh ~18 file sentinel/skrip
+                           * (/fat.cmd, /fat.out, /.ufs_done, dsb.) */
 #define FS_NAME_MAX   32u               /* termasuk NUL */
 #define FS_PATH_MAX   64u               /* path dari user, termasuk NUL */
 #define FS_FILE_MAX   (64u * 1024u)     /* 64 KB per file */

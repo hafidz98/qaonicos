@@ -4,3 +4,4 @@
 *.o
 __pycache__/
 pico128.img
+sd128.img

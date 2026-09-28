@@ -62,4 +62,15 @@ int u_gpio_get(unsigned pin);
 int u_sd_read(unsigned sector, unsigned char *buf);
 int u_sd_write(unsigned sector, const unsigned char *buf);
 
+/* Fase 16: filesystem FAT32 di /sd (SYS_MKDIR=52, SYS_FAT_WRITE=53,
+ * SYS_FAT_READ=54, SYS_FAT_DELETE=55, SYS_READDIR=56). Path absolut
+ * "/sd/...". u_mkdir/u_fat_delete: 0 ok, -1 gagal.
+ * u_fat_write: byte tertulis / -1. u_fat_read: byte dibaca / -1.
+ * u_readdir: jumlah entri / -1 (format "NAMA.EXT\n", "DIR/\n"). */
+int u_mkdir(const char *path);
+int u_fat_write(const char *path, const unsigned char *buf, unsigned len);
+int u_fat_read(const char *path, unsigned char *buf, unsigned max);
+int u_fat_delete(const char *path);
+int u_readdir(const char *path, char *buf, unsigned max);
+
 #endif /* _ULIB_H_ */
