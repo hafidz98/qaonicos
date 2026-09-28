@@ -12,7 +12,7 @@
 extern void	gic_enable_irq(unsigned int);
 extern void	gic_init(void);
 
-#define	ARM_VTIMER_PPI	30
+#define	ARM_TIMER_PPI	27	/* virtual timer PPI (CNTV) */
 
 static unsigned int	timer_freq;	/* CNTFRQ */
 static unsigned int	timer_tval;	/* ticks per HZ */
@@ -48,6 +48,8 @@ write_cntv_ctl(unsigned int v)
 /*
  * startrtclock: start the periodic 100Hz timer.
  * Called from cpu_launch_first_thread() (MI) once a thread is active.
+ * IRQs are enabled by _load_context() when the thread starts, and by
+ * MI spl0() in start_kernel_threads().
  */
 void
 startrtclock(void)
@@ -60,7 +62,7 @@ startrtclock(void)
 	timer_tval = timer_freq / HZ;
 
 	gic_init();
-	gic_enable_irq(ARM_VTIMER_PPI);
+	gic_enable_irq(ARM_TIMER_PPI);
 
 	write_cntv_tval(timer_tval);
 	write_cntv_ctl(0x1u);		/* enable, unmasked */

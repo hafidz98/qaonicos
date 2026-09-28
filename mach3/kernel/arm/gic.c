@@ -2,7 +2,7 @@
  * mach3/kernel/arm/gic.c -- ARM GIC-400 (GICv2) driver, QEMU -M virt.
  *
  * GICD @ 0x08000000, GICC @ 0x08010000.
- * Timer PPI (interrupt 30, virtual timer) is the only source used in M3.
+ * Timer PPI (interrupt 27, virtual timer) is the only source used in M3.
  */
 #define	GICD_BASE	0x08000000u
 #define	GICC_BASE	0x08010000u
@@ -21,7 +21,7 @@
 #define	GICD_REG(off)	(*(volatile unsigned int *)(GICD_BASE + (off)))
 #define	GICC_REG(off)	(*(volatile unsigned int *)(GICC_BASE + (off)))
 
-#define	ARM_VTIMER_PPI	30	/* virtual timer PPI */
+#define	ARM_TIMER_PPI	30	/* physical timer PPI (CNTP); unused here, see clock.c/trap.c */
 
 void
 gic_init(void)

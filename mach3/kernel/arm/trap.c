@@ -24,7 +24,7 @@ struct arm_trap_frame {
 #define	TRAP_IRQ	4
 #define	TRAP_FIQ	5
 
-#define	ARM_VTIMER_PPI	30
+#define	ARM_TIMER_PPI	27	/* virtual timer PPI (CNTV) */
 
 /* from gic.c */
 extern unsigned int	gic_get_irq(void);
@@ -68,6 +68,8 @@ read_ifsr(void)
 	return v;
 }
 
+static unsigned int	timer_ticks;	/* M4: verification counter */
+
 /*
  * arm_trap_handler: C entry for all exceptions (from locore.s).
  */
@@ -78,10 +80,11 @@ arm_trap_handler(struct arm_trap_frame *frame, int trapno)
 	case TRAP_IRQ: {
 		unsigned int irq = gic_get_irq();
 		boolean_t usermode;
-		if (irq == ARM_VTIMER_PPI) {
+		if (irq == ARM_TIMER_PPI) {
 			usermode = ((frame->spsr & 0x1fu) == 0x10u);
 			clock_interrupt(1000000 / 100, usermode, FALSE);
 			arm_timer_eoi();
+			timer_ticks++;	/* M4: verification counter */
 		} else if (irq != 1023) {
 			printf("arm_trap: unexpected irq %u\n", irq);
 		}

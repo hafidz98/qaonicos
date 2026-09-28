@@ -70,6 +70,7 @@ __Switch_context:
  * void _load_context(pcb_t pcb, thread_t thread)
  * Enter a thread for the first time.  Jumps to the thread's saved
  * resumption PC (thread_continue) with r0 = THREAD_NULL.
+ * Enables IRQs (MI cpu_launch_first_thread runs with splhigh).
  */
 	.globl _load_context
 	.type _load_context, %function
@@ -83,6 +84,21 @@ _load_context:
 	/* active_threads[0] = thread */
 	ldr	r2, =active_threads
 	str	r1, [r2]
+
+	/* Enable IRQ+FIQ for the new thread (cpsie if) */
+	cpsie	if
+
+	/*
+	 * M4: Wait for the first timer tick.  The ARM generic timer is
+	 * one-shot; MI thread setup (start_kernel_threads) may take
+	 * longer than the 10ms initial period, losing the first IRQ
+	 * forever.  Spinning here (with IRQs enabled and active_threads
+	 * valid) guarantees the timer mechanism is live before proceeding.
+	 * ~1e9 loops ≈ 100ms on QEMU TCG.
+	 */
+	ldr	r2, =0x3B9ACA00
+1:	subs	r2, r2, #1
+	bne	1b
 
 	mov	sp, r12
 	mov	r0, #0			/* THREAD_NULL for thread_continue */

@@ -71,6 +71,47 @@ terdokumentasi di bawah).
    Defer via timer gagal karena IRQ tidak masuk. Full scheduler dispatch
    (run queue → context switch) = future work.
 
+### Investigasi timer IRQ (2026-09-28, debug agent)
+
+**Root cause ditemukan (2 masalah):**
+
+1. **PPI mismatch**: Kode memprogram **virtual timer** (CNTV_TVAL/CNTV_CTL)
+   yang fire di **PPI 27**, tapi GIC meng-enable **PPI 30** (untuk physical
+   timer). Buktinya: `ispendr0=0x8000000` (bit 27 pending) sementara
+   `isen0` hanya set bit 30. Interrupt pending tapi tidak di-enable.
+
+2. **CPSR.I masked**: `cpu_launch_first_thread()` (MI) jalan dengan
+   `splhigh()` (IRQ masked). Timer fire tapi CPU tidak ambil interrupt
+   karena bit I di CPSR = 1. Buktinya: `cpsr=0x600001d3 (I=1)`.
+
+**Fix yang diimplementasikan:**
+- `clock.c`/`trap.c`/`gic.c`: `ARM_TIMER_PPI` 30 → 27 (virtual timer).
+- `context.s` `_load_context`: tambah `cpsie if` untuk enable IRQ+FIQ
+  saat thread pertama dimulai (MI jalan dengan splhigh).
+- `context.s` `_load_context`: spin delay ~100ms setelah `cpsie` untuk
+  pastikan tick pertama tidak hilang (timer one-shot 10ms; kalau IRQ
+  belum enabled saat fire, tick hilang selamanya).
+
+**Hasil verifikasi:**
+- Timer IRQ **berhasil fire**: `iar=0x1b` (27) terkonfirmasi masuk handler.
+- Counter `timer_ticks` bertambah: terlihat `timer: 100 ticks`,
+  `timer: 200 ticks` (print verifikasi sementara, sudah dihapus).
+- Sistem stabil tanpa panic.
+
+**Masalah tersisa (butuh investigasi lanjut):**
+- Timer berhenti setelah ~200 ticks (2 detik). Tanpa `clock_interrupt()`
+  pun berhenti, jadi bukan masalah MI. Kemungkinan: QEMU TCG virtual
+  time tidak advance saat guest idle, atau GIC PPI level-sensitive
+  quirk. Perlu investigasi dengan QEMU monitor atau gdb.
+- Print dari IRQ handler bermasalah (mungkin deadlock setelah beberapa
+  print); counter `timer_ticks` dipertahankan tanpa print.
+
+**File yang diubah:**
+- `mach3/kernel/arm/clock.c`: PPI 27, hapus debug code.
+- `mach3/kernel/arm/trap.c`: PPI 27, `timer_ticks` counter.
+- `mach3/kernel/arm/gic.c`: komentar PPI 27.
+- `mach3/kernel/arm/context.s`: `cpsie if` + spin delay di `_load_context`.
+
 ### Verifikasi
 - Build: MI 94/94, MD 17/17 (file baru `ipc_test.c`), LINK OK. 0 patch MI.
 - Boot QEMU 3x: `pmap_selftest: PASS`, `ipc_selftest: PASS`,
