@@ -49,6 +49,12 @@ extern unsigned char	uecho_img[];
 extern unsigned int	uecho_img_len;
 extern unsigned char	umon_img[];
 extern unsigned int	umon_img_len;
+extern unsigned char	ugpio_img[];
+extern unsigned int	ugpio_img_len;
+extern unsigned char	usd_img[];
+extern unsigned int	usd_img_len;
+extern unsigned char	ufs_img[];
+extern unsigned int	ufs_img_len;
 
 /* trap.c (Fase B) */
 extern unsigned int	arm_timer_ticks(void);
@@ -67,6 +73,27 @@ extern int	vm_page_free_count;
 
 /* arm_init.c: total RAM (Fase C, SYS_STAT). */
 extern vm_offset_t	mem_size;
+
+/* gpio.c (Fase D, SYS_GPIO_SET/GET). Bank di-fix 0 (seperti kernel lama). */
+extern int	gpio_set(unsigned int bank, unsigned int pin,
+			 unsigned int val);
+extern int	gpio_get(unsigned int bank, unsigned int pin);
+
+/* blk.c (Fase D, SYS_SD_READ/WRITE). */
+extern int	sd_present(void);
+extern int	sd_read(unsigned int sector, unsigned char *data);
+extern int	sd_write(unsigned int sector, const unsigned char *data);
+
+/* fat32.c (Fase D, SYS_MKDIR/FAT_WRITE/FAT_READ/FAT_DELETE/READDIR). */
+extern int	fat32_mounted(void);
+extern int	fat32_mount(void);
+extern int	fat32_mkdir(const char *path);
+extern int	fat32_write_file(const char *path, const unsigned char *data,
+				 unsigned int len);
+extern int	fat32_read_file(const char *path, unsigned char *dst,
+				unsigned int max);
+extern int	fat32_delete(const char *path);
+extern int	fat32_listdir(const char *path, char *dst, unsigned int max);
 
 /* pmap.c */
 extern void	arm_pmap_activate_user(pmap_t pmap);
@@ -100,6 +127,15 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_STAT	57u	/* stat(buf, len) -> 0 or -1 */
 #define	SYS_TLIST	58u	/* tlist(buf, max) -> entries or -1 */
 #define	SYS_READ_CONSOLE 59u	/* read_console() -> byte or -1 */
+#define	SYS_GPIO_SET	40u	/* gpio_set(pin, val) -> 0 or -1 (Fase D) */
+#define	SYS_GPIO_GET	41u	/* gpio_get(pin) -> 0/1 or -1 (Fase D) */
+#define	SYS_SD_READ	50u	/* sd_read(sector, buf512) -> 0 or -1 (Fase D) */
+#define	SYS_SD_WRITE	51u	/* sd_write(sector, buf512) -> 0 or -1 (Fase D) */
+#define	SYS_MKDIR	52u	/* mkdir(path) -> 0 or -1 (Fase D) */
+#define	SYS_FAT_WRITE	53u	/* fat_write(path, buf, len) -> bytes/-1 (Fase D) */
+#define	SYS_FAT_READ	54u	/* fat_read(path, buf, max) -> bytes/-1 (Fase D) */
+#define	SYS_FAT_DELETE	55u	/* fat_delete(path) -> 0 or -1 (Fase D) */
+#define	SYS_READDIR	56u	/* readdir(path, buf, max) -> count/-1 (Fase D) */
 
 /*
  * struct qaon_stat (Fase C): layout DISALIN MANUAL ke user/ulib/ulib.h.
@@ -366,6 +402,59 @@ user_syscall(struct arm_trap_frame *frame)
 	}
 	case SYS_READ_CONSOLE:
 		return (unsigned int)cnmaygetc();
+	case SYS_GPIO_SET:
+		/* Bank di-fix 0 (seperti kernel lama Fase 14). */
+		return (unsigned int)gpio_set(0u, a0, a1);
+	case SYS_GPIO_GET:
+		return (unsigned int)gpio_get(0u, a0);
+	case SYS_SD_READ:
+		if (!sd_present() || !user_range_ok(a1, 512u))
+			return (unsigned int)-1;
+		return (unsigned int)sd_read(a0, (unsigned char *)a1);
+	case SYS_SD_WRITE:
+		if (!sd_present() || !user_range_ok(a1, 512u))
+			return (unsigned int)-1;
+		return (unsigned int)sd_write(a0, (unsigned char *)a1);
+	case SYS_MKDIR: {
+		static char kpath[128];
+		if (!fat32_mounted() ||
+		    copy_path_user(a0, kpath, sizeof(kpath)) != 0)
+			return (unsigned int)-1;
+		return (unsigned int)fat32_mkdir(kpath);
+	}
+	case SYS_FAT_WRITE: {
+		static char kpath[128];
+		if (!fat32_mounted() ||
+		    copy_path_user(a0, kpath, sizeof(kpath)) != 0 ||
+		    !user_range_ok(a1, a2))
+			return (unsigned int)-1;
+		return (unsigned int)fat32_write_file(kpath,
+						      (unsigned char *)a1, a2);
+	}
+	case SYS_FAT_READ: {
+		static char kpath[128];
+		if (!fat32_mounted() ||
+		    copy_path_user(a0, kpath, sizeof(kpath)) != 0 ||
+		    !user_range_ok(a1, a2))
+			return (unsigned int)-1;
+		return (unsigned int)fat32_read_file(kpath,
+						     (unsigned char *)a1, a2);
+	}
+	case SYS_FAT_DELETE: {
+		static char kpath[128];
+		if (!fat32_mounted() ||
+		    copy_path_user(a0, kpath, sizeof(kpath)) != 0)
+			return (unsigned int)-1;
+		return (unsigned int)fat32_delete(kpath);
+	}
+	case SYS_READDIR: {
+		static char kpath[128];
+		if (!fat32_mounted() ||
+		    copy_path_user(a0, kpath, sizeof(kpath)) != 0 ||
+		    !user_range_ok(a1, a2))
+			return (unsigned int)-1;
+		return (unsigned int)fat32_listdir(kpath, (char *)a1, a2);
+	}
 	case SYS_EXIT:
 		/* Leave user mode for good: resume at the trampoline
 		 * in SVC; r0 carries the exit code. */
@@ -636,6 +725,9 @@ static struct uprog_image uprogs[] = {
 	{ "uls",   uls_img,   &uls_img_len   },
 	{ "uecho", uecho_img, &uecho_img_len },
 	{ "umon",  umon_img,  &umon_img_len  },
+	{ "ugpio", ugpio_img, &ugpio_img_len },
+	{ "usd",   usd_img,   &usd_img_len   },
+	{ "ufs",   ufs_img,   &ufs_img_len   },
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))
 
@@ -656,8 +748,12 @@ user_launch_init(void)
 	unsigned i, fails = 0;
 	static const char *want_files[] = {
 		"/motd.txt", "/echo.txt", "/umon.out",
+		"/gpio.out", "/sd.out", "/fat.out",
 		"/.motd_ready", "/.ucat_done", "/.uls_done",
 		"/.uecho_done", "/.umon_done",
+		"/.gpio_cmd_ready", "/.ugpio_done",
+		"/.sd_cmd_ready", "/.usd_done",
+		"/.fat_cmd_ready", "/.ufs_done",
 	};
 
 	ramfs_init();
@@ -688,7 +784,9 @@ user_launch_init(void)
 	}
 
 	if (fails == 0)
-		printf("user_launch_init: PASS (5/5 programs, 8/8 files)\n");
+		printf("user_launch_init: PASS (8/8 programs, %u/%u files)\n",
+		       (unsigned)(sizeof(want_files) / sizeof(want_files[0])),
+		       (unsigned)(sizeof(want_files) / sizeof(want_files[0])));
 	else
 		printf("user_launch_init: %u FAILs\n", fails);
 	machine_halt();

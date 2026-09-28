@@ -20,10 +20,10 @@
 #include "ramfs.h"
 #include <machine/machspl.h>
 
-#define	RAMFS_MAX_FILES	16u
+#define	RAMFS_MAX_FILES	32u
 #define	RAMFS_NAME_MAX	32u
 #define	RAMFS_FILE_MAX	(64u * 1024u)
-#define	RAMFS_MAX_TASKS	8u
+#define	RAMFS_MAX_TASKS	16u
 
 struct ramfs_file {
 	char		name[RAMFS_NAME_MAX];

@@ -24,6 +24,15 @@
 #define SYS_STAT	57u	/* r0=buf r1=len -> 0 / -1 */
 #define SYS_TLIST	58u	/* r0=buf r1=max -> jumlah entri / -1 */
 #define SYS_READ_CONSOLE 59u	/* -> byte 0-255, atau -1 bila kosong */
+#define SYS_GPIO_SET	40u	/* r0=pin r1=val(0/1) -> 0 / -1 */
+#define SYS_GPIO_GET	41u	/* r0=pin -> 0/1 / -1 */
+#define SYS_SD_READ	50u	/* r0=sector r1=buf512 -> 0 / -1 */
+#define SYS_SD_WRITE	51u	/* r0=sector r1=buf512 -> 0 / -1 */
+#define SYS_MKDIR	52u	/* r0=path -> 0 / -1 */
+#define SYS_FAT_WRITE	53u	/* r0=path r1=buf r2=len -> bytes / -1 */
+#define SYS_FAT_READ	54u	/* r0=path r1=buf r2=max -> bytes / -1 */
+#define SYS_FAT_DELETE	55u	/* r0=path -> 0 / -1 */
+#define SYS_READDIR	56u	/* r0=path r1=buf r2=max -> count / -1 */
 
 /* Flag open. */
 #define O_RDONLY	0u
@@ -68,6 +77,15 @@ int	sys_delete(const char *path);
 int	sys_stat(struct qaon_stat *st);
 int	sys_tlist(struct qaon_tentry *e, unsigned max);
 int	sys_read_console(void);		/* byte 0-255, -1 bila kosong */
+int	sys_gpio_set(unsigned pin, unsigned val);	/* -> 0 / -1 */
+int	sys_gpio_get(unsigned pin);			/* -> 0/1 / -1 */
+int	sys_sd_read(unsigned sector, void *buf);	/* -> 0 / -1 */
+int	sys_sd_write(unsigned sector, const void *buf);	/* -> 0 / -1 */
+int	sys_mkdir(const char *path);			/* -> 0 / -1 */
+int	sys_fat_write(const char *path, const void *buf, unsigned len);
+int	sys_fat_read(const char *path, void *buf, unsigned max);
+int	sys_fat_delete(const char *path);		/* -> 0 / -1 */
+int	sys_readdir(const char *path, char *buf, unsigned max);
 
 /* Helper kecil. */
 int	puts(const char *s);
@@ -89,6 +107,15 @@ int	u_mcmp(const char *a, const char *b, unsigned n); /* 0 = sama */
 int	u_stat(struct qaon_stat *s);
 int	u_tlist(struct qaon_tentry *e, unsigned max);
 int	u_console_getc(void);		/* byte 0-255, -1 bila kosong */
+int	u_gpio_set(unsigned pin, unsigned val);	/* -> 0 / -1 */
+int	u_gpio_get(unsigned pin);			/* -> 0/1 / -1 */
+int	u_sd_read(unsigned sector, void *buf);	/* -> 0 / -1 */
+int	u_sd_write(unsigned sector, const void *buf);	/* -> 0 / -1 */
+int	u_mkdir(const char *path);			/* -> 0 / -1 */
+int	u_fat_write(const char *path, const void *buf, unsigned len);
+int	u_fat_read(const char *path, void *buf, unsigned max);
+int	u_fat_delete(const char *path);			/* -> 0 / -1 */
+int	u_readdir(const char *path, char *buf, unsigned max);
 
 /* String yang ditulis uecho.c ke /echo.txt (satu definisi bersama). */
 #define UECHO_STR "uecho: halo dari utilitas\n"

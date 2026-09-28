@@ -37,7 +37,7 @@ command -v clang >/dev/null 2>&1 || { echo "FATAL: clang unavailable"; exit 1; }
 # (simbol <name>_img/<name>_img_len).  umon + tui.c.
 USR="$MACH3_DIR/../user"
 UCFLAGS="--target=arm-none-eabi -march=armv7-a -O1 -fno-builtin -ffreestanding -I$USR"
-echo "BUILD user programs (init ucat uls uecho umon)"
+echo "BUILD user programs (init ucat uls uecho umon ugpio usd ufs)"
 # shellcheck disable=SC2086
 clang $UCFLAGS -c "$USR/ulib/ulib.c" -o "$BUILD/ulib.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/ulib/ulib.c (see $LOG)"; exit 1; }
@@ -50,7 +50,7 @@ clang $UCFLAGS -c "$USR/udiv.c" -o "$BUILD/udiv.o" >>"$LOG" 2>&1 || \
 # shellcheck disable=SC2086
 clang $UCFLAGS -c "$USR/hello.c" -o "$BUILD/hello.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/hello.c (see $LOG)"; exit 1; }
-for prog in init ucat uls uecho umon; do
+for prog in init ucat uls uecho umon ugpio usd ufs; do
     # shellcheck disable=SC2086
     clang $UCFLAGS -c "$USR/$prog.c" -o "$BUILD/$prog.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/$prog.c (see $LOG)"; exit 1; }
@@ -67,6 +67,12 @@ for prog in init ucat uls uecho umon; do
         { echo "FATAL: $prog entry $ENTRY != 0x100000"; exit 1; }
     llvm-objcopy-18 -O binary "$BUILD/$prog.elf" "$BUILD/$prog.bin" >>"$LOG" 2>&1 || \
         { echo "FAIL objcopy user/$prog.bin"; exit 1; }
+    # Fase D: objcopy -O binary tidak menyertakan .bss (NOBITS) di akhir;
+    # pad binary dengan nol hingga akhir .bss agar img_len mencakup
+    # footprint memori penuh (loader menghitung npages dari img_len).
+    python3 "$USR/pad-bss.py" "$BUILD/$prog.bin" "$BUILD/$prog.elf" \
+        >>"$LOG" 2>&1 || \
+        { echo "FAIL pad-bss user/$prog.bin"; exit 1; }
     python3 "$USR/embed.py" "$BUILD/$prog.bin" "$GEN/${prog}_img.c" "${prog}_img" 32768 >>"$LOG" 2>&1 || \
         { echo "FAIL embed ${prog}_img"; exit 1; }
     echo "USER: $prog.elf entry=$ENTRY ok"
@@ -115,12 +121,12 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon; do
+for prog in init ucat uls uecho umon ugpio usd ufs; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }
 done
-echo "MD: *_img.o ok (5 programs)"
+echo "MD: *_img.o ok (8 programs)"
 
 # --- 3. link ---
 MI_OBJS=$(find "$OBJ" -name '*.o' | sort)

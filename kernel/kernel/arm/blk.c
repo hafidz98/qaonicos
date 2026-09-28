@@ -120,127 +120,143 @@ mem_barrier(void)
 	__asm__ volatile ("dmb ish" ::: "memory");
 }
 
-/* --- device state --- */
-static volatile unsigned int *blk_vmm;
-static struct vq_desc *blk_desc;
-static struct vq_avail *blk_avail;
-static struct vq_used *blk_used;
-static unsigned int blk_avail_idx, blk_used_idx;
-static unsigned int blk_nsectors;
+/* --- device state (Fase D: multi-device) --- */
+struct blkdev {
+	volatile unsigned int	*vmm;
+	struct vq_desc		*desc;
+	struct vq_avail		*avail;
+	struct vq_used		*used;
+	unsigned int		avail_idx, used_idx;
+	unsigned int		nsectors;
+	/* One virtqueue block (4KB-aligned) + request buffers.
+	 * Identity-mapped kernel: VA == PA, so the device can use
+	 * these addresses directly. */
+	unsigned char		vq_block[VQ_BLOCK_SIZE]
+				__attribute__((aligned(4096)));
+	unsigned char		req_hdr[16] __attribute__((aligned(16)));
+	unsigned char		req_data[BLK_SECTOR] __attribute__((aligned(16)));
+	volatile unsigned char	req_status;
+};
 
-/* One virtqueue block (4KB-aligned) + request buffers.  Identity-mapped
- * kernel: VA == PA, so the device can use these addresses directly. */
-static unsigned char vq_block[VQ_BLOCK_SIZE] __attribute__((aligned(4096)));
-static unsigned char req_hdr[16] __attribute__((aligned(16)));
-static unsigned char req_data[BLK_SECTOR] __attribute__((aligned(16)));
-static volatile unsigned char req_status;
+#define	BLKDEV_MAX	2u
+static struct blkdev	blkdevs[BLKDEV_MAX]
+			__attribute__((aligned(4096)));
+static unsigned int	nblkdevs;	/* 1 = dev 0 saja; 2 = + SD (dev 1) */
+/* Urutan slot probe QEMU tak dapat diandalkan (pelajaran Fase 15);
+ * petakan: idev = index device internal, sdev = index kartu SD. */
+static unsigned int	idev, sdev;
+
+#define	BLK0	(&blkdevs[idev])	/* storage internal */
+#define	BLK1	(&blkdevs[sdev])	/* kartu SD */
 
 static inline unsigned int
-mmio_r(unsigned int off)
+mmio_r(struct blkdev *d, unsigned int off)
 {
-	return blk_vmm[off / 4u];
+	return d->vmm[off / 4u];
 }
 
 static inline void
-mmio_w(unsigned int off, unsigned int v)
+mmio_w(struct blkdev *d, unsigned int off, unsigned int v)
 {
-	blk_vmm[off / 4u] = v;
+	d->vmm[off / 4u] = v;
 }
 
 /*
- * blk_request: run one synchronous request.  type = BLK_T_IN/BLK_T_OUT.
- * For WRITE, 512B are copied from wdata.  For READ, data lands in
- * req_data (caller must copy out).  Returns 0 on VIRTIO_BLK_S_OK.
+ * blk_request: run one synchronous request on device d.
+ * type = BLK_T_IN/BLK_T_OUT.  For WRITE, 512B are copied from wdata.
+ * For READ, data lands in d->req_data (caller must copy out).
+ * Returns 0 on VIRTIO_BLK_S_OK.
  */
 static int
-blk_request(unsigned int type, unsigned int sector, const unsigned char *wdata)
+blk_request(struct blkdev *d, unsigned int type, unsigned int sector,
+	    const unsigned char *wdata)
 {
 	unsigned int i, spin;
 	volatile unsigned short *uidx;
 
-	if (!blk_vmm || sector >= blk_nsectors)
+	if (!d->vmm || sector >= d->nsectors)
 		return -1;
 
 	/* Header: type, ioprio=0, sector (LE; ARM is LE). */
-	req_hdr[0] = (unsigned char)type;
-	req_hdr[1] = req_hdr[2] = req_hdr[3] = 0;
-	req_hdr[4] = req_hdr[5] = req_hdr[6] = req_hdr[7] = 0;
+	d->req_hdr[0] = (unsigned char)type;
+	d->req_hdr[1] = d->req_hdr[2] = d->req_hdr[3] = 0;
+	d->req_hdr[4] = d->req_hdr[5] = d->req_hdr[6] = d->req_hdr[7] = 0;
 	for (i = 0; i < 8; i++)
-		req_hdr[8 + i] = (unsigned char)(sector >> (i * 8));
+		d->req_hdr[8 + i] = (unsigned char)(sector >> (i * 8));
 	if (type == BLK_T_OUT && wdata)
 		for (i = 0; i < BLK_SECTOR; i++)
-			req_data[i] = wdata[i];
-	req_status = 0xff;
+			d->req_data[i] = wdata[i];
+	d->req_status = 0xff;
 
 	/* Descriptor chain: hdr -> data -> status. */
-	blk_desc[0].addr_lo = (unsigned int)(unsigned long)req_hdr;
-	blk_desc[0].addr_hi = 0;
-	blk_desc[0].len = 16;
-	blk_desc[0].flags = VD_NEXT;
-	blk_desc[0].next = 1;
-	blk_desc[1].addr_lo = (unsigned int)(unsigned long)req_data;
-	blk_desc[1].addr_hi = 0;
-	blk_desc[1].len = BLK_SECTOR;
-	blk_desc[1].flags = (type == BLK_T_IN) ? (VD_NEXT | VD_WRITE) : VD_NEXT;
-	blk_desc[1].next = 2;
-	blk_desc[2].addr_lo = (unsigned int)(unsigned long)&req_status;
-	blk_desc[2].addr_hi = 0;
-	blk_desc[2].len = 1;
-	blk_desc[2].flags = VD_WRITE;
-	blk_desc[2].next = 0;
+	d->desc[0].addr_lo = (unsigned int)(unsigned long)d->req_hdr;
+	d->desc[0].addr_hi = 0;
+	d->desc[0].len = 16;
+	d->desc[0].flags = VD_NEXT;
+	d->desc[0].next = 1;
+	d->desc[1].addr_lo = (unsigned int)(unsigned long)d->req_data;
+	d->desc[1].addr_hi = 0;
+	d->desc[1].len = BLK_SECTOR;
+	d->desc[1].flags = (type == BLK_T_IN) ? (VD_NEXT | VD_WRITE) : VD_NEXT;
+	d->desc[1].next = 2;
+	d->desc[2].addr_lo = (unsigned int)(unsigned long)&d->req_status;
+	d->desc[2].addr_hi = 0;
+	d->desc[2].len = 1;
+	d->desc[2].flags = VD_WRITE;
+	d->desc[2].next = 0;
 
-	blk_avail->ring[blk_avail_idx % VQ_SIZE] = 0;
-	blk_avail_idx++;
+	d->avail->ring[d->avail_idx % VQ_SIZE] = 0;
+	d->avail_idx++;
 	mem_barrier();
-	blk_avail->idx = (unsigned short)blk_avail_idx;
+	d->avail->idx = (unsigned short)d->avail_idx;
 
 	/* Push our writes to RAM so the device sees them. */
-	dcache_clean_range((unsigned int)(unsigned long)blk_desc,
+	dcache_clean_range((unsigned int)(unsigned long)d->desc,
 			   3 * sizeof(struct vq_desc));
-	dcache_clean_range((unsigned int)(unsigned long)blk_avail,
+	dcache_clean_range((unsigned int)(unsigned long)d->avail,
 			   sizeof(struct vq_avail));
-	dcache_clean_range((unsigned int)(unsigned long)req_hdr, 16);
+	dcache_clean_range((unsigned int)(unsigned long)d->req_hdr, 16);
 	if (type == BLK_T_OUT)
-		dcache_clean_range((unsigned int)(unsigned long)req_data,
+		dcache_clean_range((unsigned int)(unsigned long)d->req_data,
 				   BLK_SECTOR);
 	/* req_status written by device: drop any stale cached copy. */
-	dcache_inval_range((unsigned int)(unsigned long)&req_status, 1);
+	dcache_inval_range((unsigned int)(unsigned long)&d->req_status, 1);
 	if (type == BLK_T_IN)
-		dcache_inval_range((unsigned int)(unsigned long)req_data,
+		dcache_inval_range((unsigned int)(unsigned long)d->req_data,
 				   BLK_SECTOR);
 
 	mem_barrier();
-	mmio_w(VMM_QNOTIFY, 0);
+	mmio_w(d, VMM_QNOTIFY, 0);
 	__asm__ volatile ("dsb ish" ::: "memory");
 
 	/* Poll for completion.  used->idx is written by the device;
 	 * invalidate its line each iteration so we never read a stale
 	 * cached copy (the Fase 12d volatile-hoisting lesson, now with
 	 * D-cache on). */
-	uidx = (volatile unsigned short *)&blk_used->idx;
+	uidx = (volatile unsigned short *)&d->used->idx;
 	spin = 0;
-	while (*uidx == (unsigned short)blk_used_idx && spin < 100000000u) {
+	while (*uidx == (unsigned short)d->used_idx && spin < 100000000u) {
 		dcache_inval_range((unsigned int)(unsigned long)uidx, 2);
 		spin++;
 	}
-	if (*uidx == (unsigned short)blk_used_idx)
+	if (*uidx == (unsigned short)d->used_idx)
 		return -2;		/* timeout */
-	blk_used_idx = *uidx;
+	d->used_idx = *uidx;
 
 	/* Pull device writes into the cache. */
 	mem_barrier();
-	dcache_inval_range((unsigned int)(unsigned long)blk_used,
+	dcache_inval_range((unsigned int)(unsigned long)d->used,
 			   sizeof(struct vq_used));
-	dcache_inval_range((unsigned int)(unsigned long)&req_status, 1);
+	dcache_inval_range((unsigned int)(unsigned long)&d->req_status, 1);
 	if (type == BLK_T_IN)
-		dcache_inval_range((unsigned int)(unsigned long)req_data,
+		dcache_inval_range((unsigned int)(unsigned long)d->req_data,
 				   BLK_SECTOR);
 
-	return (req_status == BLK_S_OK) ? 0 : -3;
+	return (d->req_status == BLK_S_OK) ? 0 : -3;
 }
 
 /*
- * blk_read_sector / blk_write_sector: public MD API (512B sectors).
+ * blk_read_sector / blk_write_sector: public MD API, dev 0 (512B).
  */
 int
 blk_read_sector(unsigned int sector, unsigned char *data)
@@ -248,119 +264,210 @@ blk_read_sector(unsigned int sector, unsigned char *data)
 	unsigned int i;
 	int r;
 
-	r = blk_request(BLK_T_IN, sector, 0);
+	r = blk_request(BLK0, BLK_T_IN, sector, 0);
 	if (r == 0 && data)
 		for (i = 0; i < BLK_SECTOR; i++)
-			data[i] = req_data[i];
+			data[i] = BLK0->req_data[i];
 	return r;
 }
 
 int
 blk_write_sector(unsigned int sector, const unsigned char *data)
 {
-	return blk_request(BLK_T_OUT, sector, data);
+	return blk_request(BLK0, BLK_T_OUT, sector, data);
 }
 
 unsigned int
 blk_total_sectors(void)
 {
-	return blk_nsectors;
+	return BLK0->nsectors;
+}
+
+/* Fase D: kapasitas per device (dev 0 = internal, dev 1 = SD). */
+unsigned int
+blk_nsectors_dev(unsigned int dev)
+{
+	if (dev >= nblkdevs)
+		return 0;
+	return (dev == 0 ? BLK0 : BLK1)->nsectors;
+}
+
+/* Fase D: SD = dev 1. */
+int
+sd_present(void)
+{
+	return nblkdevs > 1;
+}
+
+int
+sd_read(unsigned int sector, unsigned char *data)
+{
+	unsigned int i;
+	int r;
+
+	if (nblkdevs < 2)
+		return -1;
+	r = blk_request(BLK1, BLK_T_IN, sector, 0);
+	if (r == 0 && data)
+		for (i = 0; i < BLK_SECTOR; i++)
+			data[i] = BLK1->req_data[i];
+	return r;
+}
+
+int
+sd_write(unsigned int sector, const unsigned char *data)
+{
+	if (nblkdevs < 2)
+		return -1;
+	return blk_request(BLK1, BLK_T_OUT, sector, data);
 }
 
 /*
- * blk_init: probe virtio-mmio slots for a block device, negotiate,
- * set up one virtqueue, read capacity.  Returns 0 on success.
+ * blkdev_init_one: negotiate + set up one queue + read capacity for
+ * the virtio-blk device at `base`.  Returns 0 on success.
  */
-int
-blk_init(void)
+static int
+blkdev_init_one(struct blkdev *d, volatile unsigned int *base)
 {
 	unsigned int i, qmax, qalign, status;
 	unsigned int cap_lo, cap_hi;
 	unsigned long basea, avail_end, used_base;
+
+	d->vmm = base;
+	mmio_w(d, VMM_STATUS, 0);
+	mmio_w(d, VMM_STATUS, VST_ACK);
+	status = mmio_r(d, VMM_STATUS);
+	mmio_w(d, VMM_STATUS, status | VST_DRIVER);
+	mmio_w(d, VMM_GUESTPAGESZ, PAGE_SIZE);
+
+	/* No features needed, but do the FEATURES_OK dance. */
+	mmio_w(d, VMM_HOSTFEATSEL, 0);
+	(void)mmio_r(d, VMM_HOSTFEAT);
+	mmio_w(d, VMM_GUESTFEATSEL, 0);
+	mmio_w(d, VMM_GUESTFEAT, 0);
+	status = mmio_r(d, VMM_STATUS);
+	mmio_w(d, VMM_STATUS, status | VST_FEAT_OK);
+	mem_barrier();
+
+	/* One queue (queue 0). */
+	mmio_w(d, VMM_QSEL, 0);
+	qmax = mmio_r(d, VMM_QNUMMAX);
+	if (qmax == 0)
+		return -1;
+	if (qmax > VQ_SIZE)
+		qmax = VQ_SIZE;
+	qalign = mmio_r(d, VMM_QALIGN);
+	if (qalign == 0)
+		qalign = PAGE_SIZE;
+
+	basea = (unsigned long)d->vq_block;
+	for (i = 0; i < VQ_BLOCK_SIZE / 4u; i++)
+		((unsigned int *)basea)[i] = 0;
+	d->desc = (struct vq_desc *)basea;
+	d->avail = (struct vq_avail *)(basea + 16u * VQ_SIZE);
+	avail_end = basea + 16u * VQ_SIZE + 6u + 2u * VQ_SIZE;
+	used_base = (avail_end + qalign - 1u) & ~(unsigned long)(qalign - 1u);
+	d->used = (struct vq_used *)used_base;
+	d->avail_idx = 0;
+	d->used_idx = 0;
+
+	mmio_w(d, VMM_QNUM, qmax);
+	mmio_w(d, VMM_QALIGN, qalign);
+	mem_barrier();
+	mmio_w(d, VMM_QPFN, (unsigned int)(basea / PAGE_SIZE));
+
+	/* Real capacity from device config (u64, 512B sectors). */
+	cap_lo = ((volatile unsigned int *)
+		  ((unsigned long)d->vmm + VMM_CONFIG))[0];
+	cap_hi = ((volatile unsigned int *)
+		  ((unsigned long)d->vmm + VMM_CONFIG))[1];
+	if (cap_hi != 0 || cap_lo == 0)
+		return -1;
+	d->nsectors = cap_lo;
+
+	status |= VST_DRIVER_OK;
+	mmio_w(d, VMM_STATUS, status);
+	mem_barrier();
+	if (!(mmio_r(d, VMM_STATUS) & VST_DRIVER_OK))
+		return -1;
+	return 0;
+}
+
+/*
+ * blkdev_is_fat32: sector 0 has a FAT32 boot signature
+ * (0x55AA at 510, "FAT32   " at 0x52).  Used to tell the SD card
+ * (dev 1) apart from internal storage (dev 0): QEMU slot order is
+ * NOT reliable (Fase 15 lesson), the on-disk signature is.
+ */
+static int
+blkdev_is_fat32(struct blkdev *d)
+{
+	static unsigned char sec[BLK_SECTOR] __attribute__((aligned(16)));
+	unsigned int i;
+
+	if (blk_request(d, BLK_T_IN, 0, 0) != 0)
+		return 0;
+	for (i = 0; i < BLK_SECTOR; i++)
+		sec[i] = d->req_data[i];
+	if (sec[510] != 0x55u || sec[511] != 0xaau)
+		return 0;
+	return sec[0x52] == 'F' && sec[0x53] == 'A' &&
+	       sec[0x54] == 'T' && sec[0x55] == '3' &&
+	       sec[0x56] == '2';
+}
+
+/*
+ * blk_init: probe virtio-mmio slots for block devices (up to 2),
+ * negotiate each, then order them: dev 0 = internal storage,
+ * dev 1 = SD card (identified by FAT32 boot signature, not slot).
+ * Returns 0 if at least dev 0 is up.
+ */
+int
+blk_init(void)
+{
+	unsigned int i, found;
 	volatile unsigned int *base;
-	int found;
 
 	found = 0;
-	for (i = 0; i < VMM_SLOTS; i++) {
+	for (i = 0; i < VMM_SLOTS && found < BLKDEV_MAX; i++) {
 		base = (volatile unsigned int *)(VMM_BASE + i * VMM_STRIDE);
 		if (base[VMM_MAGIC / 4u] != VMM_MAGIC_VAL)
 			continue;
 		if (base[VMM_DEVID / 4u] != VMM_DEV_BLK)
 			continue;
-		blk_vmm = base;
-		found = 1;
-		break;
+		if (blkdev_init_one(&blkdevs[found], base) != 0) {
+			printf("blk: slot %u init failed\n", i);
+			continue;
+		}
+		printf("blk: dev %u: slot %u, %u sectors (%u MB)\n",
+		       found, i, blkdevs[found].nsectors,
+		       blkdevs[found].nsectors / 2048u);
+		found++;
 	}
-	if (!found) {
+	if (found == 0) {
 		printf("blk: no virtio-blk device found\n");
 		return -1;
 	}
+	nblkdevs = found;
+	idev = 0;
+	sdev = 1;
 
-	mmio_w(VMM_STATUS, 0);
-	mmio_w(VMM_STATUS, VST_ACK);
-	status = mmio_r(VMM_STATUS);
-	mmio_w(VMM_STATUS, status | VST_DRIVER);
-	mmio_w(VMM_GUESTPAGESZ, PAGE_SIZE);
-
-	/* No features needed, but do the FEATURES_OK dance. */
-	mmio_w(VMM_HOSTFEATSEL, 0);
-	(void)mmio_r(VMM_HOSTFEAT);
-	mmio_w(VMM_GUESTFEATSEL, 0);
-	mmio_w(VMM_GUESTFEAT, 0);
-	status = mmio_r(VMM_STATUS);
-	mmio_w(VMM_STATUS, status | VST_FEAT_OK);
-	mem_barrier();
-
-	/* One queue (queue 0). */
-	mmio_w(VMM_QSEL, 0);
-	qmax = mmio_r(VMM_QNUMMAX);
-	if (qmax == 0) {
-		printf("blk: queue 0 not available\n");
-		return -1;
+	/* Petakan: device bertanda FAT32 = kartu SD (dev 1).
+	 * Urutan slot QEMU tak dapat diandalkan (pelajaran Fase 15). */
+	if (found == 2) {
+		int f0 = blkdev_is_fat32(&blkdevs[0]);
+		int f1 = blkdev_is_fat32(&blkdevs[1]);
+		if (f0 && !f1) {
+			idev = 1;
+			sdev = 0;
+			printf("blk: dev 0 = internal (probed 2nd), "
+			       "dev 1 = SD (probed 1st)\n");
+		} else {
+			printf("blk: dev 0 = internal, dev 1 = SD\n");
+		}
 	}
-	if (qmax > VQ_SIZE)
-		qmax = VQ_SIZE;
-	qalign = mmio_r(VMM_QALIGN);
-	if (qalign == 0)
-		qalign = PAGE_SIZE;
-
-	basea = (unsigned long)vq_block;
-	for (i = 0; i < VQ_BLOCK_SIZE / 4u; i++)
-		((unsigned int *)basea)[i] = 0;
-	blk_desc = (struct vq_desc *)basea;
-	blk_avail = (struct vq_avail *)(basea + 16u * VQ_SIZE);
-	avail_end = basea + 16u * VQ_SIZE + 6u + 2u * VQ_SIZE;
-	used_base = (avail_end + qalign - 1u) & ~(unsigned long)(qalign - 1u);
-	blk_used = (struct vq_used *)used_base;
-	blk_avail_idx = 0;
-	blk_used_idx = 0;
-
-	mmio_w(VMM_QNUM, qmax);
-	mmio_w(VMM_QALIGN, qalign);
-	mem_barrier();
-	mmio_w(VMM_QPFN, (unsigned int)(basea / PAGE_SIZE));
-
-	/* Real capacity from device config (u64, 512B sectors). */
-	cap_lo = ((volatile unsigned int *)
-		  ((unsigned long)blk_vmm + VMM_CONFIG))[0];
-	cap_hi = ((volatile unsigned int *)
-		  ((unsigned long)blk_vmm + VMM_CONFIG))[1];
-	if (cap_hi != 0 || cap_lo == 0) {
-		printf("blk: strange capacity hi=%u lo=%u\n", cap_hi, cap_lo);
-		return -1;
-	}
-	blk_nsectors = cap_lo;
-
-	status |= VST_DRIVER_OK;
-	mmio_w(VMM_STATUS, status);
-	mem_barrier();
-	if (!(mmio_r(VMM_STATUS) & VST_DRIVER_OK)) {
-		printf("blk: DRIVER_OK rejected\n");
-		return -1;
-	}
-
-	printf("blk: virtio-blk ready, %u sectors (%u MB)\n",
-	       blk_nsectors, blk_nsectors / 2048u);
+	printf("blk: ready, %u device(s); SD %s\n",
+	       nblkdevs, nblkdevs > 1 ? "present (dev 1)" : "absent");
 	return 0;
 }
 
@@ -383,7 +490,7 @@ blk_selftest(void)
 		return;
 	}
 
-	sec = blk_nsectors - 1;	/* scratch: last sector */
+	sec = blk_total_sectors() - 1;	/* scratch: last sector */
 	for (i = 0; i < BLK_SECTOR; i++)
 		wbuf[i] = (unsigned char)(i ^ 0xa5);
 
@@ -412,5 +519,5 @@ blk_selftest(void)
 	}
 
 	printf("blk_selftest: PASS (write+read verify, %u sectors)\n",
-	       blk_nsectors);
+	       blk_total_sectors());
 }

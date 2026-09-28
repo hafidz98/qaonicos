@@ -319,3 +319,211 @@ u_touch(const char *path)
 	u_close((unsigned)fd);
 	return 1;
 }
+
+/*
+ * Wrapper GPIO (Fase D): SYS_GPIO_SET=40, SYS_GPIO_GET=41.
+ */
+int
+sys_gpio_set(unsigned pin, unsigned val)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r1, %2\n\t"
+		"mov r7, #40\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (pin), "r" (val)
+		: "r0", "r1", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_gpio_get(unsigned pin)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r7, #41\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (pin)
+		: "r0", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+u_gpio_set(unsigned pin, unsigned val)
+{
+	return sys_gpio_set(pin, val);
+}
+
+int
+u_gpio_get(unsigned pin)
+{
+	return sys_gpio_get(pin);
+}
+
+/*
+ * Wrapper SD (Fase D): SYS_SD_READ=50, SYS_SD_WRITE=51.
+ */
+int
+sys_sd_read(unsigned sector, void *buf)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r1, %2\n\t"
+		"mov r7, #50\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (sector), "r" (buf)
+		: "r0", "r1", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_sd_write(unsigned sector, const void *buf)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r1, %2\n\t"
+		"mov r7, #51\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (sector), "r" (buf)
+		: "r0", "r1", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+u_sd_read(unsigned sector, void *buf)
+{
+	return sys_sd_read(sector, buf);
+}
+
+int
+u_sd_write(unsigned sector, const void *buf)
+{
+	return sys_sd_write(sector, buf);
+}
+
+/*
+ * Wrapper FAT32 (Fase D): SYS_MKDIR=52, FAT_WRITE=53, FAT_READ=54,
+ * FAT_DELETE=55, READDIR=56.
+ */
+int
+sys_mkdir(const char *path)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r7, #52\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (path)
+		: "r0", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_fat_write(const char *path, const void *buf, unsigned len)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r1, %2\n\t"
+		"mov r2, %3\n\t"
+		"mov r7, #53\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (path), "r" (buf), "r" (len)
+		: "r0", "r1", "r2", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_fat_read(const char *path, void *buf, unsigned max)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r1, %2\n\t"
+		"mov r2, %3\n\t"
+		"mov r7, #54\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (path), "r" (buf), "r" (max)
+		: "r0", "r1", "r2", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_fat_delete(const char *path)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r7, #55\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (path)
+		: "r0", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_readdir(const char *path, char *buf, unsigned max)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r1, %2\n\t"
+		"mov r2, %3\n\t"
+		"mov r7, #56\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (path), "r" (buf), "r" (max)
+		: "r0", "r1", "r2", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+u_mkdir(const char *path)
+{
+	return sys_mkdir(path);
+}
+
+int
+u_fat_write(const char *path, const void *buf, unsigned len)
+{
+	return sys_fat_write(path, buf, len);
+}
+
+int
+u_fat_read(const char *path, void *buf, unsigned max)
+{
+	return sys_fat_read(path, buf, max);
+}
+
+int
+u_fat_delete(const char *path)
+{
+	return sys_fat_delete(path);
+}
+
+int
+u_readdir(const char *path, char *buf, unsigned max)
+{
+	return sys_readdir(path, buf, max);
+}

@@ -45,11 +45,18 @@ machine_init(void)
 	extern void	pmap_selftest(void);
 	extern void	ipc_selftest(void);
 	extern void	blk_selftest(void);
+	extern void	gpio_init(void);
+	extern int	fat32_mount(void);
 
 	fpu_init();
 	pmap_selftest();	/* M4: verify L2 small-page path */
 	ipc_selftest();		/* M4: verify IPC ports/port sets */
 	blk_selftest();		/* M4: verify virtio-blk read/write */
+	gpio_init();		/* Fase D: GPIO (mock di QEMU) */
+	if (fat32_mount() == 0)
+		printf("fat32: mounted /sd\n");
+	else
+		printf("fat32: mount failed (SD absent?)\n");
 	cold = 0;
 }
 

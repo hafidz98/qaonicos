@@ -12,6 +12,43 @@
 
 #define MOTD_STR "QaonicOS Mach3: motd dari init\n"
 
+/* Fase D: isi /gpio.cmd, /sd.cmd, /fat.cmd untuk ugpio/usd/ufs. */
+#define GPIO_CMD_STR "set 5 1\nget 5\nset 5 0\nget 5\n"
+#define SD_CMD_STR   "w 100\nr 100\nw 200\nr 200\n"
+#define FAT_CMD_STR  "mkdir /sd/T\nw /sd/T/A.BIN 3000\nr /sd/T/A.BIN 3000\nls /sd/T\nd /sd/T/A.BIN\nls /sd\n"
+
+static int
+write_file(const char *path, const char *data)
+{
+	unsigned n = u_strlen(data);
+	int fd = u_open(path, O_CREAT | O_RDWR);
+	int w;
+
+	if (fd < 0)
+		return 0;
+	w = u_write((unsigned)fd, data, n);
+	u_close((unsigned)fd);
+	return w >= 0 && (unsigned)w == n;
+}
+
+static int
+write_cmd(const char *cmdpath, const char *sentinel, const char *data)
+{
+	if (!write_file(cmdpath, data)) {
+		u_put("init FAIL: tulis ");
+		u_put(cmdpath);
+		u_put("\n");
+		return 0;
+	}
+	if (!u_touch(sentinel)) {
+		u_put("init FAIL: sentinel ");
+		u_put(sentinel);
+		u_put("\n");
+		return 0;
+	}
+	return 1;
+}
+
 __attribute__((section(".text.start")))
 void
 _start(void)
@@ -41,6 +78,15 @@ _start(void)
 		u_exit();
 	}
 	puts("init: /motd.txt + /.motd_ready ok\n");
+
+	/* Fase D: tulis .cmd untuk ugpio/usd/ufs. */
+	if (!write_cmd("/gpio.cmd", "/.gpio_cmd_ready", GPIO_CMD_STR))
+		u_exit();
+	if (!write_cmd("/sd.cmd", "/.sd_cmd_ready", SD_CMD_STR))
+		u_exit();
+	if (!write_cmd("/fat.cmd", "/.fat_cmd_ready", FAT_CMD_STR))
+		u_exit();
+	puts("init: /gpio.cmd + /sd.cmd + /fat.cmd ok\n");
 
 	/* Uji sbrk singkat (regresi Fase B). */
 	brk0 = sys_sbrk(0);
