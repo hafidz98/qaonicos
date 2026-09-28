@@ -98,11 +98,12 @@ terdokumentasi di bawah).
   `timer: 200 ticks` (print verifikasi sementara, sudah dihapus).
 - Sistem stabil tanpa panic.
 
-**Masalah tersisa (butuh investigasi lanjut):**
-- Timer berhenti setelah ~200 ticks (2 detik). Tanpa `clock_interrupt()`
-  pun berhenti, jadi bukan masalah MI. Kemungkinan: QEMU TCG virtual
-  time tidak advance saat guest idle, atau GIC PPI level-sensitive
-  quirk. Perlu investigasi dengan QEMU monitor atau gdb.
+**Masalah "berhenti di 200 ticks" — FALSE ALARM (2026-09-28):**
+- Investigasi lanjutan membuktikan timer **tidak berhenti**. Tick counter
+  vs waktu guest (CNTVCT): 100 ticks di detik ke-1, 200 ticks di detik
+  ke-2 — persis 100Hz, linear. Yang terjadi: QEMU TCG ~11-30x lebih
+  lambat dari host, jadi timeout host (15-60 dtk) hanya mencakup ~2 dtk
+  waktu guest. Agen sebelumnya mengukur dengan jam host → salah simpul.
 - Print dari IRQ handler bermasalah (mungkin deadlock setelah beberapa
   print); counter `timer_ticks` dipertahankan tanpa print.
 
