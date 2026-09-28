@@ -86,3 +86,34 @@ register (36 byte) → stack misaligned → panic intermiten
 (prefetch abort di pc liar) setelah program ke-5 exit. Terverifikasi:
 5/5 program (init→ucat→uls→uecho→umon) jalan berurutan hingga halt
 bersih.
+
+## Fase D: driver + network di atas Mach 3 (2026-09-28)
+
+Dua commit: `281b5ea` (GPIO/SD/FAT32) + `fc2bd70` (network/HTTP).
+
+### Part 1/2: GPIO + SD + FAT32
+- `gpio.c` baru: dual backend (RV1103 asli `#ifdef BOARD_RV1103`,
+  mock RAM di QEMU). Syscall 40/41.
+- `blk.c` refactor multi-device: `struct blkdev[2]`, identifikasi SD
+  via signature boot sector FAT32 (bukan urutan slot).
+- `fat32.c` port mekanis; mount `/sd` di `machine_init()`.
+  Syscall 52-56. Program user: `ugpio`, `usd`, `ufs`.
+- Bug: BSS program user tak ter-map (objcopy tak sertakan NOBITS) →
+  `user/pad-bss.py`; ramfs penuh (16→32 file).
+
+### Part 2/2: network + HTTP
+- `net.c`: driver virtio-net legacy, polling murni (IRQ dibuang),
+  D-cache maintenance eksplisit (D-cache ON di port ini).
+- `netstack.c`: ARP/IPv4/ICMP. `tcp.c`: TCP satu-koneksi port 80.
+  `http.c`: HTTP/1.0 (GET / dashboard, GET /metrics).
+- `netmain.c`: server loop setelah 8 program user, tak kembali.
+- Ping ke 10.0.2.2 (QEMU user-net host) BERHASIL.
+- **Keterbatasan jujur**: TCP SYN dari host via `hostfwd=tcp::18080-:80`
+  belum diterima guest (RX path OK untuk ICMP, tapi SYN tak sampai).
+  Investigasi lanjut diperlukan (kemungkinan NAT QEMU atau filter MAC).
+
+### Pelajaran
+- QEMU user-net: host = 10.0.2.2 (bukan 10.0.2.1 yang untuk tap).
+- D-cache ON → semua DMA (virtio queue + buffer) butuh clean/invalidate
+  eksplisit; `used->idx` volatile + invalidate per baca.
+- `dcache_*_range` di blk.c dijadikan non-static untuk dipakai net.c.
