@@ -1,0 +1,9 @@
+/* mach3/kernel/mach/arm/machine_types.defs -- MIG machine types. */
+#ifndef	_MACHINE_VM_TYPES_DEFS_
+#define	_MACHINE_VM_TYPES_DEFS_	1
+type natural_t = unsigned32;
+type integer_t = int32;
+#if	MACH_IPC_COMPAT
+#define	MSG_TYPE_PORT_NAME	MACH_MSG_TYPE_INTEGER_32
+#endif	/* MACH_IPC_COMPAT */
+#endif	/* _MACHINE_VM_TYPES_DEFS_ */

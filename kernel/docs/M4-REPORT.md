@@ -1,0 +1,222 @@
+# M4 Report — Mach 3 ARM Port (QEMU virt)
+
+Lanjutan dari M3 (boot stabil sampai idle loop).
+
+## Item 1: Real `pmap_enter` dengan halaman 4KB — DONE
+
+**Status:** Selesai, terverifikasi hardware via `pmap_selftest` (PASS).
+
+### Yang diimplementasikan (`kernel/arm/pmap.c`, `kernel/arm/pmap.h`, `kernel/arm/pte.h`)
+
+- **L1 per-pmap**: `pmap_create()` alokasi L1 privat 16KB-aligned (32KB alloc +
+  round-up via `kmem_alloc`), diisi copy dari boot L1 agar mapping kernel
+  (RAM sections, device window, vectors) terlihat. Field `l1_alloc` baru di
+  `struct pmap` untuk free di `pmap_destroy()`.
+- **L2 page tables**: pool 1KB tables (4 per halaman 4KB dari `kmem_alloc`),
+  dilindungi `splhigh` (UP). Alokasi di luar critical section agar aman bila
+  `kmem_alloc` block.
+- **`pmap_enter()`**: untuk va di luar identity range, pasang L1 page-table
+  descriptor (domain 0) bila perlu, lalu L2 small-page descriptor
+  (TEX=001/C=1/B=1/S=1, AP dari prot) + TLB invalidate per halaman.
+- **`pmap_remove()` / `pmap_protect()` / `pmap_extract()`**: jalan di atas L2.
+- **`arm_pmap_activate_user()` / `_kernel()`**: switch TTBR0 (dengan bit outer-WB
+  seperti locore.s) + TLBIALL + DSB/ISB.
+- **`pmap_selftest()`** (dipanggil dari `machine_init`): buat pmap, map 1 halaman
+  di VA 0x100000, verifikasi `pmap_extract`, switch TTBR0 ke user L1, tulis/baca
+  magic value lewat mapping baru, switch balik, `pmap_remove`, `pmap_destroy`.
+  Berjalan tiap boot sebagai regression test.
+
+### Bug yang ditemukan saat implementasi
+
+1. **Salah pakai `kmem_alloc`**: MI `kmem_alloc(map, &addr, size)` return
+   `kern_return_t`, bukan alamat. (Fault `str [r8]` di dalam MI.)
+2. **`L2_SP_XN` merusak type field**: bit 0 = 1 bikin descriptor 0b11 (invalid),
+   bukan small page. ARMv7 short-descriptor small page tidak punya bit XN
+   terpisah — define di `pte.h` dikoreksi, semua user page executable di M4.
+
+### Verifikasi
+- Build: MI 94/94, MD 16/16, LINK OK.
+- Boot QEMU: `pmap_selftest: PASS`, stabil 12 detik tanpa panic.
+
+## Item 2: IPC bring-up + task pertama — DONE (parsial)
+
+**Status:** Selesai, terverifikasi hardware. IPC PASS penuh. Task: `task_create`
++ `thread_create` terverifikasi; scheduler dispatch belum (blocker
+terdokumentasi di bawah).
+
+### Yang diimplementasikan (`kernel/arm/ipc_test.c`, hook di `machdep.c`/`clock.c`)
+
+- **`ipc_selftest()`** (dari `machine_init`, setelah `ipc_bootstrap`/`ipc_init`):
+  alokasi port kernel via `ipc_port_alloc_kernel()`, verifikasi
+  `ip_references == 1`, dealokasi. Print `ipc_selftest: PASS` tiap boot.
+- **`task_selftest()`** (dari `startrtclock`, setelah `task_init`/`thread_init`):
+  `task_create(kernel_task, FALSE, &new_task)` → `thread_create` →
+  `thread_start` → `thread_doswapin`. Start routine dijalankan synchronous
+  (verifikasi code path + print). Print `task_selftest: PASS` tiap boot.
+
+### Temuan / bug
+
+1. **`ipc_space_kernel` memang inactive** — `ipc_space_create_special`
+   sengaja set `is_active = FALSE` (special space untuk disembodied rights).
+   Test port-set alloc awal gagal dengan `KERN_INVALID_TASK` (16) — bukan
+   bug, tapi ekspektasi test yang salah. Test diperbaiki: hanya port
+   alloc/dealloc.
+2. **`ipc_port_alloc_special` tidak cek `is_active`** dan tidak insert ke
+   space table — "port alloc works" awal menyesatkan; verifikasi
+   `ip_references` ditambahkan.
+3. **Timer interrupt tidak fire di QEMU virt** (blocker scheduler dispatch):
+   dicoba PPI 27/virtual-timer, PPI 30/physical-timer, GIC Group 0/1 —
+   `ispendr0` tetap 0. `thread_setrun` butuh `current_thread()` valid
+   (`active_threads[cpu]`), yang baru ada setelah `load_context()`.
+   Defer via timer gagal karena IRQ tidak masuk. Full scheduler dispatch
+   (run queue → context switch) = future work.
+
+### Investigasi timer IRQ (2026-09-28, debug agent)
+
+**Root cause ditemukan (2 masalah):**
+
+1. **PPI mismatch**: Kode memprogram **virtual timer** (CNTV_TVAL/CNTV_CTL)
+   yang fire di **PPI 27**, tapi GIC meng-enable **PPI 30** (untuk physical
+   timer). Buktinya: `ispendr0=0x8000000` (bit 27 pending) sementara
+   `isen0` hanya set bit 30. Interrupt pending tapi tidak di-enable.
+
+2. **CPSR.I masked**: `cpu_launch_first_thread()` (MI) jalan dengan
+   `splhigh()` (IRQ masked). Timer fire tapi CPU tidak ambil interrupt
+   karena bit I di CPSR = 1. Buktinya: `cpsr=0x600001d3 (I=1)`.
+
+**Fix yang diimplementasikan:**
+- `clock.c`/`trap.c`/`gic.c`: `ARM_TIMER_PPI` 30 → 27 (virtual timer).
+- `context.s` `_load_context`: tambah `cpsie if` untuk enable IRQ+FIQ
+  saat thread pertama dimulai (MI jalan dengan splhigh).
+- `context.s` `_load_context`: spin delay ~100ms setelah `cpsie` untuk
+  pastikan tick pertama tidak hilang (timer one-shot 10ms; kalau IRQ
+  belum enabled saat fire, tick hilang selamanya).
+
+**Hasil verifikasi:**
+- Timer IRQ **berhasil fire**: `iar=0x1b` (27) terkonfirmasi masuk handler.
+- Counter `timer_ticks` bertambah: terlihat `timer: 100 ticks`,
+  `timer: 200 ticks` (print verifikasi sementara, sudah dihapus).
+- Sistem stabil tanpa panic.
+
+**Masalah "berhenti di 200 ticks" — FALSE ALARM (2026-09-28):**
+- Investigasi lanjutan membuktikan timer **tidak berhenti**. Tick counter
+  vs waktu guest (CNTVCT): 100 ticks di detik ke-1, 200 ticks di detik
+  ke-2 — persis 100Hz, linear. Yang terjadi: QEMU TCG ~11-30x lebih
+  lambat dari host, jadi timeout host (15-60 dtk) hanya mencakup ~2 dtk
+  waktu guest. Agen sebelumnya mengukur dengan jam host → salah simpul.
+- Print dari IRQ handler bermasalah (mungkin deadlock setelah beberapa
+  print); counter `timer_ticks` dipertahankan tanpa print.
+
+**File yang diubah:**
+- `mach3/kernel/arm/clock.c`: PPI 27, hapus debug code.
+- `mach3/kernel/arm/trap.c`: PPI 27, `timer_ticks` counter.
+- `mach3/kernel/arm/gic.c`: komentar PPI 27.
+- `mach3/kernel/arm/context.s`: `cpsie if` + spin delay di `_load_context`.
+
+### Verifikasi
+- Build: MI 94/94, MD 17/17 (file baru `ipc_test.c`), LINK OK. 0 patch MI.
+- Boot QEMU 3x: `pmap_selftest: PASS`, `ipc_selftest: PASS`,
+  `task_selftest: PASS` di semua run, stabil tanpa panic.
+
+## Item 3: Driver virtio-blk — SELESAI (2026-09-28)
+
+**File baru:** `mach3/kernel/arm/blk.c` (~420 baris). Hook `blk_selftest()`
+di `machine_init()` (machdep.c).
+
+**Yang diimplementasikan:**
+- Probe 32 slot virtio-mmio @0x0a000000 (magic "virtio" + DeviceID 2),
+  negosiasi feature legacy, 1 virtqueue 128-entry, I/O sinkron polled.
+- API: `blk_read_sector()` / `blk_write_sector()` (512B),
+  `blk_total_sectors()`.
+- `blk_selftest()`: tulis pola `i ^ 0xa5` ke sektor terakhir → baca
+  balik → verifikasi byte-exact → `blk_selftest: PASS`.
+
+**Perubahan pendukung:**
+- `locore.s` + `pmap.c`: device window diperluas 0x08000000-0x0A000000
+  → 0x08000000-**0x0B000000** (33 section) agar slot virtio-mmio
+  (0x0a000000-0x0a004000) ter-map sebagai device memory.
+
+**Isu DMA coherency (penting):** port ini jalan dengan D-cache ON
+(SCTLR.C, RAM write-back) — beda dengan QaonicOS yang D-cache-nya
+mati. QEMU virtio akses RAM langsung (bypass cache), jadi tiap request
+lakukan cache maintenance: DCCMVAC (clean) deskriptor/avail/request
+sebelum kick; DCIMVAC (invalidate) used ring saat polling + data/status
+sesudah completion. Tanpa ini device baca data basi / CPU baca
+completion basi.
+
+**Pelajaran dari referensi yang dipakai:**
+- `VMM_GUESTPAGESZ = 0x028` (bukan 0x024) — bug QaonicOS Fase 11.
+- `used->idx` dibaca via pointer volatile + invalidate per iterasi
+  (pelajaran hoisting clang -O2 Fase 12d, diperketat untuk D-cache).
+- Spin timeout 100M (TCG lambat di bawah beban I/O).
+
+### Verifikasi
+- Build: MI 94/94, MD 18/18, LINK OK. 0 patch MI.
+- Boot QEMU 3x dengan `-device virtio-blk-device` (image 16MB):
+  `blk_selftest: PASS` di semua run (32768 sektor terdeteksi).
+- Boot tanpa device: `blk_selftest: FAIL (no device)` — graceful,
+  tidak panic, boot lanjut.
+
+## Item 4: User mode + syscall interface — SELESAI (2026-09-28)
+
+**File baru:**
+- `kernel/arm/uprog.s`: dua program user position-independent (ARM, `adr`+
+  literal pool via `.ltorg` di dalam region copy): clean (WRITE+EXIT) dan
+  fault (WRITE + sentuh 0x0).
+- `kernel/arm/userasm.s`: `user_enter_test()` (masuk USR via RFE palsu) +
+  `user_exit_trampoline()` (kembali ke test dengan r0 = exit/fault code).
+- `kernel/arm/user.c`: `user_selftest()`, `user_syscall()`, `user_fault()`.
+- `kernel/arm/trap_frame.h`: struct trap frame shared trap.c/user.c.
+
+**Yang diimplementasikan:**
+- ABI syscall: nomor di r7, argumen r0-r2, return r0; `svc #0`.
+  SYS_WRITE=1 (tulis ke UART, buffer user divalidasi strict ke halaman
+  yang di-map), SYS_EXIT=2 (redirect trap frame ke exit trampoline).
+- `user_selftest()`: task_create + thread_create (task->map->pmap privat),
+  2 halaman fisik (code+stack) via kmem_alloc, copy program + cache
+  maintenance (DCCMVAC + ICIALLU + DSB/ISB sebelum execute), pmap_enter
+  USER_CODE_VA=0x100000/USER_STACK_VA=0x101000 (AP_KRW_URW), TTBR0 switch.
+- Fase A: WRITE "hello from user mode" + EXIT(0) → exit code 0.
+- Fase B: WRITE + LDR [0x0] → data abort ditangkap, hanya user context
+  yang mati (redirect ke trampoline, kernel tidak panic).
+- `thread_exception_return`/`thread_syscall_return` masih panic (M3) —
+  tidak dipakai jalur self-test; full dispatch = future work.
+
+**Bug yang ditemukan saat implementasi:**
+1. **CPS tidak bisa ganti mode dari USR**: `cps #0x13` setelah `cpsid i,#0x10`
+   diabaikan (mode change hanya dari privileged) → RFE jalan di USR →
+   UNDEFINED. Fix: set USR sp via SYS mode (0x1f, privileged tapi
+   banked dengan USR).
+2. **`_svc_handler` salah adjust lr**: `sub lr,lr,#4` benar untuk
+   IRQ/UNDEF/PABT tapi SALAH untuk SVC (lr_svc sudah = next insn) →
+   syscall akan infinite-loop. Fix: hapus sub untuk SVC di locore.s.
+
+**Perubahan pendukung:**
+- `trap.c`: TRAP_SVC dispatch ke user_syscall() (hanya dari USR);
+  TRAP_DABT/PABT/UNDEF dari USR → user_fault() (kill thread, bukan panic).
+- `clock.c`: startrtclock() panggil user_selftest() setelah task_selftest().
+- `locore.s`: _svc_handler tanpa `sub lr,lr,#4`.
+
+### Verifikasi
+- Build: MI 94/94, MD 21/21, LINK OK. 0 patch MI.
+- Boot QEMU **3/3 run**: `user_selftest: PASS (user mode + syscall +
+  fault isolation)` di semua run; "hello from user mode" tercetak dari
+  user mode; fault-test tidak panic; boot lanjut normal.
+
+---
+
+## M4 SELESAI
+
+Semua 4 item M4 selesai dan terverifikasi di QEMU:
+1. ✅ Real `pmap_enter` 4KB (`5bad5ac`)
+2. ✅ IPC bring-up + task pertama (`55bb395`)
+3. ✅ Driver virtio-blk (`7127b05`)
+4. ✅ User mode + syscall interface (commit ini)
+
+Keterbatasan yang diketahui (future work / M5):
+- Scheduler dispatch penuh (run queue → context switch antar thread)
+  belum teruji.
+- `thread_exception_return`/`thread_syscall_return` masih panic.
+- Isolasi memori user belum penuh (user L1 copy kernel mapping;
+  user page executable semua — no XN di short-desc small page).
+- Validasi buffer syscall minimal (hanya range check).

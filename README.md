@@ -7,23 +7,27 @@ dikembangkan dan diuji di QEMU `-M virt -cpu cortex-a7` sebelum dibawa ke hardwa
 
 ```
 qaonic_os/
-├── kernel/          # Kernel QaonicOS: kernel_main.c + build.sh + src/ (modul: trap, pmap,
-│                    #   sched, ipc, vm, net stack, driver virtio-blk/net, FAT32, GPIO, ...)
-├── user/            # Program userspace: init, ucat, uls, uecho, ugpio, usd, ufs, umon + ulib
+├── kernel/          # KERNEL: Mach 3.0 asli (CMU), port ARMv7 (rilis v1.0).
+│                    #   kernel/arm/* = lapisan machine-dependent ARM,
+│                    #   build-md.sh/build-mi.sh = build, docs/ = laporan M1-M6 + RELEASE
+├── user/            # Program userspace (Fase C: porting ke syscall Mach 3)
 ├── tools/           # mkfat32.py — generator image FAT32 (Python murni)
-├── scripts/         # run-qemu.sh — boot QEMU dengan spek Pico Mini (-m 64, virtio-blk, net)
+├── scripts/         # run-qemu.sh — boot kernel Mach 3 di QEMU
 ├── hw/dts/          # Device tree RV1103 (referensi alamat hardware)
 ├── docs/            # Dokumentasi: analisis porting, roadmap, hw-addrs, aset gambar
-├── disk-images/     # pico128.img (storage) + sd128.img (SD) — dibuat otomatis, tidak di-commit
-└── archive/         # Eksperimen/tes lama (qemu-test, test-ctx, test-fpu, test-pmap, test-trap)
+├── disk-images/     # Image QEMU (dibuat otomatis, tidak di-commit)
+└── archive/         # kernel-scratch/ = kernel from-scratch Fase 1-17 (ARSIP, referensi
+                     #   driver net/FAT32/GPIO + net stack untuk Fase D) + eksperimen lama
 ```
 
 ## Cara build & run (QEMU)
 
 ```sh
-./kernel/build.sh        # build kernel -> kernel/mach-kernel.elf
-./scripts/run-qemu.sh    # boot (Ctrl-A X untuk keluar)
+cd kernel && ./build-md.sh   # build -> kernel/build/mach3.elf (MI 94/94, MD 22/22)
+./scripts/run-qemu.sh        # boot (Ctrl-A X untuk keluar)
 ```
+
+Self-test saat boot: pmap, ipc, blk, task, user, sched — semua PASS (rilis v1.0).
 
 ## Direktori terkait (di luar repo ini)
 
@@ -33,9 +37,12 @@ qaonic_os/
 
 ## Status
 
-- **QaonicOS**: user mode + syscall, ramfs, init + utilitas, boot menu, GPIO,
-  SD card, FAT32, TUI system monitor (`umon`), web server system monitor (HTTP di port 80).
-- **Berikutnya**: bring-up hardware RV1103 asli (blocker: DRAM init tanpa TRM publik).
+- **Kernel**: Mach 3.0 asli (CMU), port ARMv7 — rilis `v1.0`
+  (pmap 4KB, IPC, virtio-blk, user mode + syscall minimal, scheduler kooperatif).
+- **Fase A** (selesai): kernel Mach 3 jadi kernel QaonicOS; kernel from-scratch
+  Fase 1-17 diarsipkan di `archive/kernel-scratch/` sebagai referensi.
+- **Berikutnya**: Fase B (syscall + task/thread userland), Fase C (porting userland/ulib),
+  Fase D (driver net/GPIO/SD/FAT32 + net stack + HTTP di atas Mach 3, lalu hardware RV1103).
 
 ## Proyek terkait
 
