@@ -31,6 +31,7 @@
 #include "../rv1103-bringup/netstack.h"
 #include "../rv1103-bringup/blk.h"   /* Fase 12d: virtio-blk storage */
 #include "../rv1103-bringup/tcp.h"   /* Fase 12d: tcp_is_listen() */
+#include "../rv1103-bringup/bootmenu.h" /* Fase 13: boot menu */
 
 /* Fase 8: image program userspace, di-embed dari user/hello.bin oleh
  * build.sh (user/embed.py -> /tmp/mach_hello_img.o). */
@@ -767,6 +768,12 @@ static int load_user_image(const uint8_t *img, unsigned img_len,
 
 void kernel_main(void)
 {
+    /* Fase 13: boot menu via UART (polled, timeout ~3 dtk auto-boot).
+     * Dijalankan paling awal, sebelum pmap_init(): MMU off (1:1),
+     * IRQ belum nyala. Path default (timeout) berperilaku identik
+     * dengan boot sebelum Fase 13. */
+    int bootmode = bootmenu_run();
+
     puts("\nMach-x-Luckfox kernel booting (qemu-virt, cortex-a7)\n");
 
     /* 1. Memory management. */
@@ -1264,6 +1271,88 @@ void kernel_main(void)
             fails++;
         }
         puts("[user ] task + image + stack + echo ports: ");
+        if (fails == 0)
+            puts("ALL CHECKS PASSED\n");
+        else {
+            puts("FAILURES = "); putdec((unsigned)fails); putc('\n');
+        }
+    }
+
+    /* Fase 13: extended self-test — hanya bila dipilih di boot menu
+     * (opsi 2). Masih single-threaded (scheduler belum jalan). */
+    if (bootmode == BOOTMODE_SELFTEST) {
+        int fails = 0;
+        puts("[st  ] extended self-test (boot menu option 2)\n");
+
+        /* 1) Seluruh jalur IPC diuji ulang end-to-end via SVC traps. */
+        fails += ipc_selftest();
+
+        /* 2) Zone allocator stress: habiskan semua slot msg_zone, lalu
+         * kembalikan semuanya — freelist harus utuh kembali. */
+        {
+            void *objs[16];
+            unsigned n = 0u, i;
+            void *extra;
+
+            while (n < 16u) {
+                void *o = zalloc(&msg_zone);
+                if (o == 0)
+                    break;
+                objs[n++] = o;
+            }
+            if (n == 0u) {
+                puts("  FAIL: zone msg kosong\n");
+                fails++;
+            }
+            extra = zalloc(&msg_zone);
+            if (extra != 0) {
+                puts("  FAIL: zone msg over-alloc\n");
+                fails++;
+            }
+            for (i = 0u; i < n; i++)
+                zfree(&msg_zone, objs[i]);
+            if (n > 0u) {
+                if (zalloc(&msg_zone) == 0) {
+                    puts("  FAIL: zone msg tidak pulih setelah free\n");
+                    fails++;
+                } else {
+                    zfree(&msg_zone, objs[n - 1u]);
+                }
+            }
+        }
+
+        /* 3) VM page roundtrip di task_a: alloc, map, tulis/baca pola,
+         * unmap, pastikan mapping hilang. VM_TEST_VA+0x2000 bebas
+         * (tes 3c/3d memakai +0x0/+0x1000/+0x3000, COW pakai COW_VA). */
+        {
+            uint32_t pa = vm_page_alloc();
+            volatile uint32_t *p =
+                (volatile uint32_t *)(VM_TEST_VA + 0x2000u);
+
+            if (pa == 0u) {
+                puts("  FAIL: vm_page_alloc (selftest)\n");
+                fails++;
+            } else if (vm_map(&task_a.vm, VM_TEST_VA + 0x2000u, pa,
+                              VM_PROT_READ | VM_PROT_WRITE) != 0) {
+                puts("  FAIL: vm_map (selftest)\n");
+                fails++;
+            } else {
+                vm_space_switch(&task_a.vm);
+                *p = 0x5E1F7E57u;
+                if (*p != 0x5E1F7E57u) {
+                    puts("  FAIL: vm rw (selftest)\n");
+                    fails++;
+                }
+                vm_space_switch(&vm_space_kern);
+                if (vm_unmap(&task_a.vm, VM_TEST_VA + 0x2000u) != 0 ||
+                    vm_lookup(&task_a.vm, VM_TEST_VA + 0x2000u) != 0u) {
+                    puts("  FAIL: vm unmap/lookup (selftest)\n");
+                    fails++;
+                }
+            }
+        }
+
+        puts("[st  ] extended self-test: ");
         if (fails == 0)
             puts("ALL CHECKS PASSED\n");
         else {
