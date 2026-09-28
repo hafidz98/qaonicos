@@ -201,6 +201,15 @@ _irq_handler:
 	mov	r0, sp
 	mov	r1, #TRAP_IRQ
 	bl	arm_trap_handler
+	/*
+	 * M5: check for pending AST (e.g., timer-driven preemption).
+	 * MI ast_taken() may call thread_block() -> context switch,
+	 * which does not return here.
+	 */
+	ldr	r0, =need_ast
+	ldr	r0, [r0]		/* need_ast[0] (UP) */
+	cmp	r0, #0
+	blne	ast_taken
 	pop	{r0-r12}
 	rfefd	sp!
 

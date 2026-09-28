@@ -11,6 +11,7 @@
 #include <machine/trap_frame.h>
 #include <machine/machspl.h>
 #include <machine/machine_routines.h>
+#include <kern/cpu_number.h>	/* M5: cpu_number */
 
 #define	TRAP_UNDEF	0
 #define	TRAP_SVC	1
@@ -29,6 +30,8 @@ extern void		arm_timer_eoi(void);
 /* MI */
 extern void		clock_interrupt(int, boolean_t, boolean_t);
 extern void		panic(const char *, ...);
+/* M5 Phase 4: scheduler test tick */
+extern void		sched_test_tick(void);
 
 static const char *const trap_names[] = {
 	"undefined instruction",
@@ -88,6 +91,8 @@ arm_trap_handler(struct arm_trap_frame *frame, int trapno)
 			clock_interrupt(1000000 / 100, usermode, FALSE);
 			arm_timer_eoi();
 			timer_ticks++;	/* M4: verification counter */
+			/* M5 Phase 4: scheduler demo runs from startrtclock
+			 * (thread context), not from IRQ.  Timer just ticks. */
 		} else if (irq != 1023) {
 			printf("arm_trap: unexpected irq %u\n", irq);
 		}

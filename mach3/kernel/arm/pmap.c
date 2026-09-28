@@ -593,6 +593,7 @@ arm_pmap_activate(pmap_t pmap)
  * user L1, writes/reads through the mapping, switches back, and cleans
  * up.  Panics on any mismatch.
  */
+void	pmap_stress(void);
 void
 pmap_selftest(void)
 {
@@ -638,4 +639,110 @@ pmap_selftest(void)
 	kmem_free(kernel_map, pa, ARM_PGBYTES);
 
 	printf("pmap_selftest: PASS (4KB L2 mapping, TTBR0 switch, R/W)\n");
+
+	pmap_stress();
+}
+
+/*
+ * pmap_stress (M5 hardening): exercise enter/remove/protect across
+ * many pages and L2 tables, verifying no stale TLB entries survive
+ * remapping.  Each round maps 64 VAs (spanning 4 L2 tables) to
+ * rotated physical pages, writes a unique pattern, reads it back
+ * through the user L1, then removes everything.  The next round
+ * reuses the same VAs with different PAs -- a stale TLB would return
+ * the previous round's pattern.
+ */
+#define	PMAP_STRESS_NVA		64
+#define	PMAP_STRESS_NROUND	10
+#define	PMAP_STRESS_BASE	0x200000u
+/* 64 VAs across 4 L2 tables (16 pages per 1MB region). */
+#define	PMAP_STRESS_VA(i)	(PMAP_STRESS_BASE + \
+				 ((unsigned int)((i) / 16) << 20) + \
+				 ((unsigned int)((i) % 16) << 12))
+
+void
+pmap_stress(void)
+{
+	static vm_offset_t pas[PMAP_STRESS_NVA];
+	pmap_t pmap;
+	spl_t s;
+	int r, i, g, total_ops = 0;
+
+	printf("pmap_stress: %d rounds x %d pages (4 L2 tables)...\n",
+	       PMAP_STRESS_NROUND, PMAP_STRESS_NVA);
+
+	for (i = 0; i < PMAP_STRESS_NVA; i++) {
+		vm_offset_t pa;
+		kern_return_t kr = kmem_alloc(kernel_map, &pa, ARM_PGBYTES);
+		if (kr != KERN_SUCCESS)
+			panic("pmap_stress: kmem_alloc page %d failed", i);
+		pas[i] = trunc_page(pa);
+	}
+
+	pmap = pmap_create(0);
+	if (pmap == PMAP_NULL)
+		panic("pmap_stress: pmap_create failed");
+
+	for (r = 0; r < PMAP_STRESS_NROUND; r++) {
+		/* Enter: VA[i] -> PA[(i + r) % NVA]. */
+		for (i = 0; i < PMAP_STRESS_NVA; i++) {
+			vm_offset_t va = PMAP_STRESS_VA(i);
+			vm_offset_t pa = pas[(i + r) % PMAP_STRESS_NVA];
+
+			pmap_enter(pmap, va, pa,
+				   VM_PROT_READ | VM_PROT_WRITE, FALSE);
+			if (pmap_extract(pmap, va) != pa)
+				panic("pmap_stress: r%d extract mismatch va 0x%x",
+				      r, va);
+			total_ops++;
+		}
+
+		/* Write unique pattern through user L1, read back. */
+		s = splhigh();
+		arm_pmap_activate_user(pmap);
+		for (i = 0; i < PMAP_STRESS_NVA; i++) {
+			unsigned int pat =
+				((unsigned int)r << 24) |
+				((unsigned int)i << 8) | 0xA5u;
+			*(volatile unsigned int *)PMAP_STRESS_VA(i) = pat;
+		}
+		for (i = 0; i < PMAP_STRESS_NVA; i++) {
+			unsigned int pat =
+				((unsigned int)r << 24) |
+				((unsigned int)i << 8) | 0xA5u;
+			unsigned int rb =
+				*(volatile unsigned int *)PMAP_STRESS_VA(i);
+			if (rb != pat)
+				panic("pmap_stress: r%d stale TLB? va 0x%x "
+				      "got 0x%x want 0x%x",
+				      r, PMAP_STRESS_VA(i), rb, pat);
+			total_ops++;
+		}
+		arm_pmap_activate_kernel();
+		(void) splx(s);
+
+		/* Protect first region read-only (exercise path). */
+		pmap_protect(pmap, PMAP_STRESS_BASE,
+			     PMAP_STRESS_BASE + (16 << 12), VM_PROT_READ);
+		total_ops++;
+
+		/* Remove everything per region; extract must read 0. */
+		for (g = 0; g < 4; g++) {
+			vm_offset_t base =
+				PMAP_STRESS_BASE + ((unsigned int)g << 20);
+			pmap_remove(pmap, base, base + (16 << 12));
+		}
+		for (i = 0; i < PMAP_STRESS_NVA; i++) {
+			if (pmap_extract(pmap, PMAP_STRESS_VA(i)) != 0)
+				panic("pmap_stress: r%d remove failed va 0x%x",
+				      r, PMAP_STRESS_VA(i));
+			total_ops++;
+		}
+	}
+
+	pmap_destroy(pmap);
+	for (i = 0; i < PMAP_STRESS_NVA; i++)
+		kmem_free(kernel_map, pas[i], ARM_PGBYTES);
+
+	printf("pmap_stress: PASS (%d ops, no stale mappings)\n", total_ops);
 }

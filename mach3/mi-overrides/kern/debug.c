@@ -161,34 +161,13 @@ void Assert(file, line)
 	Debugger("assertion failure");
 }
 
-void Debugger(message)
-	char *	message;
-{
-#ifdef	lint
-	message++;
-#endif	/* lint */
-
-#if	defined(vax) || defined(PC532)
-	asm("bpt");
-#endif	/* vax */
-
-#ifdef	sun3
-	current_thread()->pcb->flag |= TRACE_KDB;
-	asm("orw  #0x00008000,sr");
-#endif	/* sun3 */
-#ifdef	sun4
-	current_thread()->pcb->pcb_flag |= TRACE_KDB;
-	asm("ta 0x81");
-#endif	/* sun4 */
-
-#if	defined(mips ) || defined(luna88k) || defined(i860) || defined(alpha)
-	gimmeabreak();
-#endif
-
-#ifdef	i386
-	asm("int3");
-#endif
-}
+/*
+ * M5: MI Debugger() is empty on ARM (no breakpoint asm), which lets the
+ * compiler inline it away in panic(), defeating our MD override in
+ * kernel/arm/db_stubs.c.  Declare extern (no definition); the MD
+ * Debugger() halts the CPU.
+ */
+extern void	Debugger(const char *message);
 
 char			*panicstr;
 decl_simple_lock_data(,	panic_lock)

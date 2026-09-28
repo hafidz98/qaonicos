@@ -56,6 +56,7 @@ startrtclock(void)
 {
 	extern void	task_selftest(void);
 	extern void	user_selftest(void);
+	extern void	sched_selftest(void);	/* M5 Phase 4 */
 
 	timer_freq = read_cntfrq();
 	if (timer_freq == 0)
@@ -70,6 +71,7 @@ startrtclock(void)
 
 	task_selftest();	/* M4: verify task_create + thread_create */
 	user_selftest();	/* M4 item 4: user mode + syscall */
+	/* sched_selftest(); */	/* M5 Phase 4: DISABLED (blocked, see M5-REPORT.md) */
 }
 
 /*

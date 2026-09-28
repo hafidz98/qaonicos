@@ -132,3 +132,19 @@ _longjmp(void *jb, int val)
 {
 	panic("_longjmp: not implemented in M3");
 }
+
+/*
+ * Debugger (M5): override the MI empty stub (kern/debug.c), which just
+ * returns on ARM.  With MACH_KDB=1, panic() calls Debugger() instead of
+ * halt_cpu(); a returning Debugger means panic() returns and the fault
+ * re-triggers forever.  Halt like panic() expects.
+ */
+void
+Debugger(const char *message)
+{
+	extern void halt_cpu(void);
+
+	(void) message;
+	halt_cpu();
+	/* NOTREACHED */
+}

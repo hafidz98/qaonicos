@@ -23,14 +23,20 @@
 #include <mach/kern_return.h>
 #include <mach/port.h>
 #include <mach/machine/vm_types.h>
+#include <mach/message.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/zalloc.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
+#include <ipc/ipc_object.h>
+#include <ipc/ipc_kmsg.h>
 #include <machine/machspl.h>	/* spl_t, spl0, splx */
 
 extern void	panic(const char *, ...);
 extern int	printf(const char *, ...);
+
+void	ipc_stress(void);
 
 /* ------------------------------------------------------------------ */
 /* ipc_selftest                                                        */
@@ -55,6 +61,102 @@ ipc_selftest(void)
 	ipc_port_dealloc_kernel(port);
 
 	printf("ipc_selftest: PASS (kernel port alloc/dealloc)\n");
+
+	ipc_stress();
+}
+
+/* ------------------------------------------------------------------ */
+/* ipc_stress -- M5 hardening: port storm + message queue stress       */
+/* ------------------------------------------------------------------ */
+#define	IPC_STRESS_NPORTS	400
+#define	IPC_STRESS_NMSG		200
+
+void
+ipc_stress(void)
+{
+	static ipc_port_t ports[IPC_STRESS_NPORTS];
+	zone_t pz = ipc_object_zones[IOT_PORT];
+	int before, after;
+	int i;
+
+	printf("ipc_stress: allocating %d ports...\n", IPC_STRESS_NPORTS);
+	before = pz->count;
+	for (i = 0; i < IPC_STRESS_NPORTS; i++) {
+		ports[i] = ipc_port_alloc_kernel();
+		if (ports[i] == IP_NULL) {
+			printf("ipc_stress: FAIL (port %d alloc NULL)\n", i);
+			return;
+		}
+		if (ports[i]->ip_references != 1) {
+			printf("ipc_stress: FAIL (port %d bad refs %d)\n",
+			       i, ports[i]->ip_references);
+			return;
+		}
+	}
+	printf("ipc_stress: zone count %d -> %d\n", before, pz->count);
+
+	/* Message queue stress on ports[0]: FIFO order + content. */
+	printf("ipc_stress: queueing %d messages...\n", IPC_STRESS_NMSG);
+	for (i = 0; i < IPC_STRESS_NMSG; i++) {
+		ipc_kmsg_t kmsg;
+		int *body;
+		mach_msg_size_t msize =
+			(mach_msg_size_t)(sizeof(mach_msg_header_t) +
+					  sizeof(int));
+
+		kmsg = ikm_alloc(msize);
+		ikm_init(kmsg, ikm_plus_overhead(msize));
+		kmsg->ikm_header.msgh_size = msize;
+		kmsg->ikm_header.msgh_seqno = (mach_msg_seqno_t)i;
+		body = (int *)((char *)&kmsg->ikm_header +
+			       sizeof(mach_msg_header_t));
+		*body = i ^ 0x5a5a5a5a;
+		ipc_kmsg_enqueue(&ports[0]->ip_messages.imq_messages, kmsg);
+	}
+
+	printf("ipc_stress: dequeuing and verifying...\n");
+	for (i = 0; i < IPC_STRESS_NMSG; i++) {
+		ipc_kmsg_t kmsg;
+		int *body, expect;
+
+		kmsg = ipc_kmsg_dequeue(&ports[0]->ip_messages.imq_messages);
+		if (kmsg == IKM_NULL) {
+			printf("ipc_stress: FAIL (dequeue %d got NULL)\n", i);
+			return;
+		}
+		if (kmsg->ikm_header.msgh_seqno != (mach_msg_seqno_t)i) {
+			printf("ipc_stress: FAIL (msg %d seqno %u)\n",
+			       i, kmsg->ikm_header.msgh_seqno);
+			ikm_free(kmsg);
+			return;
+		}
+		body = (int *)((char *)&kmsg->ikm_header +
+			       sizeof(mach_msg_header_t));
+		expect = i ^ 0x5a5a5a5a;
+		if (*body != expect) {
+			printf("ipc_stress: FAIL (msg %d bad body)\n", i);
+			ikm_free(kmsg);
+			return;
+		}
+		ikm_free(kmsg);
+	}
+	if (ports[0]->ip_messages.imq_messages.ikmq_base != IKM_NULL) {
+		printf("ipc_stress: FAIL (queue not empty after drain)\n");
+		return;
+	}
+
+	/* Deallocate everything; zone count must return to baseline. */
+	for (i = 0; i < IPC_STRESS_NPORTS; i++)
+		ipc_port_dealloc_kernel(ports[i]);
+	after = pz->count;
+	if (after != before) {
+		printf("ipc_stress: FAIL (port zone leak: %d -> %d)\n",
+		       before, after);
+		return;
+	}
+
+	printf("ipc_stress: PASS (%d ports, %d msgs FIFO, no leak)\n",
+	       IPC_STRESS_NPORTS, IPC_STRESS_NMSG);
 }
 
 /* ------------------------------------------------------------------ */
