@@ -55,6 +55,7 @@ void
 startrtclock(void)
 {
 	extern void	task_selftest(void);
+	extern void	user_selftest(void);
 
 	timer_freq = read_cntfrq();
 	if (timer_freq == 0)
@@ -68,6 +69,7 @@ startrtclock(void)
 	write_cntv_ctl(0x1u);		/* enable, unmasked */
 
 	task_selftest();	/* M4: verify task_create + thread_create */
+	user_selftest();	/* M4 item 4: user mode + syscall */
 }
 
 /*

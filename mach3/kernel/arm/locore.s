@@ -161,7 +161,7 @@ _undef_handler:
 	rfefd	sp!
 
 _svc_handler:
-	sub	lr, lr, #4
+	/* No lr adjustment: on SVC, lr = address after the svc already. */
 	srsdb	sp!, #0x13
 	cps	#0x13
 	push	{r0-r12}

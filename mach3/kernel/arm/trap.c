@@ -8,14 +8,9 @@
 #include <mach/machine/vm_types.h>
 #include <mach/boolean.h>
 #include <mach/machine/vm_param.h>
+#include <machine/trap_frame.h>
 #include <machine/machspl.h>
 #include <machine/machine_routines.h>
-
-struct arm_trap_frame {
-	unsigned int	r[13];	/* r0-r12 */
-	unsigned int	lr;	/* adjusted return address */
-	unsigned int	spsr;
-};
 
 #define	TRAP_UNDEF	0
 #define	TRAP_SVC	1
@@ -43,6 +38,14 @@ static const char *const trap_names[] = {
 	"irq",
 	"fiq",
 };
+
+/* user.c (M4 item 4) */
+extern unsigned int	user_syscall(struct arm_trap_frame *frame);
+extern void		user_fault(struct arm_trap_frame *frame,
+				   unsigned int code);
+#define	USER_EXIT_DABT	0xDAB7u
+#define	USER_EXIT_PABT	0x9AB7u
+#define	USER_EXIT_UNDEF	0x5EEDu
 
 static unsigned int
 read_dfsr(void)
@@ -93,20 +96,39 @@ arm_trap_handler(struct arm_trap_frame *frame, int trapno)
 	}
 
 	case TRAP_DABT:
+		if ((frame->spsr & 0x1fu) == ARM_MODE_USR) {
+			/* M4: user fault kills just the user context. */
+			user_fault(frame, USER_EXIT_DABT);
+			break;
+		}
 		panic("data abort: pc=0x%x dfar=0x%x dfsr=0x%x",
 		      frame->lr, read_dfar(), read_dfsr());
 
 	case TRAP_PABT:
+		if ((frame->spsr & 0x1fu) == ARM_MODE_USR) {
+			user_fault(frame, USER_EXIT_PABT);
+			break;
+		}
 		panic("prefetch abort: pc=0x%x ifsr=0x%x",
 		      frame->lr, read_ifsr());
 
 	case TRAP_UNDEF:
+		if ((frame->spsr & 0x1fu) == ARM_MODE_USR) {
+			user_fault(frame, USER_EXIT_UNDEF);
+			break;
+		}
 		panic("undefined instruction at pc=0x%x", frame->lr);
 
-	case TRAP_SVC:
-		panic("unexpected svc from %s mode (pc=0x%x)",
-		      ((frame->spsr & 0x1fu) == 0x10u) ? "user" : "svc",
-		      frame->lr);
+	case TRAP_SVC: {
+		unsigned int mode = frame->spsr & 0x1fu;
+		if (mode != ARM_MODE_USR)
+			panic("unexpected svc from svc mode (pc=0x%x)",
+			      frame->lr);
+		/* M4: user syscall; number in r7, return value -> r0.
+		 * user_syscall may redirect the frame (SYS_EXIT). */
+		frame->r[0] = user_syscall(frame);
+		break;
+	}
 
 	case TRAP_FIQ:
 		panic("unexpected fiq");

@@ -157,4 +157,66 @@ completion basi.
 - Boot tanpa device: `blk_selftest: FAIL (no device)` — graceful,
   tidak panic, boot lanjut.
 
-## Item 4: User mode + syscall interface — TODO
+## Item 4: User mode + syscall interface — SELESAI (2026-09-28)
+
+**File baru:**
+- `kernel/arm/uprog.s`: dua program user position-independent (ARM, `adr`+
+  literal pool via `.ltorg` di dalam region copy): clean (WRITE+EXIT) dan
+  fault (WRITE + sentuh 0x0).
+- `kernel/arm/userasm.s`: `user_enter_test()` (masuk USR via RFE palsu) +
+  `user_exit_trampoline()` (kembali ke test dengan r0 = exit/fault code).
+- `kernel/arm/user.c`: `user_selftest()`, `user_syscall()`, `user_fault()`.
+- `kernel/arm/trap_frame.h`: struct trap frame shared trap.c/user.c.
+
+**Yang diimplementasikan:**
+- ABI syscall: nomor di r7, argumen r0-r2, return r0; `svc #0`.
+  SYS_WRITE=1 (tulis ke UART, buffer user divalidasi strict ke halaman
+  yang di-map), SYS_EXIT=2 (redirect trap frame ke exit trampoline).
+- `user_selftest()`: task_create + thread_create (task->map->pmap privat),
+  2 halaman fisik (code+stack) via kmem_alloc, copy program + cache
+  maintenance (DCCMVAC + ICIALLU + DSB/ISB sebelum execute), pmap_enter
+  USER_CODE_VA=0x100000/USER_STACK_VA=0x101000 (AP_KRW_URW), TTBR0 switch.
+- Fase A: WRITE "hello from user mode" + EXIT(0) → exit code 0.
+- Fase B: WRITE + LDR [0x0] → data abort ditangkap, hanya user context
+  yang mati (redirect ke trampoline, kernel tidak panic).
+- `thread_exception_return`/`thread_syscall_return` masih panic (M3) —
+  tidak dipakai jalur self-test; full dispatch = future work.
+
+**Bug yang ditemukan saat implementasi:**
+1. **CPS tidak bisa ganti mode dari USR**: `cps #0x13` setelah `cpsid i,#0x10`
+   diabaikan (mode change hanya dari privileged) → RFE jalan di USR →
+   UNDEFINED. Fix: set USR sp via SYS mode (0x1f, privileged tapi
+   banked dengan USR).
+2. **`_svc_handler` salah adjust lr**: `sub lr,lr,#4` benar untuk
+   IRQ/UNDEF/PABT tapi SALAH untuk SVC (lr_svc sudah = next insn) →
+   syscall akan infinite-loop. Fix: hapus sub untuk SVC di locore.s.
+
+**Perubahan pendukung:**
+- `trap.c`: TRAP_SVC dispatch ke user_syscall() (hanya dari USR);
+  TRAP_DABT/PABT/UNDEF dari USR → user_fault() (kill thread, bukan panic).
+- `clock.c`: startrtclock() panggil user_selftest() setelah task_selftest().
+- `locore.s`: _svc_handler tanpa `sub lr,lr,#4`.
+
+### Verifikasi
+- Build: MI 94/94, MD 21/21, LINK OK. 0 patch MI.
+- Boot QEMU **3/3 run**: `user_selftest: PASS (user mode + syscall +
+  fault isolation)` di semua run; "hello from user mode" tercetak dari
+  user mode; fault-test tidak panic; boot lanjut normal.
+
+---
+
+## M4 SELESAI
+
+Semua 4 item M4 selesai dan terverifikasi di QEMU:
+1. ✅ Real `pmap_enter` 4KB (`5bad5ac`)
+2. ✅ IPC bring-up + task pertama (`55bb395`)
+3. ✅ Driver virtio-blk (`7127b05`)
+4. ✅ User mode + syscall interface (commit ini)
+
+Keterbatasan yang diketahui (future work / M5):
+- Scheduler dispatch penuh (run queue → context switch antar thread)
+  belum teruji.
+- `thread_exception_return`/`thread_syscall_return` masih panic.
+- Isolasi memori user belum penuh (user L1 copy kernel mapping;
+  user page executable semua — no XN di short-desc small page).
+- Validasi buffer syscall minimal (hanya range check).
