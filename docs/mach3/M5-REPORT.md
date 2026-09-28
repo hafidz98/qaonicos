@@ -83,7 +83,7 @@
 
 ```bash
 # Build
-cd ~/workspace/mach-luckfox/mach3 && ./build-md.sh
+cd ~/workspace/qaonic_os/mach3 && ./build-md.sh
 
 # Single boot test
 source ~/workspace/toolchain/env.sh

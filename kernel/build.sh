@@ -13,7 +13,7 @@ READELF=$LLVM_BIN/llvm-readelf
 LDOPT="--ld-path=/usr/bin/ld.lld"
 COMMON="-mcpu=cortex-a7 -marm -mfpu=neon-vfpv4 -mfloat-abi=softfp \
 -ffreestanding -nostdlib -O2 -Wall -Wextra -Werror"
-B=rv1103-bringup
+B=kernel/src
 
 # __aeabi_* (divisi 64-bit dkk) disediakan sendiri di $B/aeabi.S + aeabi.c
 # karena tidak ada compiler-rt baremetal untuk target ini.
@@ -56,7 +56,7 @@ $TOOL $COMMON -c /tmp/mach_fstest_img.c -o /tmp/mach_fstest_img.o
 # tetap masing-masing (_start di awal via .text.start), ulib.c di-link
 # ke dalam tiap biner (self-contained, pola hello/fstest), lalu
 # di-embed sebagai blob -> array C <prog>_img. Entry point dicek
-# terhadap konstanta VA di rv1103-bringup/user.h.
+# Entry point dicek terhadap konstanta VA di kernel/src/user.h.
 for prog in init ucat uls uecho ugpio usd ufs umon; do
     case $prog in
         init)  VA=0x10012000 ;;

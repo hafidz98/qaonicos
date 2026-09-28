@@ -24,7 +24,7 @@ langsung ke ~30% komponen machine-dependent yang dibutuhkan.
 | darwin-on-arm | **Referensi ARM terbaik**: XNU (turunan Mach 3.0) pernah boot di Nokia N900 (ARMv7). Pola pmap/trap ARMv7-nya bisa dicontek. Dormant ~2017. |
 | Prajna/mach (ref user) | Mach 3.0 CMU asli; punya port **alpha & mips** (RISC) — tidak ada ARM, tapi struktur MD-nya untuk RISC berguna sebagai referensi konsep/arsitektur (cara Mach memisahkan pmap/trap per arsitektur). |
 | fitzgen/mach (ref user) | Rust binding ke API Mach macOS (**userspace**, bukan kernel) — hanya berguna memahami permukaan API Mach, tidak untuk porting kernel. |
-| Device tree RV1103 (T0) | `~/workspace/mach-luckfox/hw-addrs.md` — alamat GIC/UART/CRU/GRF/PMU/DRAM terkonfirmasi. |
+| Device tree RV1103 (T0) | `~/workspace/qaonic_os/hw-addrs.md` — alamat GIC/UART/CRU/GRF/PMU/DRAM terkonfirmasi. |
 
 ## 3. Struktur GNU Mach: apa yang MI, apa yang MD
 
@@ -79,7 +79,7 @@ langsung ke ~30% komponen machine-dependent yang dibutuhkan.
 
 ## 6. Status Fase 1 (T1–T5)
 
-Semua di `~/workspace/mach-luckfox/rv1103-bringup/`, lolos compile/syntax check
+Semua di `~/workspace/qaonic_os/kernel/src/`, lolos compile/syntax check
 `arm-none-eabi-gcc -mcpu=cortex-a7`:
 
 - `uart.h/c`, `gic.h/c`, `timer.h/c`, `vectors.S`, `irq.h/c`,

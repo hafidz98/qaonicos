@@ -112,7 +112,7 @@ pasangan `(pointer_t data, mach_msg_type_number_t dataCnt)`
    bring-up utama) benar-benar jalan di ARM/AAPCS.
 4. **Implementasi MD** (`locore.s`, `trap.c`, `pmap.c`, `pcb.c`,
    `context.s`, `clock.c`, `gic.c`, `uart.c`, …) — adaptasi dari
-   `rv1103-bringup/` per kerangka M1.
+   `kernel/src/` per kerangka M1.
 5. Link + boot QEMU `-M virt -cpu cortex-a7`.
 
 ## 6. File yang di-exclude (terdokumentasi, bukan kegagalan)

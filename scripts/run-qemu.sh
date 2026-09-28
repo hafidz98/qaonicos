@@ -8,9 +8,9 @@
 # Build dulu: ./kernel/build.sh
 # Lalu: ./run-qemu.sh   (hentikan dengan Ctrl-A X)
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
-IMG="${PICO_IMG:-$HOME/workspace/mach-luckfox/pico128.img}"
+IMG="${PICO_IMG:-$HOME/workspace/qaonic_os/disk-images/pico128.img}"
 if [ ! -f "$IMG" ]; then
     echo "[run] membuat disk image 128MB (sparse): $IMG"
     truncate -s 128M "$IMG"
@@ -20,7 +20,7 @@ fi
 # Bila image belum ada ATAU bukan FAT32 valid (mis. image mentah
 # peninggalan Fase 15), buat ulang. Kernel juga mengenali image lama
 # via magic sektor 0, tapi tanpa FAT valid /sd tak bisa di-mount.
-SD_IMG="${SD_IMG:-$HOME/workspace/mach-luckfox/sd128.img}"
+SD_IMG="${SD_IMG:-$HOME/workspace/qaonic_os/disk-images/sd128.img}"
 if ! python3 tools/mkfat32.py check "$SD_IMG" 2>/dev/null; then
     echo "[run] membuat SD image FAT32 128MB: $SD_IMG"
     python3 tools/mkfat32.py create "$SD_IMG" 128

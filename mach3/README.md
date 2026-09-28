@@ -33,8 +33,7 @@ Repo ini hanya berisi **lapisan machine-dependent ARM** yang kita tulis:
 mach3/
   kernel/arm/          # <-- dikompilasi sebagai <machine/*.h> (pengganti kernel/mips/)
   kernel/mach/arm/     # <-- dikompilasi sebagai <mach/machine/*.h>
-  README.md            # file ini
-  M1-REPORT.md         # laporan tahap M1
+  README.md            # file ini (laporan tahap ada di ../docs/mach3/)
   Makefile             # (placeholder, build penuh di M2)
 ```
 
@@ -61,13 +60,13 @@ di-generate dari `.defs` oleh MIG — butuh MIG yang jalan (M2).
 
 ## Status
 
-- **M1** (selesai): inventarisasi + kerangka MD ARM + probe compile. Lihat M1-REPORT.md.
+- **M1** (selesai): inventarisasi + kerangka MD ARM + probe compile. Lihat ../docs/mach3/M1-REPORT.md.
 - **M2** (selesai): seluruh MI (94 file: kern/ipc/vm/device/ddb) ter-compile
   dengan clang 18 `--target=arm-none-eabi`, 0 error, 0 patch source MI.
   Build: `mach3/build-mi.sh` (generators: `tools/gen_config.py`,
   `tools/gen_mig_stubs.py`, `tools/mi_sources.py`). Header
   `<machine/*.h>` masih stand-in mips; stub MIG compile-only.
-  Lihat M2-REPORT.md + MI-PATCHES.md.
+  Lihat ../docs/mach3/M2-REPORT.md + ../docs/mach3/MI-PATCHES.md.
 - **M3** (rencana): header MD ARM nyata + implementasi MD (adaptasi
-  `rv1103-bringup/`) + MIG asli/manual + link + boot di QEMU
+  `kernel/src/`) + MIG asli/manual + link + boot di QEMU
   `-M virt -cpu cortex-a7`.

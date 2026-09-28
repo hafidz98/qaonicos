@@ -2,7 +2,7 @@
 # Generator stub kerangka MD ARM untuk port Mach 3 (M1).
 # Menulis mach3/kernel/arm/* dan mach3/kernel/mach/arm/*.
 set -e
-R=~/workspace/mach-luckfox/mach3
+R=~/workspace/qaonic_os/mach3
 A=$R/kernel/arm
 M=$R/kernel/mach/arm
 mkdir -p $A/mp $M

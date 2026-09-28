@@ -44,7 +44,7 @@ lewat dua mapping include:
 (bcopy/copyin/copyout), `fpu.c`, `gic.c`, `uart.c`.
 
 Kerangka stub (44 file, tiap file menjelaskan apa yang wajib disediakan
-+ file `rv1103-bringup/` mana yang diadaptasi) sudah ada di
++ file `kernel/src/` mana yang diadaptasi) sudah ada di
 `mach3/kernel/arm/` dan `mach3/kernel/mach/arm/`.
 
 ## 4. Probe compile (clang 18 `--target=arm-none-eabi`, MD stand-in = mips)
@@ -88,7 +88,7 @@ config di dir terpisah.
 2. Selesaikan MIG: cari/port MIG (atau generate stub + tulis manual
    fungsi yang dipakai MI).
 3. Tulis MD ARM nyata per file kerangka, adaptasi 1:1 dari
-   `rv1103-bringup/`: `pmap.c` (sudah short-descriptor), `trap.c`,
+   `kernel/src/`: `pmap.c` (sudah short-descriptor), `trap.c`,
    `switch.S`→`context.s`, `vectors.S`→`locore.s`, `fpu.c`, `gic.c`,
    `uart.c`, `timer.c`→`clock.c`, `pcb.c`.
 4. Target: seluruh MI terkompilasi (belum link) dengan 0 error.
