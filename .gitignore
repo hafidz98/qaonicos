@@ -5,3 +5,4 @@
 __pycache__/
 pico128.img
 sd128.img
+mach3/build/

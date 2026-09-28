@@ -62,6 +62,12 @@ di-generate dari `.defs` oleh MIG — butuh MIG yang jalan (M2).
 ## Status
 
 - **M1** (selesai): inventarisasi + kerangka MD ARM + probe compile. Lihat M1-REPORT.md.
-- **M2** (rencana): build system clang, tulis MD ARM nyata (adaptasi dari
-  `rv1103-bringup/`), stub config/MIG, kompilasi seluruh MI.
-- **M3** (rencana): link + boot di QEMU `-M virt -cpu cortex-a7`.
+- **M2** (selesai): seluruh MI (94 file: kern/ipc/vm/device/ddb) ter-compile
+  dengan clang 18 `--target=arm-none-eabi`, 0 error, 0 patch source MI.
+  Build: `mach3/build-mi.sh` (generators: `tools/gen_config.py`,
+  `tools/gen_mig_stubs.py`, `tools/mi_sources.py`). Header
+  `<machine/*.h>` masih stand-in mips; stub MIG compile-only.
+  Lihat M2-REPORT.md + MI-PATCHES.md.
+- **M3** (rencana): header MD ARM nyata + implementasi MD (adaptasi
+  `rv1103-bringup/`) + MIG asli/manual + link + boot di QEMU
+  `-M virt -cpu cortex-a7`.
