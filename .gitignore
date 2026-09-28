@@ -1,1 +1,6 @@
 kernel/build/
+*.elf
+*.o
+*.bin
+disk-images/
+__pycache__/
