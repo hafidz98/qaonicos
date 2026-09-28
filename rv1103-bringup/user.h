@@ -23,9 +23,9 @@
 #define USER_STACK_TOP   0x10040000u
 #define USER_STACK_PAGES 2u
 
-#define USER_BRK_START  0x10060000u   /* Fase 15: digeser dari 0x10050000
-                                 * untuk memberi ruang program usd
-                                 * (0x10050000-0x10056000) */
+#define USER_BRK_START  0x10068000u   /* Fase 17: digeser dari 0x10060000
+                                 * untuk memberi ruang program umon
+                                 * (0x10060000-0x10066000) */
 
 /* Fase 9: program uji filesystem (user/fstest.c). Di dalam demand
  * range, tidak tabrakan dengan PAGER_VA (0x10010000, task_c),
@@ -102,6 +102,17 @@
 #define UFS_STACK_TOP   0x1005E000u
 #define UFS_STACK_PAGES 2u
 
+/* Fase 17: system monitor TUI userspace (user/umon.c + tui.c). Di
+ * dalam demand range, tidak tabrakan dengan region yang sudah ada:
+ *   0x10060000 umon        (4 halaman R+X; di atas stack ufs yang
+ *                           berakhir di 0x1005E000)
+ *   0x10064000 stack umon  (2 halaman RW, top 0x10066000; di bawah
+ *                           USER_BRK_START 0x10068000) */
+#define UMON_PROG_VA     0x10060000u
+#define UMON_PROG_PAGES  4u
+#define UMON_STACK_TOP   0x10066000u
+#define UMON_STACK_PAGES 2u
+
 /* Nama port well-known di task_user.ipc (diisi kernel saat boot). */
 #define USER_SVC_SEND   1u      /* send-right ke echo server */
 #define USER_SVC_REPLY  2u      /* recv port untuk reply */
@@ -138,5 +149,9 @@ extern volatile unsigned user_done;
 /* UART polled minimal untuk pesan user-mode (ala trap.c abt_putc). */
 void uputc(char c);
 void uputs(const char *s);
+
+/* Fase 17: baca 1 byte console non-blocking (polled UART).
+ * 0-255 bila ada, -1 bila FIFO kosong. */
+int console_getc_nb(void);
 
 #endif /* _USER_H_ */

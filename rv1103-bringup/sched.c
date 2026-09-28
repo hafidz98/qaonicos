@@ -33,6 +33,25 @@ unsigned sched_idle_ticks(void)
     return idle_ticks;
 }
 
+/* Fase 17: CPU% = 100*(1 - idle/total) per window >= 500ms.
+ * Dipindah dari http.c (static cpu_pct_update) agar bisa dipakai
+ * syscall SYS_STAT juga; state window dipakai bersama. */
+unsigned sched_cpu_pct(void)
+{
+    static unsigned last_t, last_idle, pct;
+    unsigned t = ticks;
+    unsigned it = idle_ticks;
+    unsigned dt = t - last_t;
+
+    if (dt >= 500u) {
+        unsigned di = it - last_idle;
+        pct = (di >= dt) ? 0u : (100u * (dt - di) / dt);
+        last_t = t;
+        last_idle = it;
+    }
+    return pct;
+}
+
 void sched_set_net_idx(unsigned idx)
 {
     net_idx = idx;

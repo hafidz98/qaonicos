@@ -301,3 +301,47 @@ int u_readdir(const char *path, char *buf, unsigned max)
         : "r0", "r1", "r2", "r7", "lr", "memory", "cc");
     return ret;
 }
+
+/* Fase 17: statistik sistem + daftar thread + console. */
+int u_stat(struct qaon_stat *s)
+{
+    int ret;
+    __asm__ volatile(
+        "mov r0, %1\n\t"
+        "mov r1, %2\n\t"
+        "mov r7, #57\n\t"          /* SYS_STAT */
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        : "r"(s), "r"((unsigned)sizeof(struct qaon_stat))
+        : "r0", "r1", "r7", "lr", "memory", "cc");
+    return ret;
+}
+
+int u_tlist(struct qaon_tentry *e, unsigned max)
+{
+    int ret;
+    __asm__ volatile(
+        "mov r0, %1\n\t"
+        "mov r1, %2\n\t"
+        "mov r7, #58\n\t"          /* SYS_TLIST */
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        : "r"(e), "r"(max)
+        : "r0", "r1", "r7", "lr", "memory", "cc");
+    return ret;
+}
+
+int u_console_getc(void)
+{
+    int ret;
+    __asm__ volatile(
+        "mov r7, #59\n\t"          /* SYS_READ_CONSOLE */
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        :
+        : "r7", "lr", "memory", "cc");
+    return ret;
+}

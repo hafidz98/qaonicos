@@ -14,6 +14,7 @@
 #include "gpio.h"   /* Fase 14 */
 #include "blk.h"    /* Fase 15: sd_read/sd_write */
 #include "fat32.h"  /* Fase 16: filesystem FAT32 di /sd */
+#include "net.h"    /* Fase 17: net_rx/tx_bytes_get untuk SYS_STAT */
 
 static struct task *kern_task;
 
@@ -357,6 +358,69 @@ static int sys_readdir_user(struct task *t, struct trap_regs *regs)
     return fat32_listdir(kpath, (char *)va, max);
 }
 
+/* ------------------------------------------------------------------ */
+/* Fase 17: SYS_STAT / SYS_TLIST / SYS_READ_CONSOLE (user only).     */
+/* Statistik REAL emulasi Fase 12d, diekspos ke umon.                 */
+/* ------------------------------------------------------------------ */
+
+static int sys_stat_user(struct trap_regs *regs)
+{
+    uint32_t va = regs->r[0];
+    uint32_t len = regs->r[1];
+    struct qaon_stat *s;
+    struct vm_stats vs;
+
+    if (len < sizeof(struct qaon_stat))
+        return -1;
+    if (!user_range_ok(va, sizeof(struct qaon_stat)))
+        return -1;
+    s = (struct qaon_stat *)va;
+    s->uptime_ms = sched_ticks();
+    s->cpu_pct = sched_cpu_pct();
+    vm_get_stats(&vs);
+    s->mem_used_kb = vs.pages_used * 4u;
+    s->mem_total_kb = vs.pages_total * 4u;
+    s->blk_total_sec = blk_total_sectors();
+    s->blk_used_sec = blk_used_sectors();
+    s->net_rx_kb = (uint32_t)(net_rx_bytes_get() >> 10);
+    s->net_tx_kb = (uint32_t)(net_tx_bytes_get() >> 10);
+    s->nthreads = sched_thread_count();
+    return 0;
+}
+
+static int sys_tlist_user(struct trap_regs *regs)
+{
+    uint32_t va = regs->r[0];
+    uint32_t max = regs->r[1];
+    struct qaon_tentry *e;
+    unsigned n, i, cnt;
+
+    if (max == 0u || max > 64u)
+        return -1;
+    if (!user_range_ok(va, max * (uint32_t)sizeof(struct qaon_tentry)))
+        return -1;
+    e = (struct qaon_tentry *)va;
+    n = sched_thread_count();
+    cnt = 0u;
+    for (i = 0u; i < n && cnt < max; i++) {
+        const struct sched_thread *t = sched_thread_at(i);
+        if (!t)
+            continue;
+        e[cnt].id = (uint32_t)t->id;
+        e[cnt].state = t->state;
+        e[cnt].user = t->user_sp ? 1u : 0u;
+        cnt++;
+    }
+    return (int)cnt;
+}
+
+/* SYS_READ_CONSOLE: 1 byte dari UART polled, non-blocking.
+ * 0-255 bila ada, -1 bila FIFO kosong. */
+static int sys_console_read_user(void)
+{
+    return console_getc_nb();
+}
+
 /* SYS_SBRK (user only): naikkan program break (lihat aslinya). */static int sys_sbrk_user(struct task *t, struct trap_regs *regs)
 {
     int inc;
@@ -449,6 +513,12 @@ void svc_dispatch(struct trap_regs *regs)
         ret = u ? sys_fat_delete_user(t, regs) : -1;
     } else if (num == SYS_READDIR) {
         ret = u ? sys_readdir_user(t, regs) : -1;
+    } else if (num == SYS_STAT) {
+        ret = u ? sys_stat_user(regs) : -1;
+    } else if (num == SYS_TLIST) {
+        ret = u ? sys_tlist_user(regs) : -1;
+    } else if (num == SYS_READ_CONSOLE) {
+        ret = u ? sys_console_read_user() : -1;
     }
     if (ret != -2)
         regs->r[0] = (uint32_t)ret;

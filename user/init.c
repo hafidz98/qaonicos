@@ -27,6 +27,9 @@
  *   ufs   : (Fase 16) tunggu /.fat_cmd_ready -> eksekusi /fat.cmd
  *           (mkdir/w/r/ls/d di /sd FAT32) -> tulis /fat.out
  *           -> /.ufs_done
+ *   umon  : (Fase 17) snapshot statistik kernel -> gambar frame TUI
+ *           -> tulis /umon.out -> /.umon_done (mode live bila
+ *           /umon.live ada; one-shot untuk verifikasi otomatis)
  *   init  : tunggu 3 sentinel -> verifikasi /echo.txt byte-exact
  *           -> "INIT TESTS PASSED" -> sentinel /.init_done
  *           (/.init_done = gerbang halt kernel di report()).
@@ -281,6 +284,34 @@ void _start(void)
                 fails++;
             } else {
                 u_put("[init] /fat.out terverifikasi (FAT32 roundtrip)\n");
+            }
+        }
+    }
+
+    /* Fase 17: tunggu umon, lalu verifikasi /umon.out memuat
+     * ringkasan statistik (cpu_pct=, mem_used_kb=, threads=). */
+    if (!u_wait_file("/.umon_done")) {
+        u_put("FAIL: umon timeout\n");
+        fails++;
+    } else {
+        u_put("[init] umon selesai\n");
+        for (i = 0; i < sizeof(fatbuf); i++)
+            fatbuf[i] = 0;
+        fd = u_open("/umon.out", O_RDONLY);
+        if (fd < 0) {
+            u_put("FAIL: open /umon.out\n");
+            fails++;
+        } else {
+            r = u_read((unsigned)fd, fatbuf, sizeof(fatbuf) - 1u);
+            u_close((unsigned)fd);
+            if (r <= 0 ||
+                !u_contains(fatbuf, (unsigned)r, "cpu_pct=") ||
+                !u_contains(fatbuf, (unsigned)r, "mem_used_kb=") ||
+                !u_contains(fatbuf, (unsigned)r, "threads=")) {
+                u_put("FAIL: /umon.out tidak memuat statistik\n");
+                fails++;
+            } else {
+                u_put("[init] /umon.out terverifikasi (statistik umon)\n");
             }
         }
     }

@@ -120,6 +120,11 @@ const struct sched_thread *sched_thread_at(unsigned i);
 void sched_set_idle(unsigned idx);
 unsigned sched_idle_ticks(void);
 
+/* Fase 17: CPU% via idle-thread accounting (window >= 500ms, 1 tick =
+ * 1ms). Dipakai dashboard HTTP (dulu static di http.c) dan syscall
+ * SYS_STAT untuk umon. */
+unsigned sched_cpu_pct(void);
+
 /* Fase 12d: thread net (dibangunkan net_isr/idle saat ada kerja). */
 void sched_set_net_idx(unsigned idx);
 void sched_wakeup_net(void);

@@ -61,6 +61,35 @@
 #define SYS_FAT_DELETE 55u /* r0=path_va -> 0 / -1 */
 #define SYS_READDIR    56u /* r0=path_va r1=buf_va r2=max -> jumlah entri / -1 */
 
+/* Fase 17: TUI / umon (user only).
+ * Nomor + layout struct DISALIN MANUAL ke user/usys.h. */
+#define SYS_STAT         57u /* r0=buf_va r1=len(>=sizeof qaon_stat) -> 0/-1 */
+#define SYS_TLIST        58u /* r0=buf_va r1=max_entri -> jumlah / -1 */
+#define SYS_READ_CONSOLE 59u /* -> byte 0-255, atau -1 bila kosong
+                              * (non-blocking, polled UART) */
+
+/* Statistik sistem untuk umon (Fase 17). Semua field uint32_t
+ * little-endian; sizeof = 36. Layout DISALIN MANUAL ke usys.h. */
+struct qaon_stat {
+    uint32_t uptime_ms;     /* sched_ticks(), 1 tick = 1ms */
+    uint32_t cpu_pct;       /* 0-100, idle-thread accounting */
+    uint32_t mem_used_kb;   /* page allocator: pages_used * 4 */
+    uint32_t mem_total_kb;  /* page allocator: pages_total * 4 */
+    uint32_t blk_total_sec; /* storage internal dev 0, sektor 512B */
+    uint32_t blk_used_sec;  /* sektor terpakai dev 0 */
+    uint32_t net_rx_kb;     /* counter RX >> 10 */
+    uint32_t net_tx_kb;     /* counter TX >> 10 */
+    uint32_t nthreads;      /* sched_thread_count() */
+};
+
+/* Satu baris daftar thread untuk umon (Fase 17). sizeof = 12.
+ * Layout DISALIN MANUAL ke usys.h. */
+struct qaon_tentry {
+    uint32_t id;
+    uint32_t state;   /* 0=RUNNABLE, 1=BLOCKED, 2=DEAD */
+    uint32_t user;    /* 1 = thread user mode, 0 = kernel */
+};
+
 void syscall_init(struct task *kern_task);
 void svc_dispatch(struct trap_regs *regs);
 

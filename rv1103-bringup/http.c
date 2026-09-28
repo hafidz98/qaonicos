@@ -100,22 +100,8 @@ static unsigned hexapp(uint8_t *d, unsigned off, uint8_t v)
  *  - Bandwidth: counter byte RX/TX di net.c per window waktu
  */
 
-/* CPU%: 100*(1 - idle/total) per window >=500ms. */
-static unsigned cpu_pct_update(void)
-{
-    static unsigned last_t, last_idle, pct;
-    unsigned t = sched_ticks();
-    unsigned it = sched_idle_ticks();
-    unsigned dt = t - last_t;
-
-    if (dt >= 500u) {
-        unsigned di = it - last_idle;
-        pct = (di >= dt) ? 0u : (100u * (dt - di) / dt);
-        last_t = t;
-        last_idle = it;
-    }
-    return pct;
-}
+/* CPU%: dulu static cpu_pct_update di sini; Fase 17 dipindah ke
+ * sched_cpu_pct() (sched.c) agar dipakai juga oleh syscall SYS_STAT. */
 
 /* Bandwidth: persepuluh Kbps per window >=500ms, dari counter byte. */
 static void bw_update(uint32_t *dn, uint32_t *up)
@@ -224,7 +210,7 @@ static unsigned build_metrics(uint8_t *b)
     off = strapp(b, off, "\r\n");
     /* Fase 12d: metrik real emulasi QEMU (key baru, format lama utuh). */
     off = strapp(b, off, "cpu_pct ");
-    off = u32app(b, off, cpu_pct_update());
+    off = u32app(b, off, sched_cpu_pct());
     off = strapp(b, off, "\r\nmem_used_kb ");
     off = u32app(b, off, vs.pages_used * 4u);
     off = strapp(b, off, "\r\nmem_total_mb ");
@@ -256,7 +242,7 @@ static unsigned build_dashboard(uint8_t *b)
     uint32_t mem_kb, mem_tenth_pct;
     uint32_t btotal, bused;
 
-    cpu = cpu_pct_update();     /* real: idle-thread accounting */
+    cpu = sched_cpu_pct();     /* real: idle-thread accounting */
     bw_update(&dn10, &up10);    /* real: counter byte RX/TX */
 
     n = sched_thread_count();

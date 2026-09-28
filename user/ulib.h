@@ -73,4 +73,12 @@ int u_fat_read(const char *path, unsigned char *buf, unsigned max);
 int u_fat_delete(const char *path);
 int u_readdir(const char *path, char *buf, unsigned max);
 
+/* Fase 17: statistik sistem + daftar thread + console non-blocking
+ * (SYS_STAT=57, SYS_TLIST=58, SYS_READ_CONSOLE=59).
+ * u_stat: 0 ok, -1 gagal. u_tlist: jumlah entri / -1.
+ * u_console_getc: byte 0-255, atau -1 bila tidak ada input. */
+int u_stat(struct qaon_stat *s);
+int u_tlist(struct qaon_tentry *e, unsigned max);
+int u_console_getc(void);
+
 #endif /* _ULIB_H_ */

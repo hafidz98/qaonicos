@@ -66,6 +66,10 @@ extern const unsigned usd_img_len;
 extern const uint8_t ufs_img[];
 extern const unsigned ufs_img_len;
 
+/* Fase 17: image system monitor TUI userspace (user/umon.bin -> umon_img). */
+extern const uint8_t umon_img[];
+extern const unsigned umon_img_len;
+
 /* PL011 (QEMU virt UART0). */
 #define UARTDR  (*(volatile unsigned *)0x09000000u)
 #define UARTFR  (*(volatile unsigned *)0x09000018u)
@@ -329,6 +333,8 @@ static unsigned char stack_ugpio[16384] __attribute__((aligned(8)));
 static unsigned char stack_usd[16384] __attribute__((aligned(8)));
 /* Fase 16: kernel stack untuk thread user ufs. */
 static unsigned char stack_ufs[16384] __attribute__((aligned(8)));
+/* Fase 17: kernel stack untuk thread user umon. */
+static unsigned char stack_umon[16384] __attribute__((aligned(8)));
 /* Fase 11: stack thread network (virtio-net + ARP/ICMP). */
 static unsigned char stack_net[16384] __attribute__((aligned(8)));
 /* Fase 12d: stack idle thread (CPU accounting). */
@@ -1293,6 +1299,11 @@ void kernel_main(void)
                                  UFS_PROG_VA, UFS_PROG_PAGES,
                                  UFS_STACK_TOP, UFS_STACK_PAGES,
                                  "ufs");
+        /* Fase 17: system monitor TUI userspace. */
+        fails += load_user_image(umon_img, umon_img_len,
+                                 UMON_PROG_VA, UMON_PROG_PAGES,
+                                 UMON_STACK_TOP, UMON_STACK_PAGES,
+                                 "umon");
         /* Port echo: server di task_kern (usvc_port), user dapat
          * send-right hasil grant (harus = USER_SVC_SEND=1), reply
          * port milik user (harus = USER_SVC_REPLY=2) di-grant balik. */
@@ -1591,6 +1602,10 @@ void kernel_main(void)
     /* Fase 16: utilitas uji FAT32 (dikoordinasi init via /fat.cmd). */
     sched_add_user(stack_ufs + sizeof(stack_ufs), &task_user,
                    UFS_PROG_VA, UFS_STACK_TOP);
+    /* Fase 17: system monitor TUI (one-shot snapshot -> /.umon_done;
+     * mode live bila /umon.live ada). */
+    sched_add_user(stack_umon + sizeof(stack_umon), &task_user,
+                   UMON_PROG_VA, UMON_STACK_TOP);
     /* Fase 12d: idle thread TERAKHIR (CPU accounting). Scheduler hanya
      * memilihnya bila tak ada thread RUNNABLE lain. */
     sched_add(thread_idle, stack_idle + sizeof(stack_idle), &task_kern);

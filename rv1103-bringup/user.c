@@ -63,6 +63,27 @@ void uputs(const char *s)
         uputc(*s++);
 }
 
+/* Fase 17: baca 1 byte console non-blocking (polled UART).
+ * 0-255 bila ada byte menunggu, -1 bila FIFO kosong. Dipakai
+ * SYS_READ_CONSOLE (tombol 'q' untuk keluar dari umon live).
+ * PL011 (virt): FR bit 4 = RXFE. DW APB (RV1103): LSR bit 0 = DR. */
+int console_getc_nb(void)
+{
+#if BOARD_RV1103
+    volatile uint32_t *rbr = (volatile uint32_t *)0xff4c0000u;
+    volatile uint32_t *lsr = (volatile uint32_t *)0xff4c0014u;
+    if ((*lsr & 1u) == 0u)
+        return -1;
+    return (int)(*rbr & 0xFFu);
+#else
+    volatile uint32_t *dr = (volatile uint32_t *)U_UART_DR;
+    volatile uint32_t *fr = (volatile uint32_t *)U_UART_FR;
+    if ((*fr & (1u << 4)) != 0u)   /* RXFE: FIFO kosong */
+        return -1;
+    return (int)(*dr & 0xFFu);
+#endif
+}
+
 static void uputx(uint32_t v)
 {
     static const char h[] = "0123456789abcdef";

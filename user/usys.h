@@ -36,6 +36,34 @@
 #define SYS_FAT_DELETE 55u
 #define SYS_READDIR    56u
 
+/* Fase 17: TUI / umon (DISALIN MANUAL dari syscall.h kernel). */
+#define SYS_STAT         57u
+#define SYS_TLIST        58u
+#define SYS_READ_CONSOLE 59u
+
+/* Statistik sistem (Fase 17, DISALIN MANUAL dari syscall.h).
+ * Semua field unsigned 32-bit, sizeof = 36. */
+struct qaon_stat {
+    unsigned uptime_ms;
+    unsigned cpu_pct;
+    unsigned mem_used_kb;
+    unsigned mem_total_kb;
+    unsigned blk_total_sec;
+    unsigned blk_used_sec;
+    unsigned net_rx_kb;
+    unsigned net_tx_kb;
+    unsigned nthreads;
+};
+
+/* Satu baris daftar thread (Fase 17, DISALIN MANUAL dari syscall.h).
+ * state: 0=RUNNABLE, 1=BLOCKED, 2=DEAD. user: 1=user, 0=kernel.
+ * sizeof = 12. */
+struct qaon_tentry {
+    unsigned id;
+    unsigned state;
+    unsigned user;
+};
+
 #define O_RDONLY 0u
 #define O_WRONLY 1u
 #define O_RDWR   2u
