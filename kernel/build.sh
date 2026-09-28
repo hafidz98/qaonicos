@@ -1,16 +1,29 @@
-#!/bin/sh
-# build.sh - build the integrated Mach-x-Luckfox kernel for QEMU virt.
+#!/bin/bash
+# build.sh - build the integrated QaonicOS kernel for QEMU virt.
 # Compiler: clang (bare-metal ARM). Usage: ./build.sh
 set -e
 cd "$(dirname "$0")/.."
 
+# Portable toolchain (survive VM reset): prefer ~/workspace/toolchain.
+if [ -f "$HOME/workspace/toolchain/env.sh" ]; then
+    # shellcheck disable=SC1091
+    . "$HOME/workspace/toolchain/env.sh"
+fi
+
 TOOL="clang --target=arm-none-eabi"
-LLVM_BIN=/usr/lib/llvm-18/bin
+# llvm-objcopy/objdump/readelf: dari toolchain portable (paham ARM),
+# bukan binutils x86_64-only yang ada di $PATH.
+TC_LLVM_BIN="$HOME/workspace/toolchain/usr/lib/llvm-18/bin"
+if [ -x "$TC_LLVM_BIN/llvm-objcopy" ]; then
+    LLVM_BIN="$TC_LLVM_BIN"
+else
+    LLVM_BIN=/usr/lib/llvm-18/bin
+fi
 OBJCOPY=$LLVM_BIN/llvm-objcopy
 OBJDUMP=$LLVM_BIN/llvm-objdump
 READELF=$LLVM_BIN/llvm-readelf
 # Linker: lld via clang driver (--ld-path eksplisit, bukan arm-none-eabi-ld).
-LDOPT="--ld-path=/usr/bin/ld.lld"
+LDOPT="--ld-path=$(command -v ld.lld)"
 COMMON="-mcpu=cortex-a7 -marm -mfpu=neon-vfpv4 -mfloat-abi=softfp \
 -ffreestanding -nostdlib -O2 -Wall -Wextra -Werror"
 B=kernel/src

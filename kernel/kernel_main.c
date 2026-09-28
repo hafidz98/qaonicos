@@ -12,28 +12,28 @@
  *
  * Runs on: qemu-system-arm -M virt -cpu cortex-a7
  */
-#include "../rv1103-bringup/pmap.h"
-#include "../rv1103-bringup/trap.h"
-#include "../rv1103-bringup/fpu.h"
-#include "../rv1103-bringup/ipc.h"
-#include "../rv1103-bringup/syscall.h"
-#include "../rv1103-bringup/zone.h"
-#include "../rv1103-bringup/gic.h"
-#include "../rv1103-bringup/timer.h"
-#include "../rv1103-bringup/sched.h"
-#include "../rv1103-bringup/vm.h"
-#include "../rv1103-bringup/task.h"
-#include "../rv1103-bringup/pager.h"
-#include "../rv1103-bringup/lib.h"
-#include "../rv1103-bringup/user.h"
-#include "../rv1103-bringup/fs.h"
-#include "../rv1103-bringup/net.h"
-#include "../rv1103-bringup/netstack.h"
-#include "../rv1103-bringup/blk.h"   /* Fase 12d: virtio-blk storage */
-#include "../rv1103-bringup/tcp.h"   /* Fase 12d: tcp_is_listen() */
-#include "../rv1103-bringup/bootmenu.h" /* Fase 13: boot menu */
-#include "../rv1103-bringup/gpio.h"    /* Fase 14: GPIO */
-#include "../rv1103-bringup/fat32.h"   /* Fase 16: FAT32 di /sd */
+#include "src/pmap.h"
+#include "src/trap.h"
+#include "src/fpu.h"
+#include "src/ipc.h"
+#include "src/syscall.h"
+#include "src/zone.h"
+#include "src/gic.h"
+#include "src/timer.h"
+#include "src/sched.h"
+#include "src/vm.h"
+#include "src/task.h"
+#include "src/pager.h"
+#include "src/lib.h"
+#include "src/user.h"
+#include "src/fs.h"
+#include "src/net.h"
+#include "src/netstack.h"
+#include "src/blk.h"   /* Fase 12d: virtio-blk storage */
+#include "src/tcp.h"   /* Fase 12d: tcp_is_listen() */
+#include "src/bootmenu.h" /* Fase 13: boot menu */
+#include "src/gpio.h"    /* Fase 14: GPIO */
+#include "src/fat32.h"   /* Fase 16: FAT32 di /sd */
 
 /* Fase 8: image program userspace, di-embed dari user/hello.bin oleh
  * build.sh (user/embed.py -> /tmp/mach_hello_img.o). */
@@ -1265,7 +1265,7 @@ void kernel_main(void)
             }
         }
         /* Fase 10: init + utilitas userspace (init/ucat/uls/uecho).
-         * VA program + stack lihat rv1103-bringup/user.h; semuanya
+         * VA program + stack lihat kernel/src/user.h; semuanya
          * dimuat ke task_user yang sama (fd table & ramfs dipakai
          * bersama; koordinasi antar program via file sentinel). */
         fails += load_user_image(init_img, init_img_len,

@@ -1,7 +1,7 @@
 /*
  * usys.h - ABI userspace: nomor syscall + format wire IPC.
  *
- * Nomor syscall DISALIN MANUAL dari rv1103-bringup/syscall.h
+ * Nomor syscall DISALIN MANUAL dari kernel/src/syscall.h
  * (program user tidak include header kernel). Bila nomor di kernel
  * berubah, file ini harus ikut diubah.
  */
