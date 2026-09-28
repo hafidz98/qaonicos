@@ -117,3 +117,32 @@ Dua commit: `281b5ea` (GPIO/SD/FAT32) + `fc2bd70` (network/HTTP).
 - D-cache ON → semua DMA (virtio queue + buffer) butuh clean/invalidate
   eksplisit; `used->idx` volatile + invalidate per baca.
 - `dcache_*_range` di blk.c dijadikan non-static untuk dipakai net.c.
+
+### Investigasi instabilitas Fase D (2026-09-28, belum selesai)
+
+**Gejala**: kernel panic non-deterministik (prefetch abort ke alamat
+sampah 0x0/0x8/heap, kadang undefined instruction, kadang spsr korup).
+Fase C (commit caf52ad) stabil 10/10; Fase D (343d131) crash ~20-100%
+tergantung konfigurasi.
+
+**Hasil bisect** (5 run per konfigurasi):
+- net dimatikan (halt): 4/5 OK, 1/5 panic → bug BUKAN spesifik net.
+- net+fat32+gpio dimatikan: 3/5 OK, 2/5 panic → bug di core.
+- 5 program (tanpa ugpio/usd/ufs): 4/5 OK, 1/5 panic → bukan jml program.
+- Crash terjadi di: user_selftest (fault test), launch_uprog (kmem_alloc/
+  pmap_enter), net_init (vq_setup), server loop (net_poll).
+
+**Hipotesis yang sudah disingkirkan**:
+- `dcache_inval_range` pakai DCIMVAC (buang dirty tanpa write-back) →
+  diubah ke DCCIMVAC (clean+invalidate), TETAP crash 3/3. Bukan ini.
+- `e->id` descriptor vs buffer index di net_poll → kode sudah pakai
+  `d=bi` dan guard `bi < RX_NBUF`. Bukan ini.
+- `need_ast`/preemption → tak pernah di-set. Bukan ini.
+- QEMU/TCG/host → bare-metal minimal stabil 543 baris. Bukan host.
+
+**Dugaan tersisa**: korupsi memori non-deterministik (heap/stack),
+atau bug emulasi QEMU 8.2.2 (TCG) pada fitur spesifik (MMU/TLB,
+cache ops, atau virtio). Perlu investigasi dengan GDB stub QEMU.
+
+**Catatan**: ping ke 10.0.2.2 BERHASIL (ICMP RX path OK). Bug TCP asli
+(SYN via hostfwd tak sampai) belum bisa diuji karena blocker ini.

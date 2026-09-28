@@ -108,9 +108,13 @@ dcache_inval_range(unsigned int va, unsigned int len)
 {
 	unsigned int a, end;
 
+	/* DEBUG-FIX: pakai DCCIMVAC (clean+invalidate), bukan DCIMVAC.
+	 * DCIMVAC membuang cache line dirty tanpa write-back; kalau
+	 * range tidak 64-byte aligned, line tetangga yang dirty ikut
+	 * hilang -> korupsi non-deterministik. */
 	end = (va + len + CACHE_LINE - 1u) & ~(CACHE_LINE - 1u);
 	for (a = va & ~(CACHE_LINE - 1u); a < end; a += CACHE_LINE)
-		__asm__ volatile ("mcr p15, 0, %0, c7, c6, 1" :: "r" (a));
+		__asm__ volatile ("mcr p15, 0, %0, c7, c14, 1" :: "r" (a));
 	__asm__ volatile ("dsb ish" ::: "memory");
 }
 
