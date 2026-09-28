@@ -46,6 +46,23 @@ write_cntv_ctl(unsigned int v)
 }
 
 /*
+ * arm_timer_enable: re-enable the virtual timer (Fase B).
+ * sched_selftest() disables it for the cooperative test; user tasks
+ * (init) need ticks for SYS_YIELD.  Reload TVAL first: the stale value
+ * would fire an IRQ immediately and trip MI thread_select.
+ */
+void
+arm_timer_enable(void)
+{
+	unsigned int v;
+
+	write_cntv_tval(timer_tval);
+	__asm__ volatile ("mrc p15, 0, %0, c14, c3, 1" : "=r" (v));
+	v |= 0x1u;
+	__asm__ volatile ("mcr p15, 0, %0, c14, c3, 1" :: "r" (v));
+}
+
+/*
  * startrtclock: start the periodic 100Hz timer.
  * Called from cpu_launch_first_thread() (MI) once a thread is active.
  * IRQs are enabled by _load_context() when the thread starts, and by
@@ -71,7 +88,8 @@ startrtclock(void)
 
 	task_selftest();	/* M4: verify task_create + thread_create */
 	user_selftest();	/* M4 item 4: user mode + syscall */
-	sched_selftest();	/* M6: preemption test */
+	sched_selftest();	/* M6: preemption test; never returns --
+				 * worker_a launches init (Fase B) */
 }
 
 /*

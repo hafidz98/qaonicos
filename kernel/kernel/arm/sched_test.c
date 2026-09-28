@@ -38,6 +38,9 @@ thread_t		sched_worker_b = THREAD_NULL;
 thread_t		sched_boot_thread = THREAD_NULL;
 
 /* Simple spin to burn CPU (preemption must interrupt this). */
+/* user.c (Fase B) */
+extern void	user_launch_init(void);
+
 static void
 spin_burn(void)
 {
@@ -96,7 +99,11 @@ worker_a(void)
 	}
 	sched_puts("A done\n");
 	sched_puts("sched_selftest: PASS (cooperative interleave A/B)\n");
-	/* Halt: boot thread state was not saved (switched from NULL). */
+	/* Fase B: launch init directly from this worker thread.
+	 * (No boot thread to switch back to: current_thread() was NULL
+	 * in startrtclock, so its state was never saved.) */
+	user_launch_init();
+	/* NOTREACHED (user_launch_init halts) */
 	for (;;)
 		__asm__ volatile("wfi");
 	for (;;)

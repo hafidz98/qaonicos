@@ -76,6 +76,13 @@ read_ifsr(void)
 
 static unsigned int	timer_ticks;	/* M4: verification counter */
 
+/* Fase B: user-visible tick counter for SYS_YIELD. */
+unsigned int
+arm_timer_ticks(void)
+{
+	return timer_ticks;
+}
+
 /*
  * arm_trap_handler: C entry for all exceptions (from locore.s).
  */
@@ -88,7 +95,16 @@ arm_trap_handler(struct arm_trap_frame *frame, int trapno)
 		boolean_t usermode;
 		if (irq == ARM_TIMER_PPI) {
 			usermode = ((frame->spsr & 0x1fu) == 0x10u);
-			clock_interrupt(1000000 / 100, usermode, FALSE);
+			(void)usermode;
+			/* Fase B: minimal tick only.  Do NOT call MI
+			 * clock_interrupt(): its quantum update drives
+			 * the MI scheduler (thread_select), but this
+			 * port's threads are managed manually (M6
+			 * cooperative switch_context; MI scheduler
+			 * deferred).  With empty MI run queues,
+			 * thread_select dereferences NULL -> panic.
+			 * The timer just ticks; timer_ticks drives
+			 * SYS_YIELD. */
 			arm_timer_eoi();
 			timer_ticks++;	/* M4: verification counter */
 			/* M5 Phase 4: scheduler demo runs from startrtclock

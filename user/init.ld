@@ -1,12 +1,14 @@
 /*
- * init.ld - linker script program init userspace (Fase 10).
+ * init.ld - linker script program init userspace (Fase B).
+ *
+ * Di-link di INIT_CODE_VA (0x100000), disepakati dengan kernel/user.c.
  * _start HARUS di awal image: section .text.start di-order pertama.
  */
 ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x10012000;   /* INIT_PROG_VA, disepakati dengan kernel (user.h) */
+    . = 0x100000;   /* INIT_CODE_VA */
 
     .text : {
         *(.text.start)

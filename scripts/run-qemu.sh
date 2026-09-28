@@ -16,6 +16,7 @@ if [ ! -f "$IMG" ]; then
 fi
 
 exec qemu-system-arm -M virt -cpu cortex-a7 -m 64 -nographic \
+    -L "$HOME/workspace/toolchain/usr/share/qemu" \
     -kernel kernel/build/mach3.elf \
     -drive file="$IMG",if=none,id=hd0,format=raw \
     -device virtio-blk-device,drive=hd0
