@@ -13,7 +13,8 @@
  *   5. delete("/halo.txt") -> ls lagi -> "halo.txt" hilang dari
  *      daftar (daftar TIDAK harus kosong: init/utilitas Fase 10
  *      berjalan konkuren dan membuat file sendiri)
- *   6. negatif: open tanpa O_CREAT -> -1; read fd tertutup -> -1;
+ *   6. negatif: open tanpa O_CREAT -> -1; read fd basi (delete
+ *      selagi open) -> -1; write fd liar -> -1.
  *      write fd liar -> -1
  *   7. cetak "FS TESTS PASSED", buat sentinel "/.fs_done" (gerbang
  *      halt kernel di report()), lalu sys_exit.
@@ -231,10 +232,30 @@ void _start(void)
         put("FAIL: open tanpa O_CREAT harus -1\n");
         fails++;
     }
-    if (sys_read(3u, buf, 16) != -1) {
-        /* fd 3 sudah di-close di atas -> harus -1 (fd basi). */
-        put("FAIL: read fd tertutup harus -1\n");
+    /* fd basi yang deterministik: buka file (fd milik thread ini,
+     * jadi tak bisa direbut thread lain), delete selagi terbuka
+     * -> nomor generasi berubah -> read harus -1.
+     * (Versi lama memakai fd 3 hardcoded: tabel fd dipakai bersama
+     * semua thread task_user; thread lain bisa sedang memegang fd 3
+     * saat cek ini berjalan -> FAIL sporadis. Ketahuan di Fase 14
+     * ketika thread ugpio menambah I/O file konkuren.) */
+    fd = sys_open("/basi.txt", O_CREAT | O_RDWR);
+    if (fd < 0) {
+        put("FAIL: open /basi.txt\n");
         fails++;
+    } else {
+        if (sys_delete("/basi.txt") != 0) {
+            put("FAIL: delete /basi.txt\n");
+            fails++;
+        }
+        if (sys_read((unsigned)fd, buf, 16) != -1) {
+            put("FAIL: read fd basi harus -1\n");
+            fails++;
+        }
+        if (sys_close((unsigned)fd) != 0) {
+            put("FAIL: close fd basi\n");
+            fails++;
+        }
     }
     if (sys_write(99u, "x", 1) != -1) {
         put("FAIL: write fd liar harus -1\n");

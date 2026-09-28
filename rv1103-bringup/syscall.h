@@ -41,6 +41,12 @@
 #define SYS_LS       33u   /* r0=buf_va r1=max -> jumlah file */
 #define SYS_DELETE   34u   /* r0=path_va -> 0 / -1 */
 
+/* Fase 14: GPIO (user only, seperti SYS_WRITE). Bank di-fix 0 di
+ * syscall; driver mendukung multi-bank untuk RV1103.
+ * Nomor DISALIN MANUAL ke user/usys.h. */
+#define SYS_GPIO_SET 40u   /* r0=pin r1=val(0/1) -> 0 / -1 */
+#define SYS_GPIO_GET 41u   /* r0=pin -> 0/1 / -1 */
+
 void syscall_init(struct task *kern_task);
 void svc_dispatch(struct trap_regs *regs);
 

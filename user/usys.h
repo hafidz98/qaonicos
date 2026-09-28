@@ -21,6 +21,10 @@
 #define SYS_LS       33u
 #define SYS_DELETE   34u
 
+/* Fase 14: GPIO (DISALIN MANUAL dari syscall.h kernel). */
+#define SYS_GPIO_SET 40u
+#define SYS_GPIO_GET 41u
+
 #define O_RDONLY 0u
 #define O_WRONLY 1u
 #define O_RDWR   2u

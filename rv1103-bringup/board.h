@@ -41,6 +41,16 @@
 
 #define BOARD_UART_IS_PL011 1
 
+/* Fase 14: GPIO virtual (mock) untuk QEMU. Range MMIO palsu yang tidak
+ * terpakai di peta memori QEMU -M virt (jendela virtio-mmio berakhir
+ * di 0x0a004000, platform bus mulai 0x0c000000). Driver TIDAK menyentuh
+ * alamat fisik ini di QEMU (unmapped -> data abort); register file
+ * di-RAM-kan dengan offset yang sama persis seperti Rockchip (lihat
+ * gpio.h). Base ini dipakai sebagai dokumentasi/penanda alamat. */
+#define GPIO_VIRT_BASE  0x0a100000u
+#define GPIO_VIRT_SIZE  0x1000u
+#define GPIO_BANK_COUNT 1u
+
 #endif /* BOARD_VIRT */
 
 /* ------------------------------------------------------------------ */
@@ -63,6 +73,15 @@
 #define DRAM_SIZE       (64u * 1024u * 1024u)
 
 #define BOARD_UART_IS_PL011 0
+
+/* Fase 14: GPIO Rockchip (compatible "rockchip,gpio-bank", 32 pin/bank).
+ * Alamat dari rv1106.dtsi (diwarisi rv1103.dtsi): gpio@ff380000 dst. */
+#define GPIO0_BASE 0xff380000u
+#define GPIO1_BASE 0xff530000u
+#define GPIO2_BASE 0xff540000u
+#define GPIO3_BASE 0xff550000u
+#define GPIO4_BASE 0xff560000u
+#define GPIO_BANK_COUNT 5u
 
 #endif /* BOARD_RV1103 */
 

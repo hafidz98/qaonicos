@@ -11,6 +11,7 @@
 #include "vm.h"
 #include "fs.h"
 #include "lib.h"
+#include "gpio.h"   /* Fase 14 */
 
 static struct task *kern_task;
 
@@ -301,6 +302,10 @@ void svc_dispatch(struct trap_regs *regs)
         ret = u ? sys_ls_user(t, regs) : -1;
     } else if (num == SYS_DELETE) {
         ret = u ? sys_delete_user(t, regs) : -1;
+    } else if (num == SYS_GPIO_SET) {
+        ret = u ? gpio_set(0u, regs->r[0], regs->r[1]) : -1;
+    } else if (num == SYS_GPIO_GET) {
+        ret = u ? gpio_get(0u, regs->r[0]) : -1;
     }
     if (ret != -2)
         regs->r[0] = (uint32_t)ret;

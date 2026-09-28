@@ -52,4 +52,9 @@ int u_wait_file(const char *path);
  * Kembalikan 1 bila sukses, 0 bila gagal. */
 int u_touch(const char *path);
 
+/* Fase 14: GPIO (SYS_GPIO_SET=40, SYS_GPIO_GET=41).
+ * u_gpio_set: 0 ok, -1 pin liar. u_gpio_get: 0/1, -1 pin liar. */
+int u_gpio_set(unsigned pin, unsigned val);
+int u_gpio_get(unsigned pin);
+
 #endif /* _ULIB_H_ */

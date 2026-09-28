@@ -68,6 +68,17 @@
 #define UECHO_STACK_TOP  0x10046000u
 #define UECHO_STACK_PAGES 2u
 
+/* Fase 14: utilitas GPIO userspace (user/ugpio.c). Di dalam demand
+ * range, tidak tabrakan dengan region yang sudah ada:
+ *   0x10048000 ugpio       (4 halaman R+X; di atas stack uecho yang
+ *                           berakhir di 0x10046000)
+ *   0x1004C000 stack ugpio (2 halaman RW, top 0x1004E000; di bawah
+ *                           USER_BRK_START 0x10050000) */
+#define UGPIO_PROG_VA     0x10048000u
+#define UGPIO_PROG_PAGES  4u
+#define UGPIO_STACK_TOP   0x1004E000u
+#define UGPIO_STACK_PAGES 2u
+
 /* Nama port well-known di task_user.ipc (diisi kernel saat boot). */
 #define USER_SVC_SEND   1u      /* send-right ke echo server */
 #define USER_SVC_REPLY  2u      /* recv port untuk reply */

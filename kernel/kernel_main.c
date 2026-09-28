@@ -32,6 +32,7 @@
 #include "../rv1103-bringup/blk.h"   /* Fase 12d: virtio-blk storage */
 #include "../rv1103-bringup/tcp.h"   /* Fase 12d: tcp_is_listen() */
 #include "../rv1103-bringup/bootmenu.h" /* Fase 13: boot menu */
+#include "../rv1103-bringup/gpio.h"    /* Fase 14: GPIO */
 
 /* Fase 8: image program userspace, di-embed dari user/hello.bin oleh
  * build.sh (user/embed.py -> /tmp/mach_hello_img.o). */
@@ -51,6 +52,10 @@ extern const uint8_t uls_img[];
 extern const unsigned uls_img_len;
 extern const uint8_t uecho_img[];
 extern const unsigned uecho_img_len;
+
+/* Fase 14: image utilitas GPIO userspace (user/ugpio.bin -> ugpio_img). */
+extern const uint8_t ugpio_img[];
+extern const unsigned ugpio_img_len;
 
 /* PL011 (QEMU virt UART0). */
 #define UARTDR  (*(volatile unsigned *)0x09000000u)
@@ -309,6 +314,8 @@ static unsigned char stack_init[16384] __attribute__((aligned(8)));
 static unsigned char stack_ucat[16384] __attribute__((aligned(8)));
 static unsigned char stack_uls[16384] __attribute__((aligned(8)));
 static unsigned char stack_uecho[16384] __attribute__((aligned(8)));
+/* Fase 14: kernel stack untuk thread user ugpio. */
+static unsigned char stack_ugpio[16384] __attribute__((aligned(8)));
 /* Fase 11: stack thread network (virtio-net + ARP/ICMP). */
 static unsigned char stack_net[16384] __attribute__((aligned(8)));
 /* Fase 12d: stack idle thread (CPU accounting). */
@@ -806,6 +813,8 @@ void kernel_main(void)
     task_create(&task_b, &port_zone, &msg_zone);
     syscall_init(&task_kern);
     fs_init();  /* Fase 9: ramfs (BSS sudah nol; eksplisit biar jelas). */
+    gpio_init();  /* Fase 14: GPIO (mock di QEMU, register asli RV1103). */
+    puts("[gpio] init ok\n");
     port_ab = ipc_port_alloc(&task_kern.ipc, IPC_SEND | IPC_RECV);
     port_ba = ipc_port_alloc(&task_kern.ipc, IPC_SEND | IPC_RECV);
     puts("[ipc ] zones up, ports allocated: A->B name = ");
@@ -1256,6 +1265,11 @@ void kernel_main(void)
                                  UECHO_PROG_VA, UECHO_PROG_PAGES,
                                  UECHO_STACK_TOP, UECHO_STACK_PAGES,
                                  "uecho");
+        /* Fase 14: utilitas GPIO userspace. */
+        fails += load_user_image(ugpio_img, ugpio_img_len,
+                                 UGPIO_PROG_VA, UGPIO_PROG_PAGES,
+                                 UGPIO_STACK_TOP, UGPIO_STACK_PAGES,
+                                 "ugpio");
         /* Port echo: server di task_kern (usvc_port), user dapat
          * send-right hasil grant (harus = USER_SVC_SEND=1), reply
          * port milik user (harus = USER_SVC_REPLY=2) di-grant balik. */
@@ -1360,6 +1374,41 @@ void kernel_main(void)
         }
     }
 
+    /* 3i. Fase 14: GPIO driver self-test — hanya bila dipilih di boot
+     * menu (opsi 2), single-threaded seperti blok di atas. Roundtrip
+     * set->get di beberapa pin + kasus pin/bank liar. gpio_init()
+     * sudah dipanggil di awal (setelah fs_init). */
+    if (bootmode == BOOTMODE_SELFTEST) {
+        int fails = 0;
+        unsigned pins[4] = { 0u, 7u, 15u, 31u };
+        unsigned i;
+        puts("[st  ] gpio driver self-test\n");
+        for (i = 0u; i < 4u; i++) {
+            if (gpio_set(0u, pins[i], 1u) != 0 ||
+                gpio_get(0u, pins[i]) != 1) {
+                puts("  FAIL: gpio set/get 1\n");
+                fails++;
+            }
+            if (gpio_set(0u, pins[i], 0u) != 0 ||
+                gpio_get(0u, pins[i]) != 0) {
+                puts("  FAIL: gpio set/get 0\n");
+                fails++;
+            }
+        }
+        if (gpio_set(0u, 32u, 1u) != -1 ||
+            gpio_get(0u, 32u) != -1 ||
+            gpio_set(9u, 0u, 1u) != -1) {
+            puts("  FAIL: gpio pin/bank liar\n");
+            fails++;
+        }
+        puts("[st  ] gpio driver self-test: ");
+        if (fails == 0)
+            puts("ALL CHECKS PASSED\n");
+        else {
+            puts("FAILURES = "); putdec((unsigned)fails); putc('\n');
+        }
+    }
+
     /* 4. Preemptive scheduler: GIC + virtual-timer tick. */
     puts("[gic ] init GIC-400\n");
     gic_init();
@@ -1407,6 +1456,9 @@ void kernel_main(void)
                    ULS_PROG_VA, ULS_STACK_TOP);
     sched_add_user(stack_uecho + sizeof(stack_uecho), &task_user,
                    UECHO_PROG_VA, UECHO_STACK_TOP);
+    /* Fase 14: utilitas GPIO (dikoordinasi init via /gpio.cmd). */
+    sched_add_user(stack_ugpio + sizeof(stack_ugpio), &task_user,
+                   UGPIO_PROG_VA, UGPIO_STACK_TOP);
     /* Fase 12d: idle thread TERAKHIR (CPU accounting). Scheduler hanya
      * memilihnya bila tak ada thread RUNNABLE lain. */
     sched_add(thread_idle, stack_idle + sizeof(stack_idle), &task_kern);

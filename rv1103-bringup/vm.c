@@ -29,7 +29,9 @@
  * halaman 48 (pager + COW butuh beberapa). */
 #define VM_NSPACES  8u
 #define VM_NL2      24u
-#define VM_NPAGES   48u
+/* Fase 14: 48 -> 64. Tiap program userspace butuh 6 halaman
+ * (4 prog + 2 stack); program ke-7 (ugpio) menghabiskan pool 48. */
+#define VM_NPAGES   64u
 
 static uint32_t l1_pool[VM_NSPACES][4096] __attribute__((aligned(16384)));
 static uint32_t l2_pool[VM_NL2][256]      __attribute__((aligned(1024)));

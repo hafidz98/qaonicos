@@ -163,3 +163,33 @@ int u_touch(const char *path)
     u_close((unsigned)fd);
     return 1;
 }
+
+/* Fase 14: GPIO. */
+int u_gpio_set(unsigned pin, unsigned val)
+{
+    int ret;
+    __asm__ volatile(
+        "mov r0, %1\n\t"
+        "mov r1, %2\n\t"
+        "mov r7, #40\n\t"          /* SYS_GPIO_SET */
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        : "r"(pin), "r"(val)
+        : "r0", "r1", "r7", "lr", "memory", "cc");
+    return ret;
+}
+
+int u_gpio_get(unsigned pin)
+{
+    int ret;
+    __asm__ volatile(
+        "mov r0, %1\n\t"
+        "mov r7, #41\n\t"          /* SYS_GPIO_GET */
+        "svc #0\n\t"
+        "mov %0, r0"
+        : "=r"(ret)
+        : "r"(pin)
+        : "r0", "r7", "lr", "memory", "cc");
+    return ret;
+}

@@ -28,7 +28,7 @@
  * Fase 9: 8 -> 10 (tambah thread user fstest).
  * Fase 10: 10 -> 14 (init + ucat/uls/uecho).
  * Fase 11: 14 -> 16 (thread net/virtio). */
-#define SCHED_MAX_THREADS 16u
+#define SCHED_MAX_THREADS 20u
 
 /* Exception frame layout (words), dibangun irq_handler (vectors.S)
  * dan sched_add/sched_add_user. 16 word, 8-byte aligned, tanpa pad:

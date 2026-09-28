@@ -25,6 +25,11 @@ Diekstrak via `grep` (file tidak dibaca utuh). Salinan file ada di `dts/`.
 | CRU | `rockchip,rv1106-cru` (`clock-controller@ff3a0000`) | `0xff3a0000` | `0x20000` | `rv1106.dtsi` (baris 697-702) |
 | GRF | `rockchip,rv1106-grf`, `syscon`, `simple-mfd` (`syscon@ff000000`) | `0xff000000` | `0x68000` | `rv1106.dtsi` (baris 426-430) |
 | PMU | `rockchip,rv1106-pmu`, `syscon` (`power-management@ff300000`) | `0xff300000` | `0x1000` | `rv1106.dtsi` (baris 522-525) |
+| GPIO0 | `rockchip,gpio-bank` (`gpio@ff380000`), 32 pin, GIC_SPI 5 | `0xff380000` | `0x100` | `rv1106.dtsi` (baris 1491-1502) |
+| GPIO1 | `rockchip,gpio-bank` (`gpio@ff530000`), 32 pin, GIC_SPI 7 | `0xff530000` | `0x100` | `rv1106.dtsi` (baris 1504-1515) |
+| GPIO2 | `rockchip,gpio-bank` (`gpio@ff540000`), 32 pin, GIC_SPI 9 | `0xff540000` | `0x100` | `rv1106.dtsi` (baris 1517-1528) |
+| GPIO3 | `rockchip,gpio-bank` (`gpio@ff550000`), 32 pin, GIC_SPI 11 | `0xff550000` | `0x100` | `rv1106.dtsi` (baris 1530-1541) |
+| GPIO4 | `rockchip,gpio-bank` (`gpio@ff560000`), 32 pin, GIC_SPI 13 | `0xff560000` | `0x100` | `rv1106.dtsi` (baris 1543-1554) |
 
 ## Yang TIDAK ketemu
 

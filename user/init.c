@@ -28,6 +28,17 @@
 
 static const char MOTD[] = "Selamat datang di Mach nano OS!\n";
 
+/* Fase 14: skrip perintah GPIO untuk ugpio (pola ucat: init menulis
+ * perintah + sentinel, ugpio mengeksekusi). Roundtrip set->get di
+ * beberapa pin, termasuk pin tertinggi bank 0 (31). */
+static const char GPIO_CMD[] =
+    "set 7 1\n"
+    "get 7\n"
+    "set 7 0\n"
+    "get 7\n"
+    "set 31 1\n"
+    "get 31\n";
+
 __attribute__((section(".text.start")))
 void _start(void)
 {
@@ -59,6 +70,26 @@ void _start(void)
     }
     u_put("[init] motd ditulis, menunggu utilitas...\n");
 
+    /* 1b. Fase 14: tulis skrip GPIO untuk ugpio, lalu sentinel.
+     * ugpio menunggu /.gpio_cmd_ready (pola ucat/uls). */
+    fd = u_open("/gpio.cmd", O_CREAT | O_RDWR);
+    if (fd < 0) {
+        u_put("FAIL: open /gpio.cmd\n");
+        fails++;
+    } else {
+        n = u_strlen(GPIO_CMD);
+        r = u_write((unsigned)fd, GPIO_CMD, n);
+        if (r < 0 || (unsigned)r != n) {
+            u_put("FAIL: write /gpio.cmd\n");
+            fails++;
+        }
+        u_close((unsigned)fd);
+        if (!u_touch("/.gpio_cmd_ready")) {
+            u_put("FAIL: sentinel /.gpio_cmd_ready\n");
+            fails++;
+        }
+    }
+
     /* 2. Tunggu ketiga utilitas selesai (dengan timeout). */
     if (!u_wait_file("/.ucat_done")) {
         u_put("FAIL: ucat timeout\n");
@@ -77,6 +108,33 @@ void _start(void)
         fails++;
     } else {
         u_put("[init] uecho selesai\n");
+    }
+    /* Fase 14: tunggu ugpio, lalu verifikasi /gpio.out memuat hasil
+     * roundtrip yang diharapkan ("7=1", "7=0", "31=1"). */
+    if (!u_wait_file("/.ugpio_done")) {
+        u_put("FAIL: ugpio timeout\n");
+        fails++;
+    } else {
+        u_put("[init] ugpio selesai\n");
+        for (i = 0; i < sizeof(buf); i++)
+            buf[i] = 0;
+        fd = u_open("/gpio.out", O_RDONLY);
+        if (fd < 0) {
+            u_put("FAIL: open /gpio.out\n");
+            fails++;
+        } else {
+            r = u_read((unsigned)fd, buf, sizeof(buf) - 1u);
+            u_close((unsigned)fd);
+            if (r <= 0 ||
+                !u_contains(buf, (unsigned)r, "7=1") ||
+                !u_contains(buf, (unsigned)r, "7=0") ||
+                !u_contains(buf, (unsigned)r, "31=1")) {
+                u_put("FAIL: /gpio.out tidak sesuai roundtrip\n");
+                fails++;
+            } else {
+                u_put("[init] /gpio.out terverifikasi (set/get roundtrip)\n");
+            }
+        }
     }
 
     /* 3. Verifikasi /echo.txt byte-exact terhadap UECHO_STR
