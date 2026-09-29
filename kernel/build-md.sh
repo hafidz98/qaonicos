@@ -13,7 +13,9 @@ if [ -f "$HOME/workspace/toolchain/env.sh" ]; then
 fi
 
 MACH3_DIR="$(cd "$(dirname "$0")" && pwd)"
-SRC="${MACH3_SRC:-$HOME/workspace/mach3-src}/kernel"
+# Mach 3.0 MI sources: vendored in-repo (kernel/mach3-src); override with
+# MACH3_SRC=/path/to/mach3-src to use an external tree instead.
+SRC="${MACH3_SRC:-$MACH3_DIR/mach3-src}/kernel"
 BUILD="$MACH3_DIR/build"
 GEN="$BUILD/gen"
 INC="$BUILD/inc"
@@ -27,6 +29,19 @@ if ! command -v clang >/dev/null 2>&1; then
         sudo apt-get install -y clang --no-install-recommends >&2
 fi
 command -v clang >/dev/null 2>&1 || { echo "FATAL: clang unavailable"; exit 1; }
+
+# LLVM binutils: allow override via env, else auto-detect (versioned or not).
+if [ -z "${LLVM_OBJCOPY:-}" ]; then
+    for c in llvm-objcopy-19 llvm-objcopy-18 llvm-objcopy-17 llvm-objcopy-16 llvm-objcopy; do
+        command -v "$c" >/dev/null 2>&1 && { LLVM_OBJCOPY="$c"; break; }
+    done
+fi
+if [ -z "${LLVM_READELF:-}" ]; then
+    for c in llvm-readelf-19 llvm-readelf-18 llvm-readelf-17 llvm-readelf-16 llvm-readelf; do
+        command -v "$c" >/dev/null 2>&1 && { LLVM_READELF="$c"; break; }
+    done
+fi
+: "${LLVM_OBJCOPY:=llvm-objcopy}" "${LLVM_READELF:=llvm-readelf}"
 
 # --- 1. MI ---
 "$MACH3_DIR/build-mi.sh" || exit 1
@@ -62,10 +77,10 @@ for prog in init ucat uls uecho umon ugpio usd ufs sh; do
         "$BUILD/udiv.o" $extra \
         >>"$LOG" 2>&1 || \
         { echo "FAIL link user/$prog.elf (see $LOG)"; exit 1; }
-    ENTRY=$(llvm-readelf-18 -h "$BUILD/$prog.elf" | sed -n 's/.*Entry point address: *//p')
+    ENTRY=$("$LLVM_READELF" -h "$BUILD/$prog.elf" | sed -n 's/.*Entry point address: *//p')
     [ "$ENTRY" = "0x100000" ] || \
         { echo "FATAL: $prog entry $ENTRY != 0x100000"; exit 1; }
-    llvm-objcopy-18 -O binary "$BUILD/$prog.elf" "$BUILD/$prog.bin" >>"$LOG" 2>&1 || \
+    "$LLVM_OBJCOPY" -O binary "$BUILD/$prog.elf" "$BUILD/$prog.bin" >>"$LOG" 2>&1 || \
         { echo "FAIL objcopy user/$prog.bin"; exit 1; }
     # Fase D: objcopy -O binary tidak menyertakan .bss (NOBITS) di akhir;
     # pad binary dengan nol hingga akhir .bss agar img_len mencakup
@@ -98,10 +113,10 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     "$BUILD/face_face_draw.o" "$BUILD/ulib.o" "$BUILD/udiv.o" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL link user/face.elf (see $LOG)"; exit 1; }
-ENTRY=$(llvm-readelf-18 -h "$BUILD/face.elf" | sed -n 's/.*Entry point address: *//p')
+ENTRY=$("$LLVM_READELF" -h "$BUILD/face.elf" | sed -n 's/.*Entry point address: *//p')
 [ "$ENTRY" = "0x100000" ] || \
     { echo "FATAL: face entry $ENTRY != 0x100000"; exit 1; }
-llvm-objcopy-18 -O binary "$BUILD/face.elf" "$BUILD/face.bin" >>"$LOG" 2>&1 || \
+"$LLVM_OBJCOPY" -O binary "$BUILD/face.elf" "$BUILD/face.bin" >>"$LOG" 2>&1 || \
     { echo "FAIL objcopy user/face.bin"; exit 1; }
 python3 "$USR/pad-bss.py" "$BUILD/face.bin" "$BUILD/face.elf" \
     >>"$LOG" 2>&1 || \
@@ -141,10 +156,10 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     "$BUILD/ulib.o" "$BUILD/udiv.o" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL link user/uiapp.elf (see $LOG)"; exit 1; }
-ENTRY=$(llvm-readelf-18 -h "$BUILD/uiapp.elf" | sed -n 's/.*Entry point address: *//p')
+ENTRY=$("$LLVM_READELF" -h "$BUILD/uiapp.elf" | sed -n 's/.*Entry point address: *//p')
 [ "$ENTRY" = "0x100000" ] || \
     { echo "FATAL: uiapp entry $ENTRY != 0x100000"; exit 1; }
-llvm-objcopy-18 -O binary "$BUILD/uiapp.elf" "$BUILD/uiapp.bin" >>"$LOG" 2>&1 || \
+"$LLVM_OBJCOPY" -O binary "$BUILD/uiapp.elf" "$BUILD/uiapp.bin" >>"$LOG" 2>&1 || \
     { echo "FAIL objcopy user/uiapp.bin"; exit 1; }
 python3 "$USR/pad-bss.py" "$BUILD/uiapp.bin" "$BUILD/uiapp.elf" \
     >>"$LOG" 2>&1 || \
@@ -164,10 +179,10 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     "$BUILD/ulib.o" "$BUILD/udiv.o" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL link user/ntp.elf (see $LOG)"; exit 1; }
-ENTRY=$(llvm-readelf-18 -h "$BUILD/ntp.elf" | sed -n 's/.*Entry point address: *//p')
+ENTRY=$("$LLVM_READELF" -h "$BUILD/ntp.elf" | sed -n 's/.*Entry point address: *//p')
 [ "$ENTRY" = "0x100000" ] || \
     { echo "FATAL: ntp entry $ENTRY != 0x100000"; exit 1; }
-llvm-objcopy-18 -O binary "$BUILD/ntp.elf" "$BUILD/ntp.bin" >>"$LOG" 2>&1 || \
+"$LLVM_OBJCOPY" -O binary "$BUILD/ntp.elf" "$BUILD/ntp.bin" >>"$LOG" 2>&1 || \
     { echo "FAIL objcopy user/ntp.bin"; exit 1; }
 python3 "$USR/pad-bss.py" "$BUILD/ntp.bin" "$BUILD/ntp.elf" \
     >>"$LOG" 2>&1 || \
@@ -187,10 +202,10 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     "$BUILD/ulib.o" "$BUILD/udiv.o" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL link user/utcpcli.elf (see $LOG)"; exit 1; }
-ENTRY=$(llvm-readelf-18 -h "$BUILD/utcpcli.elf" | sed -n 's/.*Entry point address: *//p')
+ENTRY=$("$LLVM_READELF" -h "$BUILD/utcpcli.elf" | sed -n 's/.*Entry point address: *//p')
 [ "$ENTRY" = "0x100000" ] || \
     { echo "FATAL: utcpcli entry $ENTRY != 0x100000"; exit 1; }
-llvm-objcopy-18 -O binary "$BUILD/utcpcli.elf" "$BUILD/utcpcli.bin" >>"$LOG" 2>&1 || \
+"$LLVM_OBJCOPY" -O binary "$BUILD/utcpcli.elf" "$BUILD/utcpcli.bin" >>"$LOG" 2>&1 || \
     { echo "FAIL objcopy user/utcpcli.bin"; exit 1; }
 python3 "$USR/pad-bss.py" "$BUILD/utcpcli.bin" "$BUILD/utcpcli.elf" \
     >>"$LOG" 2>&1 || \
@@ -240,10 +255,10 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     $TLSOBJS "$BUILD/ulib.o" "$BUILD/udiv.o" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL link user/utlscli.elf (see $LOG)"; exit 1; }
-ENTRY=$(llvm-readelf-18 -h "$BUILD/utlscli.elf" | sed -n 's/.*Entry point address: *//p')
+ENTRY=$("$LLVM_READELF" -h "$BUILD/utlscli.elf" | sed -n 's/.*Entry point address: *//p')
 [ "$ENTRY" = "0x100000" ] || \
     { echo "FATAL: utlscli entry $ENTRY != 0x100000"; exit 1; }
-llvm-objcopy-18 -O binary "$BUILD/utlscli.elf" "$BUILD/utlscli.bin" >>"$LOG" 2>&1 || \
+"$LLVM_OBJCOPY" -O binary "$BUILD/utlscli.elf" "$BUILD/utlscli.bin" >>"$LOG" 2>&1 || \
     { echo "FAIL objcopy user/utlscli.bin"; exit 1; }
 python3 "$USR/pad-bss.py" "$BUILD/utlscli.bin" "$BUILD/utlscli.elf" \
     >>"$LOG" 2>&1 || \
@@ -269,10 +284,10 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     "$BUILD/ulib.o" "$BUILD/udiv.o" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL link user/qabot.elf (see $LOG)"; exit 1; }
-ENTRY=$(llvm-readelf-18 -h "$BUILD/qabot.elf" | sed -n 's/.*Entry point address: *//p')
+ENTRY=$("$LLVM_READELF" -h "$BUILD/qabot.elf" | sed -n 's/.*Entry point address: *//p')
 [ "$ENTRY" = "0x100000" ] || \
     { echo "FATAL: qabot entry $ENTRY != 0x100000"; exit 1; }
-llvm-objcopy-18 -O binary "$BUILD/qabot.elf" "$BUILD/qabot.bin" >>"$LOG" 2>&1 || \
+"$LLVM_OBJCOPY" -O binary "$BUILD/qabot.elf" "$BUILD/qabot.bin" >>"$LOG" 2>&1 || \
     { echo "FAIL objcopy user/qabot.bin"; exit 1; }
 python3 "$USR/pad-bss.py" "$BUILD/qabot.bin" "$BUILD/qabot.elf" \
     >>"$LOG" 2>&1 || \
@@ -304,10 +319,10 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     $TLSOBJS "$BUILD/ulib.o" "$BUILD/udiv.o" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL link user/qabotd.elf (see $LOG)"; exit 1; }
-ENTRY=$(llvm-readelf-18 -h "$BUILD/qabotd.elf" | sed -n 's/.*Entry point address: *//p')
+ENTRY=$("$LLVM_READELF" -h "$BUILD/qabotd.elf" | sed -n 's/.*Entry point address: *//p')
 [ "$ENTRY" = "0x100000" ] || \
     { echo "FATAL: qabotd entry $ENTRY != 0x100000"; exit 1; }
-llvm-objcopy-18 -O binary "$BUILD/qabotd.elf" "$BUILD/qabotd.bin" >>"$LOG" 2>&1 || \
+"$LLVM_OBJCOPY" -O binary "$BUILD/qabotd.elf" "$BUILD/qabotd.bin" >>"$LOG" 2>&1 || \
     { echo "FAIL objcopy user/qabotd.bin"; exit 1; }
 python3 "$USR/pad-bss.py" "$BUILD/qabotd.bin" "$BUILD/qabotd.elf" \
     >>"$LOG" 2>&1 || \
@@ -326,10 +341,10 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     "$BUILD/ulib.o" "$BUILD/udiv.o" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL link user/sh.elf (see $LOG)"; exit 1; }
-ENTRY=$(llvm-readelf-18 -h "$BUILD/sh.elf" | sed -n 's/.*Entry point address: *//p')
+ENTRY=$("$LLVM_READELF" -h "$BUILD/sh.elf" | sed -n 's/.*Entry point address: *//p')
 [ "$ENTRY" = "0x100000" ] || \
     { echo "FATAL: sh entry $ENTRY != 0x100000"; exit 1; }
-llvm-objcopy-18 -O binary "$BUILD/sh.elf" "$BUILD/sh.bin" >>"$LOG" 2>&1 || \
+"$LLVM_OBJCOPY" -O binary "$BUILD/sh.elf" "$BUILD/sh.bin" >>"$LOG" 2>&1 || \
     { echo "FAIL objcopy user/sh.bin"; exit 1; }
 python3 "$USR/pad-bss.py" "$BUILD/sh.bin" "$BUILD/sh.elf" \
     >>"$LOG" 2>&1 || \
