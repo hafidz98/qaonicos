@@ -176,6 +176,35 @@ python3 "$USR/embed.py" "$BUILD/ntp.bin" "$GEN/ntp_img.c" "ntp_img" 32768 >>"$LO
     { echo "FAIL embed ntp_img"; exit 1; }
 echo "USER: ntp.elf entry=$ENTRY ok"
 
+# --- 1e. user program qabot (Qabot harness Q1): ReAct loop + mock provider. ---
+echo "BUILD user program qabot"
+for f in history tools policy provider loop eventlog main; do
+    # shellcheck disable=SC2086
+    clang $UCFLAGS -c "$USR/qabot/$f.c" -o "$BUILD/qabot_$f.o" >>"$LOG" 2>&1 || \
+        { echo "FAIL user/qabot/$f.c (see $LOG)"; exit 1; }
+done
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/qabot.elf" \
+    "$BUILD/qabot_history.o" "$BUILD/qabot_tools.o" \
+    "$BUILD/qabot_policy.o" "$BUILD/qabot_provider.o" \
+    "$BUILD/qabot_loop.o" "$BUILD/qabot_eventlog.o" \
+    "$BUILD/qabot_main.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/qabot.elf (see $LOG)"; exit 1; }
+ENTRY=$(llvm-readelf-18 -h "$BUILD/qabot.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: qabot entry $ENTRY != 0x100000"; exit 1; }
+llvm-objcopy-18 -O binary "$BUILD/qabot.elf" "$BUILD/qabot.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/qabot.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/qabot.bin" "$BUILD/qabot.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/qabot.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/qabot.bin" "$GEN/qabot_img.c" "qabot_img" 32768 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed qabot_img"; exit 1; }
+echo "USER: qabot.elf entry=$ENTRY ok"
+
 # --- 2. MD compile ---
 mkdir -p "$OBJMD"
 : > "$LOG"
@@ -214,12 +243,12 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp qabot; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }
 done
-echo "MD: *_img.o ok (11 programs)"
+echo "MD: *_img.o ok (12 programs)"
 
 # --- 3. link ---
 MI_OBJS=$(find "$OBJ" -name '*.o' | sort)

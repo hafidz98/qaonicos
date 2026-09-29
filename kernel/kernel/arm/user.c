@@ -61,6 +61,8 @@ extern unsigned char	uiapp_img[];	/* App A2: menu/settings/monitor */
 extern unsigned int	uiapp_img_len;
 extern unsigned char	ntp_img[];	/* App A4: sinkron jam via NTP */
 extern unsigned int	ntp_img_len;
+extern unsigned char	qabot_img[];	/* Qabot harness Q1: ReAct + mock */
+extern unsigned int	qabot_img_len;
 
 /* trap.c (Fase B) */
 extern unsigned int	arm_timer_ticks(void);
@@ -1243,6 +1245,7 @@ static struct uprog_image uprogs[] = {
 	{ "ugpio", ugpio_img, &ugpio_img_len },
 	{ "usd",   usd_img,   &usd_img_len   },
 	{ "ufs",   ufs_img,   &ufs_img_len   },
+	{ "qabot", qabot_img, &qabot_img_len },	/* Q1: harness, one-shot */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))
 
