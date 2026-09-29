@@ -47,12 +47,15 @@ machine_init(void)
 	extern void	blk_selftest(void);
 	extern void	gpio_init(void);
 	extern int	fat32_mount(void);
+	extern int	gpu_init(void);
 
 	fpu_init();
 	pmap_selftest();	/* M4: verify L2 small-page path */
 	ipc_selftest();		/* M4: verify IPC ports/port sets */
 	blk_selftest();		/* M4: verify virtio-blk read/write */
 	gpio_init();		/* Fase D: GPIO (mock di QEMU) */
+	if (gpu_init() != 0)
+		printf("gpu: display dinonaktifkan (lanjut tanpa display)\n");
 	if (fat32_mount() == 0)
 		printf("fat32: mounted /sd\n");
 	else

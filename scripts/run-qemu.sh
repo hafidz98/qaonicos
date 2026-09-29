@@ -8,6 +8,8 @@
 # Fase D: dua virtio-blk (hd0 = storage internal, hd1 = kartu SD 128MB
 # berformat FAT32 fresh tiap boot) + virtio-net (user-mode NAT,
 # hostfwd TCP 18080 -> guest 80 untuk server HTTP).
+# App A1: + virtio-gpu-device (display 240x240 Qabot).
+# QAON_VNC=:99 -> tambah server VNC di display :99 (capture verifikasi).
 set -e
 cd "$(dirname "$0")/.."
 
@@ -33,4 +35,6 @@ exec qemu-system-arm -M virt -cpu cortex-a7 -m 64 -nographic \
     -drive file="$SDIMG",if=none,id=hd1,format=raw \
     -device virtio-blk-device,drive=hd1 \
     -netdev user,id=net0,hostfwd=tcp::18080-:80 \
-    -device virtio-net-device,netdev=net0
+    -device virtio-net-device,netdev=net0 \
+    -device virtio-gpu-device \
+    ${QAON_VNC:+-vnc "$QAON_VNC"} "$@"

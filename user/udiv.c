@@ -44,3 +44,48 @@ __aeabi_uidivmod(unsigned int n, unsigned int d)
 	}
 	return ((unsigned long long)r << 32) | q;
 }
+
+/*
+ * App A1: face.c memakai pembagian/modulo SIGNED (interpolasi easing,
+ * gaze acak).  Implementasi via versi unsigned di atas.
+ */
+int
+__aeabi_idiv(int n, int d)
+{
+	int neg = (n < 0) ^ (d < 0);
+	unsigned int un = (n < 0) ? (unsigned int)(-(n + 1)) + 1u
+				  : (unsigned int)n;
+	unsigned int ud = (d < 0) ? (unsigned int)(-(d + 1)) + 1u
+				  : (unsigned int)d;
+	unsigned int q = __aeabi_uidiv(un, ud);
+
+	if (neg)
+		return -(int)q;
+	return (int)q;
+}
+
+int
+__aeabi_imod(int n, int d)
+{
+	return n - __aeabi_idiv(n, d) * d;
+}
+
+/*
+ * App A1: face.c menyalin struct (face_state_t) -> compiler emit
+ * __aeabi_memcpy8.  Implementasi byte-accurate.
+ */
+void
+__aeabi_memcpy8(void *dst, const void *src, unsigned int n)
+{
+	unsigned char *d = (unsigned char *)dst;
+	const unsigned char *s = (const unsigned char *)src;
+
+	while (n-- > 0)
+		*d++ = *s++;
+}
+
+void
+__aeabi_memcpy(void *dst, const void *src, unsigned int n)
+{
+	__aeabi_memcpy8(dst, src, n);
+}

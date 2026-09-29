@@ -527,3 +527,44 @@ u_readdir(const char *path, char *buf, unsigned max)
 {
 	return sys_readdir(path, buf, max);
 }
+
+/*
+ * Wrapper display (App A1): SYS_DISPLAY_INFO=60, SYS_DISPLAY_FLUSH=61.
+ */
+int
+sys_display_info(struct qaon_display *di, unsigned len)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r1, %2\n\t"
+		"mov r7, #60\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (di), "r" (len)
+		: "r0", "r1", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_display_flush(unsigned x, unsigned y, unsigned w, unsigned h,
+		  const void *buf, unsigned len)
+{
+	register unsigned _r0 __asm__("r0") = x;
+	register unsigned _r1 __asm__("r1") = y;
+	register unsigned _r2 __asm__("r2") = w;
+	register unsigned _r3 __asm__("r3") = h;
+	register unsigned _r4 __asm__("r4") = (unsigned)buf;
+	register unsigned _r5 __asm__("r5") = len;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #61\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0), "r" (_r1), "r" (_r2),
+		  "r" (_r3), "r" (_r4), "r" (_r5)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}

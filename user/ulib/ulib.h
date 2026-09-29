@@ -33,6 +33,8 @@
 #define SYS_FAT_READ	54u	/* r0=path r1=buf r2=max -> bytes / -1 */
 #define SYS_FAT_DELETE	55u	/* r0=path -> 0 / -1 */
 #define SYS_READDIR	56u	/* r0=path r1=buf r2=max -> count / -1 */
+#define SYS_DISPLAY_INFO 60u	/* r0=buf r1=len -> 0 / -1 */
+#define SYS_DISPLAY_FLUSH 61u	/* r0=x r1=y r2=w r3=h r4=buf r5=len -> 0/-1 */
 
 /* Flag open. */
 #define O_RDONLY	0u
@@ -86,6 +88,17 @@ int	sys_fat_write(const char *path, const void *buf, unsigned len);
 int	sys_fat_read(const char *path, void *buf, unsigned max);
 int	sys_fat_delete(const char *path);		/* -> 0 / -1 */
 int	sys_readdir(const char *path, char *buf, unsigned max);
+
+/* Info display (App A1). Layout DISALIN MANUAL dari kernel/user.c. */
+struct qaon_display {
+	unsigned int	width;
+	unsigned int	height;
+	unsigned int	format;	/* 0 = input RGB565 (strip parsial) */
+};
+
+int	sys_display_info(struct qaon_display *di, unsigned len);
+int	sys_display_flush(unsigned x, unsigned y, unsigned w, unsigned h,
+			  const void *buf, unsigned len);
 
 /* Helper kecil. */
 int	puts(const char *s);

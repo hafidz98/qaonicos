@@ -55,6 +55,8 @@ extern unsigned char	usd_img[];
 extern unsigned int	usd_img_len;
 extern unsigned char	ufs_img[];
 extern unsigned int	ufs_img_len;
+extern unsigned char	face_img[];	/* App A1: Qabot */
+extern unsigned int	face_img_len;
 
 /* trap.c (Fase B) */
 extern unsigned int	arm_timer_ticks(void);
@@ -94,6 +96,21 @@ extern int	fat32_read_file(const char *path, unsigned char *dst,
 				unsigned int max);
 extern int	fat32_delete(const char *path);
 extern int	fat32_listdir(const char *path, char *dst, unsigned int max);
+
+/* gpu.c (App A1, SYS_DISPLAY_INFO/FLUSH). */
+extern int	gpu_available_p(void);
+extern int	gpu_flush_strip(unsigned int x, unsigned int y,
+				unsigned int w, unsigned int h,
+				const unsigned short *rgb565);
+
+/* Info display untuk SYS_DISPLAY_INFO (12 byte). */
+struct qaon_display {
+	unsigned int	width;
+	unsigned int	height;
+	unsigned int	format;	/* 0 = input RGB565 (strip parsial) */
+};
+#define	QAON_DISP_W	240u
+#define	QAON_DISP_H	240u
 
 /* pmap.c */
 extern void	arm_pmap_activate_user(pmap_t pmap);
@@ -136,6 +153,8 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_FAT_READ	54u	/* fat_read(path, buf, max) -> bytes/-1 (Fase D) */
 #define	SYS_FAT_DELETE	55u	/* fat_delete(path) -> 0 or -1 (Fase D) */
 #define	SYS_READDIR	56u	/* readdir(path, buf, max) -> count/-1 (Fase D) */
+#define	SYS_DISPLAY_INFO 60u	/* display_info(buf, len) -> 0/-1 (App A1) */
+#define	SYS_DISPLAY_FLUSH 61u	/* display_flush(x,y,w,h,buf,len) -> 0/-1 */
 
 /*
  * struct qaon_stat (Fase C): layout DISALIN MANUAL ke user/ulib/ulib.h.
@@ -204,8 +223,8 @@ struct user_task {
 static task_t	cur_utask = TASK_NULL;
 static struct user_task *cur_udesc = 0;
 
-/* Daftar program user untuk SYS_TLIST (Fase C). */
-#define	UPROG_MAX	8u
+/* Daftar program user untuk SYS_TLIST (Fase C). App A1: 8 -> 16. */
+#define	UPROG_MAX	16u
 static const char	*uprog_names[UPROG_MAX];
 static unsigned		uprog_states[UPROG_MAX];	/* 0=RUNNABLE, 2=EXITED */
 static unsigned		nuprog = 0;
@@ -264,6 +283,9 @@ user_syscall(struct arm_trap_frame *frame)
 	unsigned int a0 = frame->r[0];
 	unsigned int a1 = frame->r[1];
 	unsigned int a2 = frame->r[2];
+	unsigned int a3 = frame->r[3];
+	unsigned int a4 = frame->r[4];
+	unsigned int a5 = frame->r[5];
 
 	switch (num) {
 	case SYS_WRITE: {
@@ -454,6 +476,28 @@ user_syscall(struct arm_trap_frame *frame)
 		    !user_range_ok(a1, a2))
 			return (unsigned int)-1;
 		return (unsigned int)fat32_listdir(kpath, (char *)a1, a2);
+	}
+	case SYS_DISPLAY_INFO: {
+		struct qaon_display *d;
+		if (!gpu_available_p() || !user_range_ok(a0, a1) ||
+		    a1 < sizeof(struct qaon_display))
+			return (unsigned int)-1;
+		d = (struct qaon_display *)a0;
+		d->width = QAON_DISP_W;
+		d->height = QAON_DISP_H;
+		d->format = 0u;
+		return 0u;
+	}
+	case SYS_DISPLAY_FLUSH: {
+		/* a0=x a1=y a2=w a3=h a4=buf(RGB565) a5=len */
+		if (!gpu_available_p() ||
+		    a2 == 0u || a3 == 0u ||
+		    a0 + a2 > QAON_DISP_W || a1 + a3 > QAON_DISP_H ||
+		    a5 < a2 * a3 * 2u ||
+		    !user_range_ok(a4, a5))
+			return (unsigned int)-1;
+		return (unsigned int)gpu_flush_strip(a0, a1, a2, a3,
+						    (const unsigned short *)a4);
 	}
 	case SYS_EXIT:
 		/* Leave user mode for good: resume at the trampoline
@@ -728,6 +772,7 @@ static struct uprog_image uprogs[] = {
 	{ "ugpio", ugpio_img, &ugpio_img_len },
 	{ "usd",   usd_img,   &usd_img_len   },
 	{ "ufs",   ufs_img,   &ufs_img_len   },
+	{ "face",  face_img,  &face_img_len  },	/* App A1: Qabot (terakhir) */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))
 
@@ -757,6 +802,7 @@ user_launch_init(void)
 		"/.gpio_cmd_ready", "/.ugpio_done",
 		"/.sd_cmd_ready", "/.usd_done",
 		"/.fat_cmd_ready", "/.ufs_done",
+		"/face.out", "/.face_done",	/* App A1: Qabot */
 	};
 
 	ramfs_init();
@@ -787,7 +833,7 @@ user_launch_init(void)
 	}
 
 	if (fails == 0)
-		printf("user_launch_init: PASS (8/8 programs, %u/%u files)\n",
+		printf("user_launch_init: PASS (9/9 programs, %u/%u files)\n",
 		       (unsigned)(sizeof(want_files) / sizeof(want_files[0])),
 		       (unsigned)(sizeof(want_files) / sizeof(want_files[0])));
 	else

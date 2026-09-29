@@ -44,6 +44,13 @@ pointer Mach task). Sinkronisasi via `splhigh()`/`splx()`.
 | 58 | `SYS_TLIST` | r0=buf, r1=max_entri | jumlah / `-1` | Isi array `struct qaon_tentry` |
 | 59 | `SYS_READ_CONSOLE` | — | byte 0–255 / `-1` | UART non-blocking (polled) |
 
+## Syscall display (App A1 ✅)
+
+| No | Nama | Argumen | Kembali | Keterangan |
+|---|---|---|---|---|
+| 60 | `SYS_DISPLAY_INFO` | r0=buf, r1=len (≥16) | `0` / `-1` | Isi `struct qaon_display`: `width`, `height` (240×240), `bpp` (16), `flags`. `-1` bila display tak ada |
+| 61 | `SYS_DISPLAY_FLUSH` | r0=x, r1=y, r2=w, r3=h, r4=pixels, r5=nbytes | `0` / `-1` | Kirim strip RGB565 ke layar via virtio-gpu (TRANSFER_TO_HOST_2D + RESOURCE_FLUSH). nbytes ≥ w·h·2 |
+
 `struct qaon_stat` (36 byte): `uptime_ms` (real, tick×10),
 `cpu_pct`, `mem_used_kb` (real), `mem_total_kb` (real, 65536),
 `blk_total_sec` (real), `blk_used_sec`, `net_rx_kb`, `net_tx_kb`,

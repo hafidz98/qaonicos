@@ -83,6 +83,33 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/hello.ld" \
     { echo "FAIL link user/hello.elf (see $LOG)"; exit 1; }
 echo "USER: hello.elf link OK"
 
+# --- 1c. user program face/Qabot (App A1): multi-file (main.c + face.c +
+# face_draw.c), pola sama: link di 0x100000, objcopy, pad-bss, embed. ---
+echo "BUILD user program face (Qabot)"
+FCFLAGS="$UCFLAGS -I$USR/face -Wno-unused-function"
+for f in main face face_draw; do
+    # shellcheck disable=SC2086
+    clang $FCFLAGS -c "$USR/face/$f.c" -o "$BUILD/face_$f.o" >>"$LOG" 2>&1 || \
+        { echo "FAIL user/face/$f.c (see $LOG)"; exit 1; }
+done
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/face.elf" "$BUILD/face_main.o" "$BUILD/face_face.o" \
+    "$BUILD/face_face_draw.o" "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/face.elf (see $LOG)"; exit 1; }
+ENTRY=$(llvm-readelf-18 -h "$BUILD/face.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: face entry $ENTRY != 0x100000"; exit 1; }
+llvm-objcopy-18 -O binary "$BUILD/face.elf" "$BUILD/face.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/face.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/face.bin" "$BUILD/face.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/face.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/face.bin" "$GEN/face_img.c" "face_img" 32768 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed face_img"; exit 1; }
+echo "USER: face.elf entry=$ENTRY ok"
+
 # --- 2. MD compile ---
 mkdir -p "$OBJMD"
 : > "$LOG"
@@ -121,12 +148,12 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs; do
+for prog in init ucat uls uecho umon ugpio usd ufs face; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }
 done
-echo "MD: *_img.o ok (8 programs)"
+echo "MD: *_img.o ok (9 programs)"
 
 # --- 3. link ---
 MI_OBJS=$(find "$OBJ" -name '*.o' | sort)
