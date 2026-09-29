@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [core]
+  pull_request:
+    branches: [core]
+
+jobs:
+  build-and-boot-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld llvm qemu-system-arm python3
+
+      - name: Build kernel and userspace
+        run: |
+          cd kernel && ./build-md.sh
+          ls -la build/mach3.elf
+
+      - name: Boot in QEMU and verify self-tests
+        run: |
+          mkdir -p disk-images
+          truncate -s 16M disk-images/mach3-blk.img
+          python3 tools/mkfat32.py create disk-images/sd128.img 128
+          # QEMU runs until killed; capture serial output, then check markers.
+          timeout 150 qemu-system-arm -M virt -cpu cortex-a7 -m 64 -nographic \
+            -kernel kernel/build/mach3.elf \
+            -drive file=disk-images/mach3-blk.img,if=none,id=hd0,format=raw \
+            -device virtio-blk-device,drive=hd0 \
+            -drive file=disk-images/sd128.img,if=none,id=hd1,format=raw \
+            -device virtio-blk-device,drive=hd1 \
+            -netdev user,id=net0 -device virtio-net-device,netdev=net0 \
+            > boot.log 2>&1 || true
+          for marker in \
+            "pmap_selftest: PASS" \
+            "ipc_selftest: PASS" \
+            "blk_selftest: PASS" \
+            "task_selftest: PASS" \
+            "user_selftest: PASS" \
+            "sched_selftest: PASS" \
+            "[selftest] spawn exit=0 PASS"; do
+            if grep -qF "$marker" boot.log; then
+              echo "OK: $marker"
+            else
+              echo "MISSING: $marker"
+              echo "--- boot.log (tail) ---"
+              tail -60 boot.log
+              exit 1
+            fi
+          done
+          echo "All boot self-tests passed."
+
+      - name: Upload boot log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-log
+          path: boot.log

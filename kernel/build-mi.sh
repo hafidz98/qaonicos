@@ -19,7 +19,9 @@ if [ -f "$HOME/workspace/toolchain/env.sh" ]; then
 fi
 
 MACH3_DIR="$(cd "$(dirname "$0")" && pwd)"
-SRC="${MACH3_SRC:-$HOME/workspace/mach3-src}/kernel"
+# Mach 3.0 MI sources: vendored in-repo (kernel/mach3-src); override with
+# MACH3_SRC=/path/to/mach3-src to use an external tree instead.
+SRC="${MACH3_SRC:-$MACH3_DIR/mach3-src}/kernel"
 BUILD="$MACH3_DIR/build"
 GEN="$BUILD/gen"
 INC="$BUILD/inc"
