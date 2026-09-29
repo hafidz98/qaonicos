@@ -59,9 +59,18 @@ extern unsigned char	face_img[];	/* App A1/A2: Qabot server */
 extern unsigned int	face_img_len;
 extern unsigned char	uiapp_img[];	/* App A2: menu/settings/monitor */
 extern unsigned int	uiapp_img_len;
+extern unsigned char	ntp_img[];	/* App A4: sinkron jam via NTP */
+extern unsigned int	ntp_img_len;
 
 /* trap.c (Fase B) */
 extern unsigned int	arm_timer_ticks(void);
+
+/* netstack.c (App A4: UDP untuk DNS/NTP) */
+extern int	netstack_udp_send(unsigned int dst, unsigned short dport,
+				      const unsigned char *data, unsigned dlen);
+extern int	netstack_udp_recv(unsigned char *buf, unsigned maxlen,
+				      unsigned int *src_ip,
+				      unsigned short *src_port);
 
 /* clock.c (Fase B) */
 extern void	arm_timer_enable(void);
@@ -165,6 +174,10 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_DISPLAY_STATUS 66u	/* -> id pemegang token (0=face,1=uiapp) */
 #define	SYS_UPTIME	67u	/* -> milidetik sejak boot */
 #define	SYS_DISPLAY_SLEEP 68u	/* r0=1: uiapp minta sleep; r0=0: face ambil+clear */
+#define	SYS_TIME_SET	69u	/* App A4: time_set(unix_sec) -> 0 */
+#define	SYS_TIME_GET	70u	/* App A4: -> detik Unix / 0 (belum di-set) */
+#define	SYS_UDP_SEND	71u	/* App A4: udp_send(ip,port,buf,len) -> 0/-1 */
+#define	SYS_UDP_RECV	72u	/* App A4: udp_recv(buf,max,&ip,&port) -> n/0/-1 */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -264,9 +277,10 @@ struct user_ctx {
 	unsigned int	spsr;
 };
 
-#define	NDAEMON		2u
+#define	NDAEMON		3u	/* face, uiapp, ntp (App A4) */
 #define	PROG_FACE	0
 #define	PROG_UIAPP	1
+#define	PROG_NTP	2	/* App A4: sinkron jam (tak pegang display) */
 
 struct daemon {
 	const char	*name;
@@ -287,6 +301,12 @@ static int		sched_active = 0;
 /* Arbiter display (App A2): token dipegang face (0) atau uiapp (1). */
 static int		dpy_holder = PROG_FACE;
 static int		dpy_sleep_req = 0;
+
+/* Jam dinding (App A4): di-set program ntp via SYS_TIME_SET (detik
+ * Unix UTC).  SYS_TIME_GET = set + (ticks_berlalu / 100). */
+static unsigned		time_unix_set;
+static unsigned		time_tick_set;
+static int		time_valid = 0;
 
 /* Antrean event input untuk pemegang token. */
 #define	EVQ_LEN		16u
@@ -719,6 +739,44 @@ user_syscall(struct arm_trap_frame *frame)
 			dpy_sleep_req = 1;
 			return 0;
 		}
+	}
+	case SYS_TIME_SET:
+		/* a0 = detik Unix (UTC). */
+		time_unix_set = a0;
+		time_tick_set = arm_timer_ticks();
+		time_valid = 1;
+		return 0;
+	case SYS_TIME_GET: {
+		unsigned dt;
+		if (!time_valid)
+			return 0;
+		dt = arm_timer_ticks() - time_tick_set;
+		return time_unix_set + dt / 100u;
+	}
+	case SYS_UDP_SEND: {
+		/* a0=ip dst, a1=port dst, a2=buf, a3=len -> 0/-1 */
+		int r;
+		if (a3 > 512u || !user_range_ok(a2, a3))
+			return (unsigned int)-1;
+		r = netstack_udp_send(a0, (unsigned short)a1,
+				      (const unsigned char *)a2, a3);
+		return (unsigned int)(r < 0 ? -1 : 0);
+	}
+	case SYS_UDP_RECV: {
+		/* a0=buf, a1=maxlen, a2=&src_ip, a3=&src_port */
+		int n;
+		unsigned int sip;
+		unsigned short sport;
+		if (a1 == 0u || a1 > 512u || !user_range_ok(a0, a1) ||
+		    !user_range_ok(a2, sizeof(unsigned int)) ||
+		    !user_range_ok(a3, sizeof(unsigned short)))
+			return (unsigned int)-1;
+		n = netstack_udp_recv((unsigned char *)a0, a1, &sip, &sport);
+		if (n > 0) {
+			*(unsigned int *)a2 = sip;
+			*(unsigned short *)a3 = sport;
+		}
+		return (unsigned int)n;
 	}
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
@@ -1188,10 +1246,11 @@ static struct uprog_image uprogs[] = {
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))
 
-/* Daemon persisten App A2: jalan di scheduler kooperatif. */
+/* Daemon persisten App A2/A4: jalan di scheduler kooperatif. */
 static struct uprog_image daemon_images[] = {
 	{ "face",  face_img,  &face_img_len  },	/* progid 0: Qabot server */
 	{ "uiapp", uiapp_img, &uiapp_img_len },	/* progid 1: menu */
+	{ "ntp",   ntp_img,   &ntp_img_len   },	/* progid 2: sinkron jam */
 };
 #define	NDAEMON_IMAGES	(sizeof(daemon_images) / sizeof(daemon_images[0]))
 

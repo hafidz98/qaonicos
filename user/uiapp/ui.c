@@ -1,7 +1,8 @@
 /*
  * ui.c - screen manager + status bar + render frame uiapp.
  *
- * Status bar permanen (§2.4): jam kiri (uptime HH:MM:SS — data real),
+ * Status bar permanen (§2.4): jam kiri (jam dinding WIB via NTP bila
+ * tersedia, fallback uptime HH:MM:SS),
  * baterai kanan (outline saja; tanpa ADC/Fuel gauge = jujur kosong).
  * Digambar di setiap frame di atas semua layar.
  */
@@ -79,14 +80,20 @@ ui_clear_release(void)
 	want_release = 0;
 }
 
-/* HH:MM:SS dari uptime_ms (data real). */
+/* HH:MM:SS. Bila jam dinding (NTP) tersedia pakai waktu WIB
+ * (UTC+7) dari detik Unix; bila belum, fallback ke uptime. */
 static void
 fmt_clock(char *out, unsigned ms)
 {
-	unsigned s = ms / 1000u;
-	unsigned hh = (s / 3600u) % 24u;
-	unsigned mm = (s / 60u) % 60u;
-	unsigned ss = s % 60u;
+	unsigned t = sys_time_get();
+	unsigned s, hh, mm, ss;
+	if (t != 0u)
+		s = t + 7u * 3600u;	/* WIB */
+	else
+		s = ms / 1000u;
+	hh = (s / 3600u) % 24u;
+	mm = (s / 60u) % 60u;
+	ss = s % 60u;
 	out[0] = (char)('0' + hh / 10u); out[1] = (char)('0' + hh % 10u);
 	out[2] = ':';
 	out[3] = (char)('0' + mm / 10u); out[4] = (char)('0' + mm % 10u);

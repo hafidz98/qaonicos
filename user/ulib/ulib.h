@@ -125,6 +125,14 @@ int	sys_display_status(void);
 unsigned	sys_uptime(void);
 int	sys_display_sleep(int req);
 
+/* Jam dinding + UDP (App A4): 69-72. */
+int	sys_time_set(unsigned unix_sec);
+unsigned	sys_time_get(void);
+int	sys_udp_send(unsigned dst_ip, unsigned dst_port,
+		       const void *buf, unsigned len);
+int	sys_udp_recv(void *buf, unsigned maxlen,
+		       unsigned *src_ip, unsigned short *src_port);
+
 /* Helper kecil. */
 int	puts(const char *s);
 unsigned ustrlen(const char *s);

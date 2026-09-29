@@ -57,6 +57,10 @@ pointer Mach task). Sinkronisasi via `splhigh()`/`splx()`.
 | 66 | `SYS_DISPLAY_STATUS` | — | progid | progid pemegang token display (`0`=face, `1`=uiapp) |
 | 67 | `SYS_UPTIME` | — | ms | Uptime kernel dalam milidetik (dipakai pacing frame) |
 | 68 | `SYS_DISPLAY_SLEEP` | r0=req | `0` / `1` / `-1` | r0=1: pemegang token minta sleep (flag). r0=0: face mengambil+clear flag (`1`=ada permintaan). `-1` bila bukan yang berhak |
+| 69 | `SYS_TIME_SET` | r0=unix_sec | `0` | App A4: set jam dinding kernel (detik Unix UTC). Dipakai daemon `ntp` setelah sinkron NTP |
+| 70 | `SYS_TIME_GET` | — | detik Unix / `0` | App A4: jam dinding = nilai SET + (ticks berlalu)/100. `0` bila belum pernah di-set (fallback: `SYS_UPTIME`) |
+| 71 | `SYS_UDP_SEND` | r0=dst_ip, r1=dst_port, r2=buf, r3=len (≤512) | `0` / `-1` | App A4: kirim datagram UDP (proto 17) via `netstack_ip_send`. Source port ephemeral kernel (49152+). `-1` bila MAC dst belum dikenal (ARP dikirim; coba lagi) |
+| 72 | `SYS_UDP_RECV` | r0=buf, r1=maxlen (≤512), r2=&src_ip, r3=&src_port | n / `0` / `-1` | App A4: ambil datagram balasan (non-blocking). Slot RX tunggal; hanya paket yang dport-nya = port ephemeral kiriman terakhir yang disimpan. `0`=belum ada |
 
 ### Event input (`EV_*`, via 65)
 

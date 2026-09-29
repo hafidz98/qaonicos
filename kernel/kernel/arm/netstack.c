@@ -31,6 +31,7 @@ extern int		printf(const char *, ...);
 
 #define IP_ICMP  1u
 #define IP_TCP   6u
+#define IP_UDP   17u
 
 #define ICMP_ECHO_REQ 8u
 #define ICMP_ECHO_REP 0u
@@ -181,6 +182,112 @@ static void arp_on_frame(const unsigned char *f, unsigned len)
     }
 }
 
+/* --- UDP (App A4: untuk DNS + NTP) ---
+ *
+ * Model minimal: slot RX tunggal 512 byte.  udp_expect_port dicatat
+ * setiap udp_send; paket masuk yang dport-nya cocok disalin ke slot.
+ * Cukup untuk pola request->response sekuensial (DNS lalu NTP).
+ */
+#define UDP_RX_MAX 512u
+
+
+/* Didefinisikan di bawah (Fase 12); forward decl untuk udp_send. */
+int	netstack_ip_send(unsigned int dst, unsigned char proto,
+			  const unsigned char *payload, unsigned plen);
+
+static unsigned char udp_rx_data[UDP_RX_MAX];
+static unsigned udp_rx_len;
+static unsigned int udp_rx_src;
+static unsigned short udp_rx_sport;
+static unsigned char udp_rx_valid;
+static unsigned short udp_expect_port;
+static unsigned short udp_ephem = 0xC000u;
+
+static void
+udp_on_ip(const unsigned char *ip, unsigned iplen, unsigned int src)
+{
+    unsigned ihl, ulen, dlen, sport, dport, i;
+    const unsigned char *u;
+
+    ihl = (ip[0] & 0x0fu) * 4u;
+    if (ihl < 20u || iplen < ihl + 8u)
+        return;
+    u = ip + ihl;
+    sport = rd16(u + 0);
+    dport = rd16(u + 2);
+    ulen = rd16(u + 4);
+    if (ulen < 8u || iplen < ihl + ulen)
+        return;
+    if (dport != udp_expect_port)
+        return;                 /* bukan balasan yang ditunggu */
+    /* UDP checksum opsional (0 = tidak ada); terima apa adanya. */
+    dlen = ulen - 8u;
+    if (dlen > UDP_RX_MAX)
+        dlen = UDP_RX_MAX;
+    for (i = 0; i < dlen; i++)
+        udp_rx_data[i] = u[8 + i];
+    udp_rx_len = dlen;
+    udp_rx_src = src;
+    udp_rx_sport = (unsigned short)sport;
+    udp_rx_valid = 1u;
+}
+
+/* Kirim datagram UDP.  Mengembalikan source port yang dipakai, atau
+ * -1 bila MAC tujuan belum dikenal (pemanggil kirim ARP dulu / coba
+ * lagi) atau paket kebesaran. */
+int
+netstack_udp_send(unsigned int dst, unsigned short dport,
+                  const unsigned char *data, unsigned dlen)
+{
+    static unsigned char upkt[8 + UDP_RX_MAX];
+    unsigned short sport;
+    unsigned i;
+
+    if (dlen > UDP_RX_MAX)
+        return -1;
+    if (arp_find(dst) == 0) {
+        arp_send(ARP_REQ, bcast_mac, dst);
+        return -1;
+    }
+    sport = udp_ephem++;
+    if (udp_ephem < 0xC000u)
+        udp_ephem = 0xC000u;
+    wr16(upkt + 0, sport);
+    wr16(upkt + 2, dport);
+    wr16(upkt + 4, (unsigned short)(8u + dlen));
+    wr16(upkt + 6, 0u);         /* checksum 0 = tidak dipakai */
+    for (i = 0; i < dlen; i++)
+        upkt[8 + i] = data[i];
+    if (netstack_ip_send(dst, IP_UDP, upkt, 8u + dlen) != 0)
+        return -1;
+    udp_expect_port = sport;
+    udp_rx_valid = 0u;          /* buang balasan basi */
+    return (int)sport;
+}
+
+/* Ambil datagram yang cocok (non-blocking).  >0 = jumlah byte,
+ * 0 = belum ada, -1 = argumen buruk. */
+int
+netstack_udp_recv(unsigned char *buf, unsigned maxlen,
+                  unsigned int *src_ip, unsigned short *src_port)
+{
+    unsigned i, n;
+
+    if (!buf || maxlen == 0u)
+        return -1;
+    if (!udp_rx_valid)
+        return 0;
+    n = udp_rx_len < maxlen ? udp_rx_len : maxlen;
+    for (i = 0; i < n; i++)
+        buf[i] = udp_rx_data[i];
+    if (src_ip)
+        *src_ip = udp_rx_src;
+    if (src_port)
+        *src_port = udp_rx_sport;
+    udp_rx_valid = 0u;
+    return (int)n;
+}
+
 /* --- ICMP --- */
 static void icmp_on_ip(const unsigned char *ip, unsigned iplen,
                        unsigned int src, unsigned int dst)
@@ -268,9 +375,12 @@ static void ip_on_frame(const unsigned char *f, unsigned len)
         icmp_on_ip(ip, iplen, src, dst);
     else if (ip[9] == IP_TCP)
         tcp_on_ip(ip, iplen, src, f + 6); /* f+6 = MAC sumber */
+    else if (ip[9] == IP_UDP)
+        udp_on_ip(ip, iplen, src);
 }
 
-/* Fase 12: kirim paket IP generik (dipakai TCP). */
+/* Fase 12: kirim paket IP generik (dipakai TCP; dideklarasikan di atas
+ * untuk UDP App A4). */
 int netstack_ip_send(unsigned int dst, unsigned char proto,
                      const unsigned char *payload, unsigned plen)
 {

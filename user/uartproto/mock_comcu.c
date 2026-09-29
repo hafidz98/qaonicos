@@ -6,6 +6,11 @@
  * QEMU.  Saat ESP32-C3 tiba: ganti xchg() di uartproto.c dengan
  * tulis/baca UART PL011 data — antarmuka uproto_* tidak berubah.
  *
+ * Backing store = struct nvs_state (user/cfg/cfg.h) yang persisten di
+ * 2 sektor NVS kartu SD (write-through tiap mutasi): KV LLM, jaringan
+ * WiFi tersimpan, dan state/nama BLE selamat dari reboot. State
+ * koneksi WiFi saat ini (wifi_conn/ssid/pending) tetap runtime saja.
+ *
  * Perintah yang didukung (RENCANA-app §4):
  *   WIFI.SCAN -> OK <n>\n<ssid>,<rssi>,<sec>\n...
  *   WIFI.CONNECT <ssid> -> OK NEEDPASS | OK CONNECTED | ERR NOTFOUND
@@ -20,18 +25,86 @@
  *   KV.SET <k> <v>      -> OK
  *   KV.GET <k>          -> OK <v> | ERR NOTFOUND
  *   KV.DEL <k>          -> OK
- *   TIME.GET            -> OK <iso8601> (basis: waktu build mock)
+ *   TIME.GET            -> OK <iso8601> (jam dinding real via NTP;
+ *                              label MOCK-... bila belum sinkron)
  *   FIDO.LIST           -> OK 0
  */
 #include "uartproto/uartproto.h"
+#include "ulib/ulib.h"
+#include "../cfg/cfg.h"
+
+/* Detik Unix (UTC) -> tanggal sipil WIB. Algoritma days-from-civil
+ * (Hinnant), valid untuk seluruh rentang unix positif. */
+static void
+unix_to_wib(unsigned t, int *Y, int *M, int *D, int *h, int *m, int *s)
+{
+	long days, z, era, doe, yoe, y, doy, mp, d, mo;
+	long rem;
+
+	rem = (long)(t + 7u * 3600u);	/* WIB = UTC+7 */
+	days = rem / 86400L;
+	rem -= days * 86400L;
+
+	z = days + 719468L;
+	era = z / 146097L;
+	doe = z - era * 146097L;			/* [0, 146096] */
+	yoe = (doe - doe / 1460L + doe / 36524L - doe / 146096L) / 365L;
+	y = yoe + era * 400L;
+	doy = doe - (365L * yoe + yoe / 4L - yoe / 100L);
+	mp = (5L * doy + 2L) / 153L;
+	d = doy - (153L * mp + 2L) / 5L + 1L;
+	mo = mp + (mp < 10L ? 3L : -9L);
+	y += (mo <= 2L);
+
+	*Y = (int)y; *M = (int)mo; *D = (int)d;
+	*h = (int)(rem / 3600L);
+	*m = (int)((rem % 3600L) / 60L);
+	*s = (int)(rem % 60L);
+}
+
+static void
+put2(char *p, int v)	/* dua digit nol-di-depan */
+{
+	p[0] = (char)('0' + v / 10);
+	p[1] = (char)('0' + v % 10);
+}
+
+/* TIME.GET: jam dinding real (NTP) bila sudah sinkron;
+ * bila belum, label jujur seperti sebelumnya. */
+static const char *
+time_now(char *buf)
+{
+	unsigned t = sys_time_get();
+	int Y, M, D, h, m, s;
+	int i;
+	static const char mock[] = "MOCK-2026-09-29T09:40:00+07:00";
+
+	if (t == 0u) {
+		for (i = 0; mock[i]; i++)
+			buf[i] = mock[i];
+		buf[i] = 0;
+		return buf;
+	}
+	unix_to_wib(t, &Y, &M, &D, &h, &m, &s);
+	put2(buf + 0, Y / 100); put2(buf + 2, Y % 100);
+	buf[4] = '-';
+	put2(buf + 5, M); buf[7] = '-';
+	put2(buf + 8, D); buf[10] = 'T';
+	put2(buf + 11, h); buf[13] = ':';
+	put2(buf + 14, m); buf[16] = ':';
+	put2(buf + 17, s);
+	buf[19] = '+'; buf[20] = '0'; buf[21] = '7'; buf[22] = ':';
+	buf[23] = '0'; buf[24] = '0'; buf[25] = 0;
+	return buf;
+}
 
 #define SSID_SZ	32
-#define KV_N	8
-#define KV_SZ	48
 
-static int	ble_on = 0;
-static char	ble_name[24] = "QABOT-01";
+/* Backing store tunggal: NVS di SD. */
+static struct nvs_state	nvs;
+static int		nvs_ready = 0;
 
+/* State koneksi WiFi (runtime, tidak disimpan). */
 static int	wifi_conn = 0;
 static char	wifi_ssid[SSID_SZ] = "";
 static char	wifi_pending[SSID_SZ] = "";	/* CONNECT yg tunggu PASS */
@@ -40,14 +113,6 @@ static char	wifi_pending[SSID_SZ] = "";	/* CONNECT yg tunggu PASS */
 static const char *scan_ssid[3] = { "RUMAH-HAFIDZ", "KANTOR-5G", "WARUNGKOPI" };
 static const char *scan_rssi[3] = { "-52", "-67", "-78" };
 static const char *scan_sec[3] = { "WPA2", "WPA2", "OPEN" };
-
-/* Jaringan tersimpan. */
-static char	saved_ssid[2][SSID_SZ];
-static int	nsaved = 0;
-
-/* KV store mock (pengganti NVS ESP32). */
-static char	kv_k[KV_N][KV_SZ];
-static char	kv_v[KV_N][KV_SZ];
 
 /* --- util string minimal (tanpa libc) --- */
 
@@ -149,12 +214,39 @@ argn(const char *tx, int n, char *out, unsigned osz)
 	out[o] = 0;
 }
 
+/* Muat NVS sekali (perintah pertama); gagal -> default seperti semula. */
+static void
+nvs_init(void)
+{
+	unsigned i;
+
+	if (cfg_load(&nvs) == 0)
+		return;
+	for (i = 0; i < sizeof(nvs); i++)
+		((unsigned char *)&nvs)[i] = 0;
+	scpy(nvs.ble_name, "QABOT-01", sizeof(nvs.ble_name));
+	/* ble_on=0, wifi_nsaved=0, kv_count=0 sudah nol. */
+}
+
+/* Hitung ulang kv_count dari slot terisi (dipanggil sebelum save). */
+static void
+kv_recount(void)
+{
+	unsigned char n = 0;
+	int i;
+
+	for (i = 0; i < NVS_KV_MAX; i++)
+		if (nvs.kv[i].key[0])
+			n++;
+	nvs.kv_count = n;
+}
+
 static int
 kv_find(const char *k)
 {
 	int i;
-	for (i = 0; i < KV_N; i++)
-		if (kv_k[i][0] && scmp(kv_k[i], k) == 0)
+	for (i = 0; i < NVS_KV_MAX; i++)
+		if (nvs.kv[i].key[0] && scmp(nvs.kv[i].key, k) == 0)
 			return i;
 	return -1;
 }
@@ -163,8 +255,8 @@ static int
 kv_free(void)
 {
 	int i;
-	for (i = 0; i < KV_N; i++)
-		if (!kv_k[i][0])
+	for (i = 0; i < NVS_KV_MAX; i++)
+		if (!nvs.kv[i].key[0])
 			return i;
 	return -1;
 }
@@ -174,6 +266,11 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 {
 	char a0[64], a1[64], tmp[128];
 	unsigned i, o;
+
+	if (!nvs_ready) {
+		nvs_init();
+		nvs_ready = 1;
+	}
 
 	/* --- WIFI --- */
 	if (scmp(tx, "WIFI.SCAN") == 0) {
@@ -224,15 +321,18 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 			wifi_conn = 1;
 			scpy(wifi_ssid, wifi_pending, sizeof(wifi_ssid));
 			wifi_pending[0] = 0;
-			/* simpan */
-			if (nsaved < 2) {
+			/* simpan (persisten) */
+			if (nvs.wifi_nsaved < 2) {
 				int dup = 0;
-				for (i = 0; i < (unsigned)nsaved; i++)
-					if (scmp(saved_ssid[i], wifi_ssid) == 0)
+				for (i = 0; i < nvs.wifi_nsaved; i++)
+					if (scmp(nvs.wifi_saved[i],
+						 wifi_ssid) == 0)
 						dup = 1;
-				if (!dup)
-					scpy(saved_ssid[nsaved++], wifi_ssid,
-					     SSID_SZ);
+				if (!dup) {
+					scpy(nvs.wifi_saved[nvs.wifi_nsaved++],
+					     wifi_ssid, SSID_SZ);
+					cfg_save(&nvs); /* write-through */
+				}
 			}
 			return ok1("CONNECTED", rx, rsz);
 		}
@@ -243,11 +343,12 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 		tmp[o++] = 'O';
 		tmp[o++] = 'K';
 		tmp[o++] = ' ';
-		tmp[o++] = (char)('0' + nsaved);
+		tmp[o++] = (char)('0' + nvs.wifi_nsaved);
 		tmp[o++] = '\n';
-		for (i = 0; i < (unsigned)nsaved; i++) {
+		for (i = 0; i < nvs.wifi_nsaved; i++) {
 			const char *p;
-			for (p = saved_ssid[i]; *p && o + 2 < sizeof(tmp); p++)
+			for (p = nvs.wifi_saved[i];
+			     *p && o + 2 < sizeof(tmp); p++)
 				tmp[o++] = *p;
 			tmp[o++] = ',';
 			tmp[o++] = 'W';
@@ -262,16 +363,17 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 	}
 	if (sncmp(tx, "WIFI.FORGET", 11) == 0) {
 		argn(tx, 0, a0, sizeof(a0));
-		for (i = 0; i < (unsigned)nsaved; i++) {
-			if (scmp(saved_ssid[i], a0) == 0) {
+		for (i = 0; i < nvs.wifi_nsaved; i++) {
+			if (scmp(nvs.wifi_saved[i], a0) == 0) {
 				unsigned j;
-				for (j = i; j + 1 < (unsigned)nsaved; j++)
-					scpy(saved_ssid[j], saved_ssid[j + 1],
-					     SSID_SZ);
-				nsaved--;
+				for (j = i; j + 1 < nvs.wifi_nsaved; j++)
+					scpy(nvs.wifi_saved[j],
+					     nvs.wifi_saved[j + 1], SSID_SZ);
+				nvs.wifi_nsaved--;
 				break;
 			}
 		}
+		cfg_save(&nvs);	/* write-through; error diabaikan */
 		return ok1(0, rx, rsz);
 	}
 	if (scmp(tx, "WIFI.STATUS") == 0) {
@@ -293,24 +395,28 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 
 	/* --- BLE --- */
 	if (scmp(tx, "BLE.ON") == 0) {
-		ble_on = 1;
+		nvs.ble_on = 1;
+		cfg_save(&nvs);	/* write-through; error diabaikan */
 		return ok1(0, rx, rsz);
 	}
 	if (scmp(tx, "BLE.OFF") == 0) {
-		ble_on = 0;
+		nvs.ble_on = 0;
+		cfg_save(&nvs);	/* write-through; error diabaikan */
 		return ok1(0, rx, rsz);
 	}
 	if (sncmp(tx, "BLE.NAME", 8) == 0) {
 		argn(tx, 0, a0, sizeof(a0));
-		if (a0[0])
-			scpy(ble_name, a0, sizeof(ble_name));
+		if (a0[0]) {
+			scpy(nvs.ble_name, a0, sizeof(nvs.ble_name));
+			cfg_save(&nvs);	/* write-through; error diabaikan */
+		}
 		return ok1(0, rx, rsz);
 	}
 	if (scmp(tx, "BLE.STATUS") == 0) {
-		scpy(tmp, ble_on ? "ON " : "OFF ", sizeof(tmp));
+		scpy(tmp, nvs.ble_on ? "ON " : "OFF ", sizeof(tmp));
 		o = slen(tmp);
-		for (i = 0; ble_name[i] && o + 2 < sizeof(tmp); i++)
-			tmp[o++] = ble_name[i];
+		for (i = 0; nvs.ble_name[i] && o + 2 < sizeof(tmp); i++)
+			tmp[o++] = nvs.ble_name[i];
 		tmp[o] = 0;
 		return ok1(tmp, rx, rsz);
 	}
@@ -327,8 +433,10 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 			f = kv_free();
 		if (f < 0)
 			return err("FULL", rx, rsz);
-		scpy(kv_k[f], a0, KV_SZ);
-		scpy(kv_v[f], a1, KV_SZ);
+		scpy(nvs.kv[f].key, a0, sizeof(nvs.kv[f].key));
+		scpy(nvs.kv[f].val, a1, sizeof(nvs.kv[f].val));
+		kv_recount();
+		cfg_save(&nvs);	/* write-through; error diabaikan */
 		return ok1(0, rx, rsz);
 	}
 	if (sncmp(tx, "KV.GET", 6) == 0) {
@@ -337,23 +445,26 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 		f = kv_find(a0);
 		if (f < 0)
 			return err("NOTFOUND", rx, rsz);
-		return ok1(kv_v[f], rx, rsz);
+		return ok1(nvs.kv[f].val, rx, rsz);
 	}
 	if (sncmp(tx, "KV.DEL", 6) == 0) {
 		int f;
 		argn(tx, 0, a0, sizeof(a0));
 		f = kv_find(a0);
 		if (f >= 0) {
-			kv_k[f][0] = 0;
-			kv_v[f][0] = 0;
+			nvs.kv[f].key[0] = 0;
+			nvs.kv[f].val[0] = 0;
 		}
+		kv_recount();
+		cfg_save(&nvs);	/* write-through; error diabaikan */
 		return ok1(0, rx, rsz);
 	}
 
 	/* --- TIME --- */
-	if (scmp(tx, "TIME.GET") == 0)
-		/* Mock: jam "real" belum ada (butuh NTP/RTC); label jujur. */
-		return ok1("MOCK-2026-09-29T09:40:00+07:00", rx, rsz);
+	if (scmp(tx, "TIME.GET") == 0) {
+		static char tbuf[32];
+		return ok1(time_now(tbuf), rx, rsz);
+	}
 
 	/* --- FIDO --- */
 	if (scmp(tx, "FIDO.LIST") == 0)

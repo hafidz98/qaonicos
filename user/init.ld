@@ -15,6 +15,12 @@ SECTIONS
         *(.text*)
     }
 
+    /* Orphan .ARM.exidx harus eksplisit: lld kadang menaruhnya
+     * SEBELUM .text (entry jadi 0x100010, bukan 0x100000). */
+    .ARM.exidx : {
+        *(.ARM.exidx*)
+    }
+
     .rodata : {
         *(.rodata*)
     }

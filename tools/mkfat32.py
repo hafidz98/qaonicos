@@ -16,6 +16,10 @@ Layout (128MB = 262144 sektor):
     (262143) dicadangkan untuk magic superblock kernel "QAONSD01"
     (blk.c menulisnya tiap boot; FAT allocator kernel hanya memakai
     entri FAT == 0 sehingga cluster BAD tak pernah terpakai).
+    cluster 3 (= data cluster bebas pertama) juga ditandai BAD:
+    2 sektor pertamanya (LBA = data_start + 8) adalah area NVS untuk
+    persistensi setting aplikasi; cmd_create mempertahankan isinya
+    (bila bermagic "QNVS") saat image di-format ulang.
 
 Isi awal:
     /HELLO.TXT            teks sambutan
@@ -102,6 +106,17 @@ class FatImage:
         self.next_free += 1
         return c
 
+    def nvs_reserve(self):
+        """Cadangkan 1 cluster untuk NVS: alokasi cluster data bebas
+        pertama via alloc(), tandai BAD (0x0FFFFFF7) di FAT (yang nanti
+        ditulis ke KEDUA salinan). Kembalikan (cluster, LBA sektor
+        pertama). Deterministik: dipanggil sebagai alloc() pertama di
+        build() -> selalu cluster 3."""
+        c = self.alloc()
+        self.fat[c] = 0x0FFFFFF7
+        lba = self.data_start + (c - 2) * self.spc
+        return c, lba
+
     def chain_write(self, data):
         """Alokasi cluster secukupnya, tulis data, kembalikan cluster awal."""
         ncl = (len(data) + self.spc * SECTOR - 1) // (self.spc * SECTOR)
@@ -153,7 +168,7 @@ class FatImage:
         fi = bytearray(SECTOR)
         struct.pack_into("<I", fi, 0, 0x41615252)
         struct.pack_into("<I", fi, 484, 0x61417272)
-        free = self.clusters - 1  # cluster 2 dipakai root
+        free = self.clusters - 2  # cluster 2 = root, cluster 3 = NVS (BAD)
         struct.pack_into("<I", fi, 488, free)
         struct.pack_into("<I", fi, 492, 3)
         struct.pack_into("<I", fi, 508, 0xAA550000)
@@ -166,6 +181,13 @@ class FatImage:
         self.fat[1] = 0x0FFFFFFF
         self.fat[self.root_clust] = 0x0FFFFFFF
         self.fat[last] = 0x0FFFFFF7  # BAD -> tak pernah dialokasi
+
+        # --- NVS: cluster data bebas pertama dicadangkan untuk setting
+        # aplikasi (2 sektor pertama dipakai, sisa cluster tak terpakai).
+        # Ditandai BAD agar allocator FAT kernel tak pernah memakainya.
+        self.nvs_cluster, self.nvs_lba = self.nvs_reserve()
+        print("NVS: cluster %d -> LBA %d (2 sektor)" %
+              (self.nvs_cluster, self.nvs_lba))
 
         # --- root dir: HELLO.TXT + DOCS/ ---
         hello = b"Halo dari QaonicOS! Ini file di kartu SD (FAT32).\r\n"
@@ -214,9 +236,28 @@ def is_fat32(path):
 
 def cmd_create(path, size_mb):
     total = size_mb * 1024 * 1024 // SECTOR
+    # NVS: hitung LBA dari layout (instans probe, tanpa build) agar
+    # sektor lama bisa dibaca SEBELUM image fresh menimpa file.
+    _, nvs_lba = FatImage(total).nvs_reserve()
+    saved = None
+    try:
+        with open(path, "rb") as f:
+            f.seek(nvs_lba * SECTOR)
+            data = f.read(2 * SECTOR)
+            if len(data) == 2 * SECTOR and data[:4] == b"QNVS":
+                saved = data
+    except OSError:
+        pass  # file belum ada -> tidak ada yang di-preserve
     img = FatImage(total).build()
     with open(path, "wb") as f:
         f.write(img)
+    if saved is not None:
+        # Tulis kembali HANYA bila bermagic QNVS: data NVS selamat dari
+        # reformat, FS tetap fresh/deterministik untuk test usd/ufs.
+        with open(path, "r+b") as f:
+            f.seek(nvs_lba * SECTOR)
+            f.write(saved)
+        print("NVS: preserve 2 sektor @ LBA %d" % nvs_lba)
     print("FAT32 image: %s (%d MB, %d sektor, %d cluster, FAT %d sektor)" %
           (path, size_mb, total, FatImage(total).clusters,
            FatImage(total).fatsz))
