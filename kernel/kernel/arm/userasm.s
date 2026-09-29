@@ -66,6 +66,35 @@ user_exit_trampoline:
 	bx	lr			/* return to test, r0 = code */
 	.size user_exit_trampoline, .-user_exit_trampoline
 
+/*
+ * ctx_save_usr / ctx_restore_usr -- App A2 (cooperative user threads).
+ *
+ * void ctx_save_usr(unsigned int *sp_out, unsigned int *lr_out):
+ *   read the USR-mode banked sp/lr (via SYS mode, which shares them).
+ * void ctx_restore_usr(unsigned int sp, unsigned int lr):
+ *   write the USR-mode banked sp/lr.
+ * Called from SVC mode with IRQs already disabled (trap entry).
+ */
+	.globl ctx_save_usr
+	.type ctx_save_usr, %function
+ctx_save_usr:
+	cpsid	i, #0x1f		/* SYS: privileged, USR-banked sp/lr */
+	str	sp, [r0]
+	str	lr, [r1]
+	cpsid	i, #0x13		/* back to SVC */
+	bx	lr
+	.size ctx_save_usr, .-ctx_save_usr
+
+	.globl ctx_restore_usr
+	.type ctx_restore_usr, %function
+ctx_restore_usr:
+	cpsid	i, #0x1f
+	mov	sp, r0
+	mov	lr, r1
+	cpsid	i, #0x13
+	bx	lr
+	.size ctx_restore_usr, .-ctx_restore_usr
+
 	.bss
 	.align 2
 _user_test_ksp:

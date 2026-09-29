@@ -110,6 +110,35 @@ python3 "$USR/embed.py" "$BUILD/face.bin" "$GEN/face_img.c" "face_img" 32768 >>"
     { echo "FAIL embed face_img"; exit 1; }
 echo "USER: face.elf entry=$ENTRY ok"
 
+# --- 1d. user program uiapp (App A2): multi-file (main.c + ui.c +
+# ui_draw.c + scr_*.c), pola sama: link di 0x100000, objcopy, pad-bss. ---
+echo "BUILD user program uiapp"
+UCFLAGS2="$UCFLAGS -I$USR/uiapp -I$USR/face -Wno-unused-function"
+for f in main ui ui_draw scr_menu scr_mon scr_settings scr_power; do
+    # shellcheck disable=SC2086
+    clang $UCFLAGS2 -c "$USR/uiapp/$f.c" -o "$BUILD/uiapp_$f.o" >>"$LOG" 2>&1 || \
+        { echo "FAIL user/uiapp/$f.c (see $LOG)"; exit 1; }
+done
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/uiapp.elf" "$BUILD/uiapp_main.o" "$BUILD/uiapp_ui.o" \
+    "$BUILD/uiapp_ui_draw.o" "$BUILD/uiapp_scr_menu.o" \
+    "$BUILD/uiapp_scr_mon.o" "$BUILD/uiapp_scr_settings.o" \
+    "$BUILD/uiapp_scr_power.o" "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/uiapp.elf (see $LOG)"; exit 1; }
+ENTRY=$(llvm-readelf-18 -h "$BUILD/uiapp.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: uiapp entry $ENTRY != 0x100000"; exit 1; }
+llvm-objcopy-18 -O binary "$BUILD/uiapp.elf" "$BUILD/uiapp.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/uiapp.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/uiapp.bin" "$BUILD/uiapp.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/uiapp.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/uiapp.bin" "$GEN/uiapp_img.c" "uiapp_img" 65536 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed uiapp_img"; exit 1; }
+echo "USER: uiapp.elf entry=$ENTRY ok"
+
 # --- 2. MD compile ---
 mkdir -p "$OBJMD"
 : > "$LOG"
@@ -148,12 +177,12 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }
 done
-echo "MD: *_img.o ok (9 programs)"
+echo "MD: *_img.o ok (10 programs)"
 
 # --- 3. link ---
 MI_OBJS=$(find "$OBJ" -name '*.o' | sort)

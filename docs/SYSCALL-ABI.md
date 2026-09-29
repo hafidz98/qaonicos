@@ -49,7 +49,31 @@ pointer Mach task). Sinkronisasi via `splhigh()`/`splx()`.
 | No | Nama | Argumen | Kembali | Keterangan |
 |---|---|---|---|---|
 | 60 | `SYS_DISPLAY_INFO` | r0=buf, r1=len (≥16) | `0` / `-1` | Isi `struct qaon_display`: `width`, `height` (240×240), `bpp` (16), `flags`. `-1` bila display tak ada |
-| 61 | `SYS_DISPLAY_FLUSH` | r0=x, r1=y, r2=w, r3=h, r4=pixels, r5=nbytes | `0` / `-1` | Kirim strip RGB565 ke layar via virtio-gpu (TRANSFER_TO_HOST_2D + RESOURCE_FLUSH). nbytes ≥ w·h·2 |
+| 61 | `SYS_DISPLAY_FLUSH` | r0=x, r1=y, r2=w, r3=h, r4=pixels, r5=nbytes | `0` / `-1` | Kirim strip RGB565 ke layar via virtio-gpu (TRANSFER_TO_HOST_2D + RESOURCE_FLUSH). nbytes ≥ w·h·2. **App A2: ditolak (`-1`) bila pemanggil bukan pemegang token display** |
+| 62 | `SYS_DISPLAY_GRANT` | — | `0` / `-1` | face (progid 0) memberi token display ke uiapp. `-1` bila pemanggil bukan face |
+| 63 | `SYS_DISPLAY_ACQUIRE` | — | `1` / `0` | `1` bila pemanggil adalah pemegang token saat ini |
+| 64 | `SYS_DISPLAY_RELEASE` | — | `0` / `-1` | Pemegang token mengembalikan ke face. `-1` bila bukan pemegang |
+| 65 | `SYS_DISPLAY_GET_EVENT` | — | `EV_*` / `-1` | Ambil 1 event input dari antrean (16 entri). `-1` bila bukan pemegang token |
+| 66 | `SYS_DISPLAY_STATUS` | — | progid | progid pemegang token display (`0`=face, `1`=uiapp) |
+| 67 | `SYS_UPTIME` | — | ms | Uptime kernel dalam milidetik (dipakai pacing frame) |
+| 68 | `SYS_DISPLAY_SLEEP` | r0=req | `0` / `1` / `-1` | r0=1: pemegang token minta sleep (flag). r0=0: face mengambil+clear flag (`1`=ada permintaan). `-1` bila bukan yang berhak |
+
+### Event input (`EV_*`, via 65)
+
+Console (UART) diterjemahkan kernel menjadi event: `W/A/S/D` = panah
+atas/kiri/bawah/kanan, `Enter` = OK, `Esc` = BACK, `M` = MENU; sequence
+escape `ESC [ A/B/C/D` juga didukung. Antrean 16 entri, non-blocking
+(`EV_NONE`=0 bila kosong). Hanya pemegang token yang menerima event;
+saat GRANT/RELEASE antrean dikosongkan agar tidak ada event basi.
+
+### Protokol token display (App A2)
+
+Satu token, dua daemon: `face` (progid 0, pemilik default) dan `uiapp`
+(progid 1). `face` me-render Qabot hanya saat memegang token; tombol
+MENU (`M`) → `SYS_DISPLAY_GRANT` → uiapp me-render menu/settings/
+monitor/power. Kembali ke Qabot via `SYS_DISPLAY_RELEASE` (BACK di menu
+root, idle 30 dtk di uiapp, atau Power → Sleep Now). `SYS_DISPLAY_FLUSH`
+dari non-pemegang ditolak kernel — tidak ada balapan gambar.
 
 `struct qaon_stat` (36 byte): `uptime_ms` (real, tick×10),
 `cpu_pct`, `mem_used_kb` (real), `mem_total_kb` (real, 65536),

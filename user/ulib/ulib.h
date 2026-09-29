@@ -35,6 +35,24 @@
 #define SYS_READDIR	56u	/* r0=path r1=buf r2=max -> count / -1 */
 #define SYS_DISPLAY_INFO 60u	/* r0=buf r1=len -> 0 / -1 */
 #define SYS_DISPLAY_FLUSH 61u	/* r0=x r1=y r2=w r3=h r4=buf r5=len -> 0/-1 */
+#define SYS_DISPLAY_GRANT 62u	/* face: beri token ke uiapp -> 0/-1 */
+#define SYS_DISPLAY_ACQUIRE 63u	/* -> 1 bila pemegang token, else 0 */
+#define SYS_DISPLAY_RELEASE 64u	/* pemegang kembalikan token -> 0/-1 */
+#define SYS_DISPLAY_GET_EVENT 65u /* -> EV_* atau -1 */
+#define SYS_DISPLAY_STATUS 66u	/* -> id pemegang (0=face,1=uiapp) */
+#define SYS_UPTIME 67u		/* -> ms sejak boot */
+#define SYS_DISPLAY_SLEEP 68u	/* r0: 1=minta sleep, 0=ambil+clear (face) */
+
+/* Kode event input (App A2; sama dengan kernel). */
+#define EV_UP		0
+#define EV_DOWN		1
+#define EV_LEFT		2
+#define EV_RIGHT	3
+#define EV_OK		4
+#define EV_BACK		5
+#define EV_MENU		6
+#define EV_TICK		7
+#define EV_NONE		(-1)
 
 /* Flag open. */
 #define O_RDONLY	0u
@@ -99,6 +117,13 @@ struct qaon_display {
 int	sys_display_info(struct qaon_display *di, unsigned len);
 int	sys_display_flush(unsigned x, unsigned y, unsigned w, unsigned h,
 			  const void *buf, unsigned len);
+int	sys_display_grant(void);
+int	sys_display_acquire(void);
+int	sys_display_release(void);
+int	sys_display_get_event(void);
+int	sys_display_status(void);
+unsigned	sys_uptime(void);
+int	sys_display_sleep(int req);
 
 /* Helper kecil. */
 int	puts(const char *s);

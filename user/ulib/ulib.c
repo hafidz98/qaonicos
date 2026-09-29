@@ -568,3 +568,63 @@ sys_display_flush(unsigned x, unsigned y, unsigned w, unsigned h,
 		: "r7", "lr", "memory", "cc");
 	return ret;
 }
+
+/*
+ * Wrapper protokol token display (App A2): 62-68.
+ */
+static int
+sys_display_simple(unsigned num, unsigned a0)
+{
+	register unsigned _r0 __asm__("r0") = a0;
+	int ret;
+	__asm__ volatile(
+		"mov r7, %1\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (num), "r" (_r0)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_display_grant(void)
+{
+	return sys_display_simple(62u, 0u);
+}
+
+int
+sys_display_acquire(void)
+{
+	return sys_display_simple(63u, 0u);
+}
+
+int
+sys_display_release(void)
+{
+	return sys_display_simple(64u, 0u);
+}
+
+int
+sys_display_get_event(void)
+{
+	return sys_display_simple(65u, 0u);
+}
+
+int
+sys_display_status(void)
+{
+	return sys_display_simple(66u, 0u);
+}
+
+unsigned
+sys_uptime(void)
+{
+	return (unsigned)sys_display_simple(67u, 0u);
+}
+
+int
+sys_display_sleep(int req)
+{
+	return sys_display_simple(68u, (unsigned)req);
+}

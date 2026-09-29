@@ -1,12 +1,11 @@
 /*
- * mach3/kernel/arm/netmain.c -- Inisialisasi network + loop server HTTP
- * (Fase D).
+ * mach3/kernel/arm/netmain.c -- Inisialisasi network + pump server HTTP
+ * (Fase D, App A2).
  *
- * Dipanggil setelah program userspace selesai. Tidak pernah kembali:
- *  1. net_init()      -- driver virtio-net
- *  2. netstack_init() -- Ethernet/ARP/IPv4/ICMP
- *  3. Uji mandiri ping ke 10.0.2.1 (host QEMU user-net)
- *  4. Loop: net_poll() + netstack_tick() selamanya
+ * App A2: net_main() yang blocking dipecah dua:
+ *  - net_init_all(): langkah 1-3 (sekali, boleh blocking bounded)
+ *  - net_pump(): SATU iterasi langkah 4; dipanggil scheduler tiap
+ *    SYS_YIELD sehingga HTTP tetap hidup di sela daemon face/uiapp.
  *
  * Server TCP/HTTP hidup di tcp.c/http.c; koneksi masuk diproses via
  * netstack_rx -> tcp_on_ip -> http_handle.
@@ -21,16 +20,21 @@ extern int		netstack_ping_got(void);
 extern int		printf(const char *, ...);
 extern void		delay(int usec);
 
-/* Loop server network. Tidak kembali. */
+/* Network siap dipump (net_init_all sukses). */
+static int	net_ready = 0;
+
+/*
+ * net_init_all: langkah 1-3 (sekali).  Gagal -> net_ready tetap 0
+ * (tak blocking selamanya; boot lanjut tanpa network).
+ */
 void
-net_main(void)
+net_init_all(void)
 {
 	unsigned int tries;
 
 	if (net_init() != 0) {
 		printf("[net] net_init GAGAL; network dinonaktifkan\n");
-		for (;;)
-			delay((int)1000000);
+		return;
 	}
 	netstack_init();
 	printf("[net] IP 10.0.2.15, HTTP server port 80 (/ dan /metrics)\n");
@@ -57,9 +61,19 @@ net_main(void)
 	else
 		printf("[net] ping timeout (lanjut mode listen)\n");
 
-	/* Loop utama server. */
-	for (;;) {
-		net_poll();
-		netstack_tick();
-	}
+	net_ready = 1;
+}
+
+/*
+ * net_pump: satu iterasi loop server (RX + timer TCP).  Dipanggil dari
+ * sched_yield_switch (konteks trap SVC, IRQ mati); driver net polling
+ * murni tanpa IRQ jadi aman.
+ */
+void
+net_pump(void)
+{
+	if (!net_ready)
+		return;
+	net_poll();
+	netstack_tick();
 }

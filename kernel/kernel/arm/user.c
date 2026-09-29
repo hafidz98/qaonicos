@@ -55,8 +55,10 @@ extern unsigned char	usd_img[];
 extern unsigned int	usd_img_len;
 extern unsigned char	ufs_img[];
 extern unsigned int	ufs_img_len;
-extern unsigned char	face_img[];	/* App A1: Qabot */
+extern unsigned char	face_img[];	/* App A1/A2: Qabot server */
 extern unsigned int	face_img_len;
+extern unsigned char	uiapp_img[];	/* App A2: menu/settings/monitor */
+extern unsigned int	uiapp_img_len;
 
 /* trap.c (Fase B) */
 extern unsigned int	arm_timer_ticks(void);
@@ -155,6 +157,24 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_READDIR	56u	/* readdir(path, buf, max) -> count/-1 (Fase D) */
 #define	SYS_DISPLAY_INFO 60u	/* display_info(buf, len) -> 0/-1 (App A1) */
 #define	SYS_DISPLAY_FLUSH 61u	/* display_flush(x,y,w,h,buf,len) -> 0/-1 */
+/* App A2: protokol token display + input (arbiter di kernel). */
+#define	SYS_DISPLAY_GRANT 62u	/* face->kernel: beri token ke uiapp -> 0/-1 */
+#define	SYS_DISPLAY_ACQUIRE 63u	/* -> 1 bila pemegang token, else 0 */
+#define	SYS_DISPLAY_RELEASE 64u	/* pemegang kembalikan token -> 0/-1 */
+#define	SYS_DISPLAY_GET_EVENT 65u	/* -> EV_* atau -1 (kosong/bukan pemegang) */
+#define	SYS_DISPLAY_STATUS 66u	/* -> id pemegang token (0=face,1=uiapp) */
+#define	SYS_UPTIME	67u	/* -> milidetik sejak boot */
+#define	SYS_DISPLAY_SLEEP 68u	/* r0=1: uiapp minta sleep; r0=0: face ambil+clear */
+
+/* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
+#define	EV_UP		0
+#define	EV_DOWN		1
+#define	EV_LEFT		2
+#define	EV_RIGHT	3
+#define	EV_OK		4
+#define	EV_BACK		5
+#define	EV_MENU		6
+#define	EV_TICK		7
 
 /*
  * struct qaon_stat (Fase C): layout DISALIN MANUAL ke user/ulib/ulib.h.
@@ -223,6 +243,138 @@ struct user_task {
 static task_t	cur_utask = TASK_NULL;
 static struct user_task *cur_udesc = 0;
 
+/* Helper asm (userasm.s): baca/tulis banked sp/lr USR dari SVC. */
+extern void	ctx_save_usr(unsigned int *sp_out, unsigned int *lr_out);
+extern void	ctx_restore_usr(unsigned int sp, unsigned int lr);
+
+/* Identitas program pemanggil (App A2): -1=oneshot, 0=face, 1=uiapp. */
+static int	cur_progid = -1;
+
+/*
+ * Scheduler kooperatif App A2: daemon user (face, uiapp) jalan
+ * bergantian di atas boot thread.  Setiap SYS_YIELD menyimpan konteks
+ * user (register + banked sp/lr + pc/spsr) dan memuat milik daemon
+ * berikutnya; pmap + bookkeeping ikut diganti.  Net dipump tiap yield.
+ */
+struct user_ctx {
+	unsigned int	r[13];	/* r0-r12 */
+	unsigned int	sp_usr;
+	unsigned int	lr_usr;
+	unsigned int	pc;	/* frame->lr */
+	unsigned int	spsr;
+};
+
+#define	NDAEMON		2u
+#define	PROG_FACE	0
+#define	PROG_UIAPP	1
+
+struct daemon {
+	const char	*name;
+	task_t		task;
+	pmap_t		pmap;
+	struct user_task *udesc;
+	struct user_ctx	ctx;
+	int		state;	/* 0=mati, 1=runnable */
+	int		progid;
+	unsigned	uprog_idx;	/* indeks di uprog_names/states */
+};
+
+static struct daemon	daemons[NDAEMON];
+static unsigned		ndaemon_reg = 0;
+static int		sched_cur = -1;
+static int		sched_active = 0;
+
+/* Arbiter display (App A2): token dipegang face (0) atau uiapp (1). */
+static int		dpy_holder = PROG_FACE;
+static int		dpy_sleep_req = 0;
+
+/* Antrean event input untuk pemegang token. */
+#define	EVQ_LEN		16u
+static int		evq[EVQ_LEN];
+static unsigned		evq_head = 0, evq_tail = 0;
+
+static void
+evq_clear(void)
+{
+	evq_head = evq_tail = 0;
+}
+
+static void
+evq_push(int ev)
+{
+	unsigned nxt = (evq_tail + 1u) % EVQ_LEN;
+	if (nxt == evq_head)
+		return;	/* penuh: buang yang terbaru */
+	evq[evq_tail] = ev;
+	evq_tail = nxt;
+}
+
+static int
+evq_pop(void)
+{
+	int ev;
+	if (evq_head == evq_tail)
+		return -1;
+	ev = evq[evq_head];
+	evq_head = (evq_head + 1u) % EVQ_LEN;
+	return ev;
+}
+
+/*
+ * Penerjemah console -> EV_*: keyboard QEMU (WASD + Enter + Esc + M),
+ * plus escape sequence panah (ESC [ A/B/C/D).  Non-blocking; -2 =
+ * abaikan, -3 = butuh byte lanjutan (tak dipakai di sini).
+ */
+static int	con_pushback[4];
+static int	con_npush = 0;
+
+static int
+con_getc(void)
+{
+	if (con_npush > 0)
+		return con_pushback[--con_npush];
+	return cnmaygetc();
+}
+
+static void
+con_ungetc(int b)
+{
+	if (con_npush < 4 && b >= 0)
+		con_pushback[con_npush++] = b;
+}
+
+static int
+translate_key(int b)
+{
+	int b1, b2, ev;
+	switch (b) {
+	case 'w': case 'W': return EV_UP;
+	case 's': case 'S': return EV_DOWN;
+	case 'a': case 'A': return EV_LEFT;
+	case 'd': case 'D': return EV_RIGHT;
+	case '\r': case '\n': return EV_OK;
+	case 'm': case 'M': return EV_MENU;
+	case 0x1b:
+		b1 = con_getc();
+		if (b1 == '[') {
+			b2 = con_getc();
+			ev = -2;
+			if (b2 == 'A') ev = EV_UP;
+			else if (b2 == 'B') ev = EV_DOWN;
+			else if (b2 == 'C') ev = EV_RIGHT;
+			else if (b2 == 'D') ev = EV_LEFT;
+			if (ev != -2)
+				return ev;
+			con_ungetc(b2);
+			con_ungetc(b1);
+		} else
+			con_ungetc(b1);
+		return EV_BACK;
+	default:
+		return -2;
+	}
+}
+
 /* Daftar program user untuk SYS_TLIST (Fase C). App A1: 8 -> 16. */
 #define	UPROG_MAX	16u
 static const char	*uprog_names[UPROG_MAX];
@@ -276,6 +428,11 @@ copy_path_user(unsigned int va, char *kpath, unsigned max)
  *
  * ABI: number in r7, args in r0-r2, return in r0; svc #0.
  */
+/* Scheduler + arbiter App A2 (definisi setelah user_syscall). */
+static void	sched_yield_switch(struct arm_trap_frame *frame);
+static void	sched_exit_switch(struct arm_trap_frame *frame, unsigned int code);
+extern void	net_pump(void);
+
 unsigned int
 user_syscall(struct arm_trap_frame *frame)
 {
@@ -310,21 +467,14 @@ user_syscall(struct arm_trap_frame *frame)
 							 a2);
 		return (unsigned int)-1;
 	}
-	case SYS_YIELD: {
-		/* Cooperative yield: wait for the next 100Hz timer tick.
-		 * IRQs are on in trap context (SVC entry preserves the I
-		 * flag; user mode runs with IRQs enabled), so wfi wakes
-		 * on the tick.  The spin cap is a safety net only. */
-		unsigned int t0 = arm_timer_ticks();
-		unsigned int spins = 0;
-
-		__asm__ volatile ("cpsie i" ::: "memory");
-		while (arm_timer_ticks() == t0 && spins < 1000000u) {
-			__asm__ volatile ("wfi" ::: "memory");
-			spins++;
-		}
+	case SYS_YIELD:
+		/* App A2: bila scheduler daemon aktif, yield = pindah ke
+		 * daemon runnable berikutnya (round-robin) + pump net.
+		 * Konteks pemanggil disimpan; saat kembali nanti r0=0.
+		 * Fase one-shot (belum aktif): nop. */
+		if (sched_active)
+			sched_yield_switch(frame);
 		return 0;
-	}
 	case SYS_SBRK: {
 		/* Heap pages are pre-allocated at task creation (no
 		 * allocator calls in trap context); sbrk just bumps the
@@ -490,6 +640,9 @@ user_syscall(struct arm_trap_frame *frame)
 	}
 	case SYS_DISPLAY_FLUSH: {
 		/* a0=x a1=y a2=w a3=h a4=buf(RGB565) a5=len */
+		/* App A2: hanya pemegang token display boleh flush. */
+		if (cur_progid != dpy_holder)
+			return (unsigned int)-1;
 		if (!gpu_available_p() ||
 		    a2 == 0u || a3 == 0u ||
 		    a0 + a2 > QAON_DISP_W || a1 + a3 > QAON_DISP_H ||
@@ -500,15 +653,225 @@ user_syscall(struct arm_trap_frame *frame)
 						    (const unsigned short *)a4);
 	}
 	case SYS_EXIT:
+		if (sched_active) {
+			sched_exit_switch(frame, a0);
+			return 0;
+		}
 		/* Leave user mode for good: resume at the trampoline
 		 * in SVC; r0 carries the exit code. */
 		frame->r[0] = a0;
 		frame->lr = (unsigned int)user_exit_trampoline;
 		frame->spsr = ARM_MODE_SVC;
 		return a0;
+	case SYS_DISPLAY_GRANT: {
+		/* Hanya face boleh memberi token ke uiapp. */
+		if (cur_progid != PROG_FACE)
+			return (unsigned int)-1;
+		dpy_holder = PROG_UIAPP;
+		evq_clear();
+		printf("[dpy] GRANT -> uiapp\n");
+		return 0;
+	}
+	case SYS_DISPLAY_ACQUIRE:
+		return (dpy_holder == cur_progid) ? 1u : 0u;
+	case SYS_DISPLAY_RELEASE: {
+		if (cur_progid != dpy_holder)
+			return (unsigned int)-1;
+		dpy_holder = PROG_FACE;
+		/* JANGAN clear dpy_sleep_req di sini: alur Sleep Now =
+		 * sleep(1) DULU baru release; flag harus sampai ke face. */
+		evq_clear();
+		printf("[dpy] RELEASE -> face\n");
+		return 0;
+	}
+	case SYS_DISPLAY_GET_EVENT: {
+		int b, ev;
+		/* Hanya pemegang token yang dapat antrean event. */
+		if (cur_progid != dpy_holder)
+			return (unsigned int)-1;
+		/* Kuras console -> terjemahkan -> antrekan. */
+		for (;;) {
+			b = con_getc();
+			if (b < 0)
+				break;
+			ev = translate_key(b);
+			if (ev >= 0)
+				evq_push(ev);
+		}
+		return (unsigned int)evq_pop();
+	}
+	case SYS_DISPLAY_STATUS:
+		return (unsigned int)dpy_holder;
+	case SYS_UPTIME:
+		return arm_timer_ticks() * 10u;
+	case SYS_DISPLAY_SLEEP: {
+		int ev;
+		/* r0=1: pemegang token minta sleep; r0=0: face ambil+clear. */
+		if (a0 == 0) {
+			if (cur_progid != PROG_FACE)
+				return (unsigned int)-1;
+			ev = dpy_sleep_req;
+			dpy_sleep_req = 0;
+			return (unsigned int)ev;
+		} else {
+			if (cur_progid != dpy_holder)
+				return (unsigned int)-1;
+			dpy_sleep_req = 1;
+			return 0;
+		}
+	}
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
 	}
+}
+
+/*
+ * Scheduler kooperatif App A2 (implementasi).
+ *
+ * Semua daemon berjalan di atas boot thread: trap SVC tidak pernah
+ * kembali ke user_launch_init sampai semua daemon mati.  Setiap
+ * SYS_YIELD menyimpan konteks user penuh (r0-r12, banked sp/lr USR,
+ * pc, spsr) lalu memuat milik daemon berikutnya + ganti pmap.
+ */
+static void
+ctx_save(struct user_ctx *c, struct arm_trap_frame *f)
+{
+	unsigned int i;
+	for (i = 0; i < 13u; i++)
+		c->r[i] = f->r[i];
+	c->pc = f->lr;
+	c->spsr = f->spsr;
+	ctx_save_usr(&c->sp_usr, &c->lr_usr);
+	c->r[0] = 0;	/* SYS_YIELD mengembalikan 0 saat thread kembali */
+}
+
+static void
+ctx_load(struct arm_trap_frame *f, struct user_ctx *c)
+{
+	unsigned int i;
+	for (i = 0; i < 13u; i++)
+		f->r[i] = c->r[i];
+	f->lr = c->pc;
+	f->spsr = c->spsr;
+	ctx_restore_usr(c->sp_usr, c->lr_usr);
+}
+
+static struct daemon *
+pick_next(void)
+{
+	unsigned int i;
+	for (i = 1; i <= NDAEMON; i++) {
+		unsigned int j = (unsigned int)(sched_cur + (int)i) % NDAEMON;
+		if (daemons[j].state)
+			return &daemons[j];
+	}
+	return 0;
+}
+
+static void
+sched_activate(struct daemon *d)
+{
+	cur_utask = d->task;
+	cur_udesc = d->udesc;
+	cur_progid = d->progid;
+	arm_pmap_activate_user(d->pmap);
+}
+
+static void
+sched_yield_switch(struct arm_trap_frame *f)
+{
+	struct daemon *cur, *next;
+	/* Pump network sekali tiap yield: HTTP tetap hidup di sela
+	 * daemon.  Driver net polling murni (tanpa IRQ) jadi aman
+	 * dari konteks trap SVC. */
+	net_pump();
+	cur = &daemons[sched_cur];
+	ctx_save(&cur->ctx, f);
+	next = pick_next();
+	if (next == cur || next == 0)
+		return;	/* sendirian: frame tak diubah, r0=0 via caller */
+	sched_cur = (int)(next - daemons);
+	sched_activate(next);
+	ctx_load(f, &next->ctx);
+}
+
+static void
+sched_exit_switch(struct arm_trap_frame *f, unsigned int code)
+{
+	struct daemon *next;
+	net_pump();
+	printf("sched: '%s' exit 0x%x\n", daemons[sched_cur].name, code);
+	daemons[sched_cur].state = 0;
+	uprog_states[daemons[sched_cur].uprog_idx] = 2u;	/* EXITED */
+	next = pick_next();
+	if (next == 0) {
+		/* Semua mati: trampoline terakhir. */
+		f->r[0] = code;
+		f->lr = (unsigned int)user_exit_trampoline;
+		f->spsr = ARM_MODE_SVC;
+		return;
+	}
+	sched_cur = (int)(next - daemons);
+	sched_activate(next);
+	ctx_load(f, &next->ctx);
+}
+
+/* Daemon didaftarkan dari user_launch_init (setelah one-shot). */
+static void
+sched_register_daemon(const char *name, task_t task, pmap_t pmap,
+		      struct user_task *udesc, unsigned int stack_top,
+		      unsigned int progid)
+{
+	struct daemon *d;
+	unsigned int i;
+	if (ndaemon_reg >= NDAEMON) {
+		printf("sched: FAIL (daemon table penuh)\n");
+		return;
+	}
+	d = &daemons[ndaemon_reg];
+	d->name = name;
+	d->task = task;
+	d->pmap = pmap;
+	d->udesc = udesc;
+	for (i = 0; i < 13u; i++)
+		d->ctx.r[i] = 0;
+	d->ctx.sp_usr = stack_top;
+	d->ctx.lr_usr = 0;
+	d->ctx.pc = INIT_CODE_VA;
+	d->ctx.spsr = 0x10u;	/* USR, IRQ on */
+	d->state = 1;
+	d->progid = (int)progid;
+	d->uprog_idx = nuprog;
+	if (nuprog < UPROG_MAX) {
+		uprog_names[nuprog] = name;
+		uprog_states[nuprog] = 0u;	/* RUNNABLE */
+		nuprog++;
+	}
+	ndaemon_reg++;
+	printf("sched: daemon '%s' terdaftar (progid %u)\n", name, progid);
+}
+
+/* Loop utama daemon: masuk user mode; kembali hanya bila semua mati. */
+void	machine_halt(void);
+
+static void
+sched_run(void)
+{
+	struct daemon *d;
+	unsigned int rc;
+	sched_active = 1;
+	d = pick_next();
+	if (d == 0) {
+		printf("sched: tidak ada daemon\n");
+		return;
+	}
+	sched_cur = (int)(d - daemons);
+	sched_activate(d);
+	printf("sched: masuk user mode ('%s')...\n", d->name);
+	rc = user_enter_test(d->ctx.sp_usr, d->ctx.pc);
+	arm_pmap_activate_kernel();
+	printf("sched: semua daemon mati (rc=0x%x)\n", rc);
+	machine_halt();
 }
 
 /*
@@ -519,6 +882,14 @@ user_syscall(struct arm_trap_frame *frame)
 void
 user_fault(struct arm_trap_frame *frame, unsigned int code)
 {
+	/* App A2: fault di daemon = kematian thread itu saja, yang
+	 * lain lanjut (crash isolation). */
+	if (sched_active && sched_cur >= 0 && daemons[sched_cur].state) {
+		printf("sched: '%s' FAULT 0x%x (diisolasi)\n",
+		       daemons[sched_cur].name, code);
+		sched_exit_switch(frame, code);
+		return;
+	}
 	frame->r[0] = code;
 	frame->lr = (unsigned int)user_exit_trampoline;
 	frame->spsr = ARM_MODE_SVC;
@@ -636,55 +1007,49 @@ machine_halt(void)
 }
 
 /*
- * launch_uprog -- Fase C: launch one user program as its own Mach task.
- *
- * Generalized from the Fase B init launcher: builds a user task from
- * an embedded image, maps code + stack + heap pages, enters USR mode
- * via user_enter_test().  When the program performs SYS_EXIT, control
- * returns here with the exit code.  Programs run SEQUENTIALLY
- * (cooperative, no preemption in this port); coordination between
- * programs uses ramfs sentinel files.
- *
- * Returns the program's exit code, or ~0u on launch failure.
+ * setup_uprog_task -- App A2: bangun Mach task untuk satu program user
+ * (task + thread + pmap + code/stack/heap) TANPA masuk user mode.
+ * Dipakai launch_uprog (one-shot) dan launch_daemon (persisten).
+ * Mengembalikan 0 bila sukses.
  */
-static unsigned int
-launch_uprog(const char *name, unsigned char *img, unsigned int img_len,
-	     struct user_task *udesc)
+static int
+setup_uprog_task(const char *name, unsigned char *img, unsigned int img_len,
+		 struct user_task *udesc, task_t *out_task, pmap_t *out_pmap)
 {
 	task_t		utask;
 	thread_t	uthread;
 	pmap_t		upmap;
 	kern_return_t	kr;
 	vm_offset_t	mem, pa, va;
-	unsigned int	i, npages, rc;
+	unsigned int	i, npages;
 	unsigned char	*dst;
 	spl_t		s;
 
-	printf("launch_uprog: creating task for '%s'...\n", name);
+	printf("setup_uprog_task: '%s'...\n", name);
 
-	if (img_len == 0 || img_len > 8 * USER_PGBYTES) {
-		printf("launch_uprog: FAIL (bad image size %u)\n", img_len);
-		return ~0u;
+	if (img_len == 0 || img_len > 16 * USER_PGBYTES) {
+		printf("setup_uprog_task: FAIL (bad image size %u)\n", img_len);
+		return -1;
 	}
 
 	s = spl0();
 	kr = task_create(kernel_task, FALSE, &utask);
 	if (kr != KERN_SUCCESS) {
 		(void) splx(s);
-		printf("launch_uprog: FAIL (task_create kr=%d)\n", kr);
-		return ~0u;
+		printf("setup_uprog_task: FAIL (task_create kr=%d)\n", kr);
+		return -1;
 	}
 	kr = thread_create(utask, &uthread);
 	if (kr != KERN_SUCCESS) {
 		(void) splx(s);
-		printf("launch_uprog: FAIL (thread_create kr=%d)\n", kr);
-		return ~0u;
+		printf("setup_uprog_task: FAIL (thread_create kr=%d)\n", kr);
+		return -1;
 	}
 	upmap = utask->map->pmap;
 	if (upmap == PMAP_NULL) {
 		(void) splx(s);
-		printf("launch_uprog: FAIL (task has no pmap)\n");
-		return ~0u;
+		printf("setup_uprog_task: FAIL (task has no pmap)\n");
+		return -1;
 	}
 
 	/* code pages + 1 stack page + heap pages (contiguous, identity). */
@@ -693,8 +1058,8 @@ launch_uprog(const char *name, unsigned char *img, unsigned int img_len,
 			(npages + 1 + INIT_HEAP_PAGES) * USER_PGBYTES);
 	if (kr != KERN_SUCCESS) {
 		(void) splx(s);
-		printf("launch_uprog: FAIL (kmem_alloc kr=%d)\n", kr);
-		return ~0u;
+		printf("setup_uprog_task: FAIL (kmem_alloc kr=%d)\n", kr);
+		return -1;
 	}
 	(void) splx(s);
 
@@ -733,6 +1098,31 @@ launch_uprog(const char *name, unsigned char *img, unsigned int img_len,
 	udesc->brk = INIT_HEAP_VA;
 	udesc->heap_end = INIT_HEAP_VA + INIT_HEAP_PAGES * USER_PGBYTES;
 
+	*out_task = utask;
+	*out_pmap = upmap;
+	return 0;
+}
+
+/*
+ * launch_uprog -- Fase C: launch one user program as its own Mach task.
+ *
+ * Program berjalan sampai SYS_EXIT (one-shot, sequential); lalu
+ * berikutnya.  Koordinasi antar program via ramfs sentinel files.
+ *
+ * Returns the program's exit code, or ~0u on launch failure.
+ */
+static unsigned int
+launch_uprog(const char *name, unsigned char *img, unsigned int img_len,
+	     struct user_task *udesc)
+{
+	task_t		utask;
+	pmap_t		upmap;
+	unsigned int	rc;
+
+	printf("launch_uprog: creating task for '%s'...\n", name);
+	if (setup_uprog_task(name, img, img_len, udesc, &utask, &upmap) != 0)
+		return ~0u;
+
 	/* Register for SYS_TLIST + set as current for syscalls. */
 	if (nuprog < UPROG_MAX) {
 		uprog_names[nuprog] = name;
@@ -741,6 +1131,7 @@ launch_uprog(const char *name, unsigned char *img, unsigned int img_len,
 	}
 	cur_utask = utask;
 	cur_udesc = udesc;
+	cur_progid = -1;	/* one-shot: bukan pemegang token */
 
 	printf("launch_uprog: entering user mode ('%s')...\n", name);
 	arm_pmap_activate_user(upmap);
@@ -751,9 +1142,30 @@ launch_uprog(const char *name, unsigned char *img, unsigned int img_len,
 		uprog_states[nuprog - 1u] = 2u;	/* EXITED (DEAD) */
 	cur_utask = TASK_NULL;
 	cur_udesc = 0;
+	cur_progid = -1;
 
 	printf("launch_uprog: '%s' exited with code 0x%x\n", name, rc);
 	return rc;
+}
+
+/*
+ * launch_daemon -- App A2: daftarkan program user persisten (face,
+ * uiapp) ke scheduler kooperatif.  Tidak masuk user mode di sini;
+ * sched_run() yang menjalankannya bergantian nanti.
+ */
+static void
+launch_daemon(const char *name, unsigned char *img, unsigned int img_len,
+	      struct user_task *udesc, unsigned int progid)
+{
+	task_t	utask;
+	pmap_t	upmap;
+
+	if (setup_uprog_task(name, img, img_len, udesc, &utask, &upmap) != 0) {
+		printf("launch_daemon: FAIL ('%s')\n", name);
+		return;
+	}
+	sched_register_daemon(name, utask, upmap, udesc,
+			    INIT_STACK_VA + USER_PGBYTES, progid);
 }
 
 /* Program user Fase C: diluncurkan berurutan. */
@@ -763,6 +1175,7 @@ struct uprog_image {
 	unsigned int	*lenp;
 };
 
+/* Program one-shot Fase C/D: jalan berurutan sampai SYS_EXIT. */
 static struct uprog_image uprogs[] = {
 	{ "init",  init_img,  &init_img_len  },
 	{ "ucat",  ucat_img,  &ucat_img_len  },
@@ -772,23 +1185,30 @@ static struct uprog_image uprogs[] = {
 	{ "ugpio", ugpio_img, &ugpio_img_len },
 	{ "usd",   usd_img,   &usd_img_len   },
 	{ "ufs",   ufs_img,   &ufs_img_len   },
-	{ "face",  face_img,  &face_img_len  },	/* App A1: Qabot (terakhir) */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))
+
+/* Daemon persisten App A2: jalan di scheduler kooperatif. */
+static struct uprog_image daemon_images[] = {
+	{ "face",  face_img,  &face_img_len  },	/* progid 0: Qabot server */
+	{ "uiapp", uiapp_img, &uiapp_img_len },	/* progid 1: menu */
+};
+#define	NDAEMON_IMAGES	(sizeof(daemon_images) / sizeof(daemon_images[0]))
 
 static struct user_task	uprog_udesc[UPROG_MAX];
 
 /*
- * user_launch_init -- Fase C: launch all user programs sequentially,
- * then verify the ramfs coordination artifacts.
+ * user_launch_init -- Fase C/D + App A2.
  *
- * Called from startrtclock() after the self-tests.  Each program runs
- * to SYS_EXIT before the next is launched.  After the last program,
- * the kernel verifies the sentinel files the programs were supposed
- * to create, prints the verdict, and continues to the network server
- * (Fase D, net_main() -- never returns).
+ * Called from startrtclock() after the self-tests.
+ *  1. Program one-shot (init..ufs) jalan berurutan sampai SYS_EXIT;
+ *     artefak ramfs diverifikasi.
+ *  2. Network di-init (net_init_all); setelah ini net dipump dari
+ *     scheduler tiap SYS_YIELD.
+ *  3. Daemon persisten (face, uiapp) didaftarkan lalu sched_run()
+ *     menjalankannya bergantian (tak kembali).
  */
-extern void	net_main(void);
+extern void	net_init_all(void);
 
 void
 user_launch_init(void)
@@ -802,13 +1222,12 @@ user_launch_init(void)
 		"/.gpio_cmd_ready", "/.ugpio_done",
 		"/.sd_cmd_ready", "/.usd_done",
 		"/.fat_cmd_ready", "/.ufs_done",
-		"/face.out", "/.face_done",	/* App A1: Qabot */
 	};
 
 	ramfs_init();
 
 	/* The cooperative sched test disables the timer; user programs
-	 * need ticks for SYS_YIELD.  Enable it here, after all task setup
+	 * need ticks for SYS_UPTIME.  Enable it here, after all task setup
 	 * (an immediate IRQ during task_create trips MI thread_select). */
 	arm_timer_enable();
 
@@ -833,12 +1252,21 @@ user_launch_init(void)
 	}
 
 	if (fails == 0)
-		printf("user_launch_init: PASS (9/9 programs, %u/%u files)\n",
+		printf("user_launch_init: PASS (%u/%u programs, %u/%u files)\n",
+		       NUPROGS, NUPROGS,
 		       (unsigned)(sizeof(want_files) / sizeof(want_files[0])),
 		       (unsigned)(sizeof(want_files) / sizeof(want_files[0])));
 	else
 		printf("user_launch_init: %u FAILs\n", fails);
-	/* Fase D: lanjut ke server network (tak kembali). */
-	net_main();
+
+	/* Fase D: init network (blocking); pump-nya dari scheduler. */
+	net_init_all();
+
+	/* App A2: daftarkan daemon persisten, lalu jalan. */
+	for (i = 0; i < NDAEMON_IMAGES; i++)
+		launch_daemon(daemon_images[i].name, daemon_images[i].img,
+			      *daemon_images[i].lenp,
+			      &uprog_udesc[NUPROGS + i], i);
+	sched_run();
 	/* NOTREACHED */
 }
