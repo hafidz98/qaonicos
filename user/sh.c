@@ -310,7 +310,27 @@ bi_run(void)
 void
 _start(void)
 {
+	sys_console_takeover();	/* Q9: sh pemilik eksklusif console */
 	sh_puts("QaonicOS shell (Q8). ketik help.\n");
+	/* Q9 self-test: spawn embed:uls, verifikasi exit code. */
+	{
+		int rc, w;
+		sh_puts("[selftest] spawn embed:uls...\n");
+		rc = sys_spawn("embed:uls");
+		if (rc != 0) {
+			sh_puts("[selftest] FAIL: spawn gagal\n");
+		} else {
+			for (;;) {
+				w = sys_spawn_wait();
+				if (w != -1)
+					break;
+				sys_yield();
+			}
+			sh_puts("[selftest] spawn exit=");
+			sh_putu((unsigned)w);
+			sh_puts(w == 0 ? " PASS\n" : " FAIL\n");
+		}
+	}
 	for (;;) {
 		sh_puts("qaon> ");
 		if (sh_readline() == 0u)

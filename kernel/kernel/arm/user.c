@@ -207,6 +207,7 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_FACE_EXPR	78u	/* Q4: face_expr(expr, text) / poll. Lihat PLAN-Q4Q7Q8.md */
 #define	SYS_SPAWN	79u	/* Q9: spawn(path) -> 0 ok, -1 gagal */
 #define	SYS_SPAWN_WAIT	80u	/* Q9: tunggu spawn -> -1 jalan, else exit code */
+#define	SYS_CONSOLE_TAKEOVER 81u /* Q9: jadi eksklusif pembaca console */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -334,6 +335,10 @@ static int		sched_active = 0;
 static int		spawn_parent = -1;
 static unsigned		spawn_exitcode = 0;
 static int		spawn_done = 0;
+
+/* Q9: console owner (indeks daemon). -1 = semua boleh (default boot).
+ * sh memanggil SYS_CONSOLE_TAKEOVER agar eksklusif baca console. */
+static int		console_owner = -1;
 
 /* Forward decl untuk SYS_SPAWN (definisi di bawah). */
 static int	setup_uprog_task(const char *name, unsigned char *img,
@@ -649,6 +654,9 @@ user_syscall(struct arm_trap_frame *frame)
 		return n;
 	}
 	case SYS_READ_CONSOLE:
+		/* Q9: hanya console owner yang boleh baca (bila owner diset). */
+		if (console_owner != -1 && sched_cur != console_owner)
+			return (unsigned int)-1;
 		return (unsigned int)cnmaygetc();
 	case SYS_GPIO_SET:
 		/* Bank di-fix 0 (seperti kernel lama Fase 14). */
@@ -924,8 +932,34 @@ user_syscall(struct arm_trap_frame *frame)
 			return (unsigned int)-1;
 
 		len = fat32_read_file(kpath, imgbuf, sizeof(imgbuf));
-		if (len <= 0)
-			return (unsigned int)-1;
+		if (len <= 0) {
+			/* Q9 test hook: "embed:uls" pakai image embedded.
+			 * Untuk verifikasi mekanisme spawn tanpa tergantung FAT. */
+			unsigned int ei;
+			int is_embed_uls = 1;
+			const char *want = "embed:uls";
+			for (ei = 0; want[ei]; ei++) {
+				if (kpath[ei] != want[ei]) {
+					is_embed_uls = 0;
+					break;
+				}
+			}
+			if (kpath[ei] != '\0')
+				is_embed_uls = 0;
+			if (is_embed_uls) {
+				extern unsigned char uls_img[];
+				extern unsigned int uls_img_len;
+				if (uls_img_len <= sizeof(imgbuf)) {
+					for (ei = 0; ei < uls_img_len; ei++)
+						imgbuf[ei] = uls_img[ei];
+					len = (int)uls_img_len;
+				} else {
+					return (unsigned int)-1;
+				}
+			} else {
+				return (unsigned int)-1;
+			}
+		}
 
 		/* Setup task child di slot terakhir. */
 		child = &daemons[NDAEMON - 1];
@@ -943,8 +977,15 @@ user_syscall(struct arm_trap_frame *frame)
 		child->task = utask;
 		child->pmap = upmap;
 		child->udesc = udesc;
+		{
+			unsigned int ri;
+			for (ri = 0; ri < 13u; ri++)
+				child->ctx.r[ri] = 0;
+		}
 		child->ctx.sp_usr = stack_top;
+		child->ctx.lr_usr = 0;
 		child->ctx.pc = INIT_CODE_VA;
+		child->ctx.spsr = 0x10u;	/* USR, IRQ on */
 		child->state = 1; /* runnable */
 		child->progid = -1;
 		child->uprog_idx = 0;
@@ -966,6 +1007,15 @@ user_syscall(struct arm_trap_frame *frame)
 		spawn_parent = -1;
 		daemons[sched_cur].state = 1; /* kembali runnable */
 		return spawn_exitcode;
+	}
+	case SYS_CONSOLE_TAKEOVER: {
+		/* Q9: caller jadi eksklusif pembaca console. */
+		if (!sched_active || sched_cur < 0)
+			return (unsigned int)-1;
+		console_owner = sched_cur;
+		printf("console: owner -> '%s' (%d)\n",
+		       daemons[sched_cur].name, sched_cur);
+		return 0;
 	}
 	default:
 		return (unsigned int)-2;	/* ENOSYS */

@@ -824,3 +824,18 @@ sys_spawn_wait(void)
 		: "r7", "lr", "memory", "cc");
 	return ret;
 }
+
+/* Q9: jadi eksklusif pembaca console. */
+int
+sys_console_takeover(void)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r7, #81\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		:
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
