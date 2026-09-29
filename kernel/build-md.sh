@@ -281,6 +281,39 @@ python3 "$USR/embed.py" "$BUILD/qabot.bin" "$GEN/qabot_img.c" "qabot_img" 32768 
     { echo "FAIL embed qabot_img"; exit 1; }
 echo "USER: qabot.elf entry=$ENTRY ok"
 
+# --- 1f. user program uqabotr (Q2c SEMENTARA): uji provider real. ---
+echo "BUILD user program uqabotr"
+for f in history tools policy provider_real loop eventlog json; do
+    # shellcheck disable=SC2086
+    clang $UCFLAGS -I"$USR/tls/inc" -I"$USR/tls/mbedtls/include" \
+        -c "$USR/qabot/$f.c" -o "$BUILD/uqabotr_$f.o" >>"$LOG" 2>&1 || \
+        { echo "FAIL user/qabot/$f.c (uqabotr) (see $LOG)"; exit 1; }
+done
+# shellcheck disable=SC2086
+clang $UCFLAGS -c "$USR/uqabotr.c" -o "$BUILD/uqabotr.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/uqabotr.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/uqabotr.elf" "$BUILD/uqabotr.o" \
+    "$BUILD/uqabotr_history.o" "$BUILD/uqabotr_tools.o" \
+    "$BUILD/uqabotr_policy.o" "$BUILD/uqabotr_provider_real.o" \
+    "$BUILD/uqabotr_loop.o" "$BUILD/uqabotr_eventlog.o" \
+    "$BUILD/uqabotr_json.o" "$BUILD/cfg.o" "$BUILD/ca_pem.o" \
+    $TLSOBJS "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/uqabotr.elf (see $LOG)"; exit 1; }
+ENTRY=$(llvm-readelf-18 -h "$BUILD/uqabotr.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: uqabotr entry $ENTRY != 0x100000"; exit 1; }
+llvm-objcopy-18 -O binary "$BUILD/uqabotr.elf" "$BUILD/uqabotr.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/uqabotr.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/uqabotr.bin" "$BUILD/uqabotr.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/uqabotr.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/uqabotr.bin" "$GEN/uqabotr_img.c" "uqabotr_img" 1048576 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed uqabotr_img"; exit 1; }
+echo "USER: uqabotr.elf entry=$ENTRY ok"
+
 # --- 2. MD compile ---
 mkdir -p "$OBJMD"
 : > "$LOG"
@@ -319,12 +352,12 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot uqabotr; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }
 done
-echo "MD: *_img.o ok (14 programs)"
+echo "MD: *_img.o ok (15 programs)"
 
 # --- 3. link ---
 MI_OBJS=$(find "$OBJ" -name '*.o' | sort)

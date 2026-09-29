@@ -65,6 +65,8 @@ extern unsigned char	utcpcli_img[];	/* Q2a SEMENTARA: uji TCP client */
 extern unsigned int	utcpcli_img_len;
 extern unsigned char	utlscli_img[];	/* Q2b SEMENTARA: uji TLS client */
 extern unsigned int	utlscli_img_len;
+extern unsigned char	uqabotr_img[];	/* Q2c SEMENTARA: uji provider real */
+extern unsigned int	uqabotr_img_len;
 extern unsigned char	qabot_img[];	/* Qabot harness Q1: ReAct + mock */
 extern unsigned int	qabot_img_len;
 
@@ -300,7 +302,7 @@ struct user_ctx {
 	unsigned int	spsr;
 };
 
-#define	NDAEMON		3u	/* face, uiapp, utlscli (Q2b); ntp+utcpcli nonaktif sementara */
+#define	NDAEMON		3u	/* face, uiapp, uqabotr (Q2c); utlscli/ntp/utcpcli nonaktif sementara */
 #define	PROG_FACE	0
 #define	PROG_UIAPP	1
 #define	PROG_NTP	2	/* App A4: sinkron jam (tak pegang display) */
@@ -1322,7 +1324,8 @@ static struct uprog_image daemon_images[] = {
 	{ "uiapp", uiapp_img, &uiapp_img_len, 1u },	/* progid 1: menu */
 	/* { "ntp",   ntp_img,   &ntp_img_len,   1u }, */	/* Nonaktif sementara Q2b: UDP sandbox blokir, ganggu timing */
 	/* { "utcpcli", utcpcli_img, &utcpcli_img_len, 1u }, */	/* Nonaktif: tcc hanya 1 koneksi (race dengan utlscli). Aktifkan untuk uji Q2a saja. */
-	{ "utlscli", utlscli_img, &utlscli_img_len, 8u },	/* progid 2: uji TLS Q2b */
+	/* { "utlscli", utlscli_img, &utlscli_img_len, 8u }, */	/* Nonaktif Q2c: tcc 1 koneksi, bergantian dengan uqabotr */
+	{ "uqabotr", uqabotr_img, &uqabotr_img_len, 8u },	/* progid 2: uji provider real Q2c */
 
 };
 #define	NDAEMON_IMAGES	(sizeof(daemon_images) / sizeof(daemon_images[0]))

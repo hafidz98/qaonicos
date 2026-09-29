@@ -48,7 +48,7 @@ qb_parse_toolcall(const char *line, struct qb_toolcall *tc)
 	return 0;
 }
 
-static int
+int
 qb_starts(const char *s, const char *pre)
 {
 	while (*pre) {

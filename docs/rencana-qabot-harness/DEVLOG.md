@@ -140,3 +140,33 @@ Format: `## YYYY-MM-DD HH:MM — judul` + butir singkat (apa, hasil, keputusan).
   threshold 2->0, print kernel [tcc].
 - Limitasi: ntp nonaktif di sandbox (UDP diblokir, ganggu timing TLS);
   utcpcli nonaktif (race tcc).
+
+## 2026-09-29 — Q2c: JSON + provider real (PROVIDER_REAL PASS)
+
+- File baru: `user/qabot/json.c` (builder chat/completions + parser
+  tool_calls/content minimal, tanpa lib), `user/qabot/provider_real.c`
+  (HTTPS POST via tls.h, API key dari NVS KV `llm.key` dengan fallback
+  kunci uji), `user/uqabotr.c` (daemon uji one-shot), dan
+  `tools/mock_openai_https.py` (mock OpenAI HTTPS di host:18444, cert
+  test yang sama).
+- Kontrak `qb_provider.chat()` tak berubah: provider real mengembalikan
+  baris `TOOL:`/`FINAL:`; loop/policy/tools Q1 dipakai ulang apa adanya.
+- Hasil: `QABOT: PROVIDER_REAL PASS` 3/3 run QEMU — skenario penuh:
+  prompt -> mock balas tool_calls gpio_read pin=40 -> qabot eksekusi
+  tool REAL -> kirim hasil -> mock balas "Pin 40 terbaca." Cek PASS
+  ketat (wajib ada string final dari mock, bukan sekadar status).
+- Bug/false-PASS yang ditangkap dan diperbaiki:
+  1. **False PASS via jalur error**: `FINAL:(http gagal ...)` lolos cek
+     `qb_ev_contains("final:")`. Fix: cek wajib string konten mock.
+  2. **Mock HTTP/1.0 menutup koneksi**: POST#2 gagal karena server tutup
+     koneksi. Fix: reconnect + retry sekali di provider_real (perilaku
+     produksi yang benar).
+  3. **qb_starts static vs deklarasi non-static** di qabot.h (compile
+     error). Fix: hapus `static` di loop.c.
+  4. **snprintf tak dideklarasikan** di ulib. Fix: pakai qb_snprintf.
+- **Isu terbuka (limitasi TCP stack, bukan Q2c)**: HTTP keep-alive murni
+  (tanpa FIN) membuat respons menetes lambat/parsial di guest (teramati:
+  176B dari ~458B, timeout 20 dtk), flaky. Mock dipaksa
+  `close_connection=True` agar deterministik. TODO: investigasi pacing
+  TCP RX / interaksi slirp untuk keep-alive.
+- Selama uji Q2c, utlscli dinonaktifkan (tcc 1 koneksi, bergantian).

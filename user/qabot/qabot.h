@@ -117,6 +117,19 @@ int	qb_parse_toolcall(const char *line, struct qb_toolcall *tc);
 int	qb_run_task(struct qb_run *r, const char *prompt,
 		      struct qb_provider *p);
 int	qb_ev_contains(struct qb_run *r, const char *sub);
+int	qb_starts(const char *s, const char *pre);
+
+/* json.c (Q2c): builder request + parser respons chat/completions. */
+int	qb_build_request(struct qb_history *h, char *out, unsigned outlen);
+int	qb_parse_response(const char *body, struct qb_toolcall *tc,
+			  char *final_out, unsigned flen);
+
+/* provider_real.c (Q2c): provider HTTPS+JSON. */
+struct qb_real_ctx {
+	char	key[72];
+};
+void	qb_real_init(struct qb_real_ctx *c, const char *key_or_null);
+extern struct qb_provider	qb_real_provider;	/* chat = qb_real_chat */
 
 /* eventlog.c */
 void	qb_emit(struct qb_run *r, const char *fmt, ...);
