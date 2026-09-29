@@ -65,8 +65,8 @@ extern unsigned char	utcpcli_img[];	/* Q2a SEMENTARA: uji TCP client */
 extern unsigned int	utcpcli_img_len;
 extern unsigned char	utlscli_img[];	/* Q2b SEMENTARA: uji TLS client */
 extern unsigned int	utlscli_img_len;
-extern unsigned char	uqabotr_img[];	/* Q2c SEMENTARA: uji provider real */
-extern unsigned int	uqabotr_img_len;
+extern unsigned char	qabotd_img[];	/* Q4: daemon persisten Qabot */
+extern unsigned int	qabotd_img_len;
 extern unsigned char	qabot_img[];	/* Qabot harness Q1: ReAct + mock */
 extern unsigned int	qabot_img_len;
 
@@ -202,6 +202,7 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_TCP_SEND	75u	/* tcp_send(buf,len) -> n/0(coba lagi)/-1 */
 #define	SYS_TCP_RECV	76u	/* tcp_recv(buf,max) -> n/0(belum ada)/-1 */
 #define	SYS_TCP_CLOSE	77u	/* tcp_close() -> 0 */
+#define	SYS_FACE_EXPR	78u	/* Q4: face_expr(expr, text) / poll. Lihat PLAN-Q4Q7Q8.md */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -302,7 +303,7 @@ struct user_ctx {
 	unsigned int	spsr;
 };
 
-#define	NDAEMON		3u	/* face, uiapp, uqabotr (Q2c); utlscli/ntp/utcpcli nonaktif sementara */
+#define	NDAEMON		3u	/* face, uiapp, qabotd (Q4); utlscli/ntp/utcpcli nonaktif sementara */
 #define	PROG_FACE	0
 #define	PROG_UIAPP	1
 #define	PROG_NTP	2	/* App A4: sinkron jam (tak pegang display) */
@@ -326,6 +327,13 @@ static int		sched_active = 0;
 /* Arbiter display (App A2): token dipegang face (0) atau uiapp (1). */
 static int		dpy_holder = PROG_FACE;
 static int		dpy_sleep_req = 0;
+
+/* Permintaan ekspresi face (Q4): program mana pun boleh set; face
+ * mengambil via poll (a0=0xFFFFFFFF) lalu flag di-clear. */
+#define	FACE_TEXT_MAX	24u
+static unsigned		face_req_expr = 0u;
+static char		face_req_text[FACE_TEXT_MAX];
+static int		face_req_pending = 0;
 
 /* Jam dinding (App A4): di-set program ntp via SYS_TIME_SET (detik
  * Unix UTC).  SYS_TIME_GET = set + (ticks_berlalu / 100). */
@@ -833,6 +841,47 @@ user_syscall(struct arm_trap_frame *frame)
 	case SYS_TCP_CLOSE:
 		tcp_client_close();
 		return 0;
+	case SYS_FACE_EXPR: {
+		/* Q4: a0=expr(0..7) set, a0=0xFFFFFFFF poll.
+		 * set: a1=ptr teks status (0=biarkan default face).
+		 * poll (oleh face): a1=ptr unsigned expr_out, a2=ptr char[24].
+		 *   -> 0 bila ada permintaan (flag clear), -1 bila tak ada. */
+		if (a0 == 0xFFFFFFFFu) {
+			unsigned i;
+			unsigned *eo = (unsigned *)a1;
+			char *to = (char *)a2;
+			if (!face_req_pending)
+				return (unsigned int)-1;
+			if (!user_range_ok(a1, sizeof(unsigned)) ||
+			    !user_range_ok(a2, FACE_TEXT_MAX))
+				return (unsigned int)-1;
+			*eo = face_req_expr;
+			for (i = 0; i < FACE_TEXT_MAX; i++)
+				to[i] = face_req_text[i];
+			face_req_pending = 0;
+			return 0;
+		}
+		if (a0 > 7u)
+			return (unsigned int)-1;
+		face_req_expr = a0;
+		if (a1 != 0u) {
+			unsigned i;
+			const char *s = (const char *)a1;
+			/* salin aman: cari NUL dalam batas wajar */
+			if (!user_range_ok(a1, FACE_TEXT_MAX))
+				return (unsigned int)-1;
+			for (i = 0; i < FACE_TEXT_MAX - 1u; i++) {
+				face_req_text[i] = s[i];
+				if (s[i] == '\0')
+					break;
+			}
+			face_req_text[FACE_TEXT_MAX - 1u] = '\0';
+		} else {
+			face_req_text[0] = '\0';	/* pakai default face */
+		}
+		face_req_pending = 1;
+		return 0;
+	}
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
 	}
@@ -1324,8 +1373,8 @@ static struct uprog_image daemon_images[] = {
 	{ "uiapp", uiapp_img, &uiapp_img_len, 1u },	/* progid 1: menu */
 	/* { "ntp",   ntp_img,   &ntp_img_len,   1u }, */	/* Nonaktif sementara Q2b: UDP sandbox blokir, ganggu timing */
 	/* { "utcpcli", utcpcli_img, &utcpcli_img_len, 1u }, */	/* Nonaktif: tcc hanya 1 koneksi (race dengan utlscli). Aktifkan untuk uji Q2a saja. */
-	/* { "utlscli", utlscli_img, &utlscli_img_len, 8u }, */	/* Nonaktif Q2c: tcc 1 koneksi, bergantian dengan uqabotr */
-	{ "uqabotr", uqabotr_img, &uqabotr_img_len, 8u },	/* progid 2: uji provider real Q2c */
+	/* { "utlscli", utlscli_img, &utlscli_img_len, 8u }, */	/* Nonaktif Q2c: tcc 1 koneksi */
+	{ "qabotd", qabotd_img, &qabotd_img_len, 8u },	/* progid 2: Qabot daemon persisten (Q4) */
 
 };
 #define	NDAEMON_IMAGES	(sizeof(daemon_images) / sizeof(daemon_images[0]))

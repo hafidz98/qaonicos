@@ -101,6 +101,18 @@ _start(void)
 			continue;
 		}
 
+		/* Q4: permintaan ekspresi dari harness (qabotd) atau program
+		 * lain. Poll tiap iterasi; murah (satu SVC). */
+		{
+			unsigned req_expr;
+			char req_text[24];
+			if (sys_face_poll(&req_expr, req_text) == 0 &&
+			    req_expr < 8u) {
+				face_set_expr((face_expr_t)req_expr);
+				face_set_status_text(req_text);
+			}
+		}
+
 		/* Permintaan sleep dari uiapp (Power -> Sleep Now). */
 		if (sys_display_sleep(0) != 0 && display_on) {
 			puts("face: sleep requested -> display off\n");

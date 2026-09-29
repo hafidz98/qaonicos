@@ -146,14 +146,21 @@ qb_run_task(struct qb_run *r, const char *prompt, struct qb_provider *p)
 			continue;
 		}
 		if (verdict == QB_CONFIRM) {
-			if (!r->auto_confirm) {
+			int ok;
+			if (r->confirm_fn)
+				ok = r->confirm_fn(tc.name, reason);
+			else
+				ok = r->auto_confirm;
+			if (!ok) {
 				qb_snprintf(out, sizeof out,
-				    "BLOCKED: konfirmasi ditolak (device)");
+				    "BLOCKED: konfirmasi ditolak%s",
+				    r->confirm_fn ? " (user)" : " (device)");
 				qb_hist_add(&r->h, QB_TOOL, out);
 				qb_emit(r, "confirm: ditolak");
 				continue;
 			}
-			qb_emit(r, "confirm: auto-yes (mode uji)");
+			qb_emit(r, "confirm: ya%s",
+			    r->confirm_fn ? " (user)" : " (mode uji)");
 		}
 
 		td = qb_tool_find(tc.name);

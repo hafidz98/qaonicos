@@ -759,3 +759,36 @@ sys_tcp_close(void)
 		: "r7", "lr", "memory", "cc");
 	return ret;
 }
+
+int
+sys_face_expr(unsigned expr, const char *text)
+{
+	register unsigned _r0 __asm__("r0") = expr;
+	register unsigned _r1 __asm__("r1") = (unsigned)text;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #78\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0), "r" (_r1)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_face_poll(unsigned *expr_out, char *text_out)
+{
+	register unsigned _r0 __asm__("r0") = 0xFFFFFFFFu;
+	register unsigned _r1 __asm__("r1") = (unsigned)expr_out;
+	register unsigned _r2 __asm__("r2") = (unsigned)text_out;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #78\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0), "r" (_r1), "r" (_r2)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}

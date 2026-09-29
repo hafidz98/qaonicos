@@ -40,7 +40,7 @@ enum { TS_LISTEN = 0, TS_SYN_RCVD, TS_ESTABLISHED, TS_FIN_SENT };
 #define TCP_HDRLEN  20u
 #define TCP_MAXSEG  1200u   /* payload max per segmen (aman < MTU) */
 #define RTO_MS      800u
-#define CONN_TO_MS  30000u
+#define CONN_TO_MS  120000u	/* Q4: 120 dtk (LLM gratis antre lama) */
 
 static unsigned short rd16(const unsigned char *p)
 {
@@ -302,14 +302,6 @@ static void tcc_send(unsigned char flags, const unsigned char *payload,
     for (i = 0; i < plen; i++)
         s[TCP_HDRLEN + i] = payload[i];
     wr16(s + 16, tcp_csum(NET_IP, tcc.rip, s, seglen));
-
-    /* SEMENTARA Q2b: dump 8 byte pertama payload TCP */
-    if (plen > 0) {
-        unsigned di;
-        for (di = 0; di < plen && di < 8u; di++)
-            printf("%02x", payload[di]);
-        printf("\r\n");
-    }
 
     if (netstack_ip_send(tcc.rip, 6u, s, seglen) == 0) {
         st_tx++;

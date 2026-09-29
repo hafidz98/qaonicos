@@ -140,6 +140,11 @@ int	sys_tcp_send(const void *buf, unsigned len);
 int	sys_tcp_recv(void *buf, unsigned maxlen);
 int	sys_tcp_close(void);
 
+/* Q4: ekspresi wajah Qabot. expr 0..7 (face_expr_t); text = status
+ * kustom ("" = default face) atau NULL. Ambil: 0=ada, -1=tak ada. */
+int	sys_face_expr(unsigned expr, const char *text);
+int	sys_face_poll(unsigned *expr_out, char *text_out);
+
 /* Helper kecil. */
 int	puts(const char *s);
 unsigned ustrlen(const char *s);

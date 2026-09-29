@@ -51,6 +51,8 @@ typedef struct {
 
 void face_init(void);
 void face_set_expr(face_expr_t e);
+/* Q4: timpa teks status (maks 23 char + NUL); "" = biarkan default expr. */
+void face_set_status_text(const char *s);
 void face_update(uint32_t dt_ms); /* interpolate + timers, call per frame */
 void face_render(void);           /* draw current state into face_fb */
 /* Render rows [y0, y0+h) of current state into strip (h*FACE_W RGB565).

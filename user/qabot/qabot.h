@@ -78,6 +78,10 @@ struct qb_run {
 	unsigned		nev;
 	unsigned		steps;
 	int			auto_confirm;	/* Q1: 1 = mode uji */
+	/* Q4: hook konfirmasi interaktif. Dipanggil saat verdict=CONFIRM;
+	 * kembalikan 1 = jalankan, 0 = tolak. NULL = pakai auto_confirm. */
+	int			(*confirm_fn)(const char *toolname,
+					      const char *reason);
 	int			status;
 	char			final[QB_MSG_MAX];
 };
@@ -124,11 +128,18 @@ int	qb_build_request(struct qb_history *h, char *out, unsigned outlen);
 int	qb_parse_response(const char *body, struct qb_toolcall *tc,
 			  char *final_out, unsigned flen);
 
-/* provider_real.c (Q2c): provider HTTPS+JSON. */
+/* provider_real.c (Q2c): provider HTTPS+JSON. Q4: + mode anonim
+ * (tanpa header Authorization) + transport TCP polos (tanpa TLS)
+ * untuk proxy penerjemah lokal. */
 struct qb_real_ctx {
-	char	key[72];
+	char	key[72];	/* kosong = anonim */
 };
 void	qb_real_init(struct qb_real_ctx *c, const char *key_or_null);
+/* Q4: aktifkan transport TCP polos ke ip:port (host-header `host`).
+ * plain=0 kembali ke TLS default. key_or_null="" di qb_real_init =
+ * anonim (tanpa Authorization). */
+void	qb_real_set_plain(int plain, unsigned ip, unsigned port,
+			  const char *host);
 extern struct qb_provider	qb_real_provider;	/* chat = qb_real_chat */
 
 /* eventlog.c */

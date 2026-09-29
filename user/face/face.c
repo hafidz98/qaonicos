@@ -95,6 +95,17 @@ void face_set_expr(face_expr_t e) {
 }
 
 /* ease current toward target: cur += (tgt-cur)*k */
+void
+face_set_status_text(const char *s)
+{
+	int i;
+	if (!s || !s[0])
+		return;	/* "" = pakai default face_set_expr */
+	tgt.show_text = 1;
+	for (i = 0; i < 23 && s[i]; i++)
+		tgt.status_text[i] = s[i];
+	tgt.status_text[i] = 0;
+}
 static int16_t ease_i16(int16_t c, int16_t t, uint32_t dt_ms) {
     int32_t d = (int32_t)t - c;
     int32_t step = d * (int32_t)dt_ms / 180; /* ~180ms time constant */

@@ -17,11 +17,19 @@
 #define	UART_FR_RXFE	(1u << 4)
 
 #define	UART_REG(off)	(*(volatile unsigned int *)(UART0_BASE + (off)))
+#define	UART_LCRH	0x2cu
+#define	UART_LCRH_FEN	(1u << 4)	/* FIFO enable */
+#define	UART_LCRH_WLEN8	(3u << 5)	/* 8-bit word length */
 
 void
 uart_init(void)
 {
-	/* QEMU's PL011 is ready; nothing to program. */
+	/*
+	 * QEMU reset LCR_H=0 (FIFO mati -> holding register 1 byte;
+	 * byte baru menimpa yang belum dibaca = overrun/loss).
+	 * Nyalakan FIFO 16-byte + 8N1 agar burst input tak hilang.
+	 */
+	UART_REG(UART_LCRH) = UART_LCRH_FEN | UART_LCRH_WLEN8;
 }
 
 void
