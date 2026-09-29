@@ -108,9 +108,12 @@ Dua commit: `281b5ea` (GPIO/SD/FAT32) + `fc2bd70` (network/HTTP).
   `http.c`: HTTP/1.0 (GET / dashboard, GET /metrics).
 - `netmain.c`: server loop setelah 8 program user, tak kembali.
 - Ping ke 10.0.2.2 (QEMU user-net host) BERHASIL.
-- **Keterbatasan jujur**: TCP SYN dari host via `hostfwd=tcp::18080-:80`
-  belum diterima guest (RX path OK untuk ICMP, tapi SYN tak sampai).
-  Investigasi lanjut diperlukan (kemungkinan NAT QEMU atau filter MAC).
+- **UPDATE 2026-09-29: TCP/HTTP TERVERIFIKASI FUNGSI.** "SYN tak sampai"
+  ternyata gejala instabilitas kernel (bug IRQ `lr_svc`, fix `fdb3359`):
+  guest crash/hang tepat saat TCP diuji, bukan paket hilang di stack.
+  Setelah fix: `curl localhost:18080/` 5x -> HTTP 200 semua (dashboard
+  live ~1917 byte), `/metrics` 200 text/plain; log guest: SYN ->
+  SYN+ACK -> ESTABLISHED -> FIN bersih, tanpa panic. Tidak ada bug TCP.
 
 ### Pelajaran
 - QEMU user-net: host = 10.0.2.2 (bukan 10.0.2.1 yang untuk tap).
@@ -118,7 +121,7 @@ Dua commit: `281b5ea` (GPIO/SD/FAT32) + `fc2bd70` (network/HTTP).
   eksplisit; `used->idx` volatile + invalidate per baca.
 - `dcache_*_range` di blk.c dijadikan non-static untuk dipakai net.c.
 
-### Investigasi instabilitas Fase D (2026-09-28, belum selesai)
+### Investigasi instabilitas Fase D (2026-09-28, SELESAI 2026-09-29)
 
 **Gejala**: kernel panic non-deterministik (prefetch abort ke alamat
 sampah 0x0/0x8/heap, kadang undefined instruction, kadang spsr korup).
