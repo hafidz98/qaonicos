@@ -140,6 +140,7 @@ bi_help(void)
 	sh_puts("  uptime          ms sejak boot\n");
 	sh_puts("  face <0-7> [teks] set ekspresi wajah\n");
 	sh_puts("  qabot           info daemon Qabot\n");
+	sh_puts("  run <path>      jalankan program (Q9 spawn)\n");
 }
 
 static void
@@ -280,6 +281,32 @@ bi_qabot(void)
 	sh_puts("Shell ini (qaon>) untuk perintah sistem langsung.\n");
 }
 
+/* Q9: run <path> — spawn program, tunggu sampai exit. */
+static void
+bi_run(void)
+{
+	int rc, w;
+	if (sh_argc < 2) {
+		sh_puts("pakai: run <path>\n");
+		return;
+	}
+	rc = sys_spawn(sh_argv[1]);
+	if (rc != 0) {
+		sh_puts("spawn gagal\n");
+		return;
+	}
+	/* Tunggu child selesai. */
+	for (;;) {
+		w = sys_spawn_wait();
+		if (w != -1)
+			break;
+		sys_yield();
+	}
+	sh_puts("exit ");
+	sh_putu((unsigned)w);
+	sh_puts("\n");
+}
+
 void
 _start(void)
 {
@@ -307,6 +334,8 @@ _start(void)
 			bi_face();
 		else if (sh_streq(sh_argv[0], "qabot"))
 			bi_qabot();
+		else if (sh_streq(sh_argv[0], "run"))
+			bi_run();
 		else {
 			sh_puts("perintah tak dikenal: ");
 			sh_puts(sh_argv[0]);

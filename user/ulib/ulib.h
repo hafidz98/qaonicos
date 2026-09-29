@@ -143,6 +143,8 @@ int	sys_tcp_close(void);
 /* Q4: ekspresi wajah Qabot. expr 0..7 (face_expr_t); text = status
  * kustom ("" = default face) atau NULL. Ambil: 0=ada, -1=tak ada. */
 int	sys_face_expr(unsigned expr, const char *text);
+int	sys_spawn(const char *path);	/* Q9 */
+int	sys_spawn_wait(void);		/* Q9 */
 int	sys_face_poll(unsigned *expr_out, char *text_out);
 
 /* Helper kecil. */

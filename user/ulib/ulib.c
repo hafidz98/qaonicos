@@ -792,3 +792,35 @@ sys_face_poll(unsigned *expr_out, char *text_out)
 		: "r7", "lr", "memory", "cc");
 	return ret;
 }
+
+/* Q9: spawn(path) -> 0 bila dimulai, -1 gagal.
+ * Lalu loop sys_spawn_wait() sampai dapat exit code. */
+int
+sys_spawn(const char *path)
+{
+	register unsigned _r0 __asm__("r0") = (unsigned)path;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #79\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+/* Q9: -1 bila child masih jalan, else exit code. */
+int
+sys_spawn_wait(void)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r7, #80\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		:
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}

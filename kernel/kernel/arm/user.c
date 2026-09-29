@@ -57,6 +57,8 @@ extern unsigned char	ufs_img[];
 extern unsigned int	ufs_img_len;
 extern unsigned char	face_img[];	/* App A1/A2: Qabot server */
 extern unsigned int	face_img_len;
+extern unsigned char	sh_img[];	/* Q9: shell qaon> */
+extern unsigned int	sh_img_len;
 extern unsigned char	uiapp_img[];	/* App A2: menu/settings/monitor */
 extern unsigned int	uiapp_img_len;
 extern unsigned char	ntp_img[];	/* App A4: sinkron jam via NTP */
@@ -203,6 +205,8 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_TCP_RECV	76u	/* tcp_recv(buf,max) -> n/0(belum ada)/-1 */
 #define	SYS_TCP_CLOSE	77u	/* tcp_close() -> 0 */
 #define	SYS_FACE_EXPR	78u	/* Q4: face_expr(expr, text) / poll. Lihat PLAN-Q4Q7Q8.md */
+#define	SYS_SPAWN	79u	/* Q9: spawn(path) -> 0 ok, -1 gagal */
+#define	SYS_SPAWN_WAIT	80u	/* Q9: tunggu spawn -> -1 jalan, else exit code */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -303,7 +307,7 @@ struct user_ctx {
 	unsigned int	spsr;
 };
 
-#define	NDAEMON		3u	/* face, uiapp, qabotd (Q4); utlscli/ntp/utcpcli nonaktif sementara */
+#define	NDAEMON		5u	/* face, uiapp, qabotd, sh (Q9), + slot spawn (Q9) */
 #define	PROG_FACE	0
 #define	PROG_UIAPP	1
 #define	PROG_NTP	2	/* App A4: sinkron jam (tak pegang display) */
@@ -314,7 +318,7 @@ struct daemon {
 	pmap_t		pmap;
 	struct user_task *udesc;
 	struct user_ctx	ctx;
-	int		state;	/* 0=mati, 1=runnable */
+	int		state;	/* 0=mati, 1=runnable, 2=menunggu (Q9: parent spawn) */
 	int		progid;
 	unsigned	uprog_idx;	/* indeks di uprog_names/states */
 };
@@ -323,6 +327,21 @@ static struct daemon	daemons[NDAEMON];
 static unsigned		ndaemon_reg = 0;
 static int		sched_cur = -1;
 static int		sched_active = 0;
+
+/* Q9: state spawn. Slot NDAEMON-1 dipakai untuk child yang di-spawn.
+ * spawn_parent = indeks daemon parent (yang menunggu), -1 bila tidak ada.
+ * spawn_exitcode = exit code child; spawn_done = 1 bila child sudah exit. */
+static int		spawn_parent = -1;
+static unsigned		spawn_exitcode = 0;
+static int		spawn_done = 0;
+
+/* Forward decl untuk SYS_SPAWN (definisi di bawah). */
+static int	setup_uprog_task(const char *name, unsigned char *img,
+				 unsigned int img_len,
+				 unsigned int stack_pages,
+				 struct user_task *udesc, task_t *out_task,
+				 pmap_t *out_pmap,
+				 unsigned int *out_stack_top);
 
 /* Arbiter display (App A2): token dipegang face (0) atau uiapp (1). */
 static int		dpy_holder = PROG_FACE;
@@ -882,6 +901,72 @@ user_syscall(struct arm_trap_frame *frame)
 		face_req_pending = 1;
 		return 0;
 	}
+	case SYS_SPAWN: {
+		/* Q9: a0=path program (mis. "/bin/hello"). Setup child di
+		 * slot NDAEMON-1, tandai caller WAITING. Return 0 bila
+		 * spawn dimulai, -1 bila gagal. Parent tunggu via
+		 * SYS_SPAWN_WAIT. */
+		static char kpath[128];
+		static unsigned char imgbuf[65536]; /* 64KB batas v1 */
+		struct daemon *child;
+		struct user_task *udesc;
+		task_t utask;
+		pmap_t upmap;
+		unsigned int stack_top;
+		int len;
+
+		if (!sched_active || sched_cur < 0)
+			return (unsigned int)-1;
+		if (spawn_parent != -1)
+			return (unsigned int)-1; /* sudah ada spawn aktif */
+		if (!fat32_mounted() ||
+		    copy_path_user(a0, kpath, sizeof(kpath)) != 0)
+			return (unsigned int)-1;
+
+		len = fat32_read_file(kpath, imgbuf, sizeof(imgbuf));
+		if (len <= 0)
+			return (unsigned int)-1;
+
+		/* Setup task child di slot terakhir. */
+		child = &daemons[NDAEMON - 1];
+		/* udesc sederhana: pakai static (satu spawn aktif v1). */
+		{
+			static struct user_task spawn_udesc;
+			udesc = &spawn_udesc;
+		}
+		if (setup_uprog_task(kpath, imgbuf, (unsigned int)len,
+				     1u, udesc, &utask, &upmap,
+				     &stack_top) != 0)
+			return (unsigned int)-1;
+
+		child->name = "spawned";
+		child->task = utask;
+		child->pmap = upmap;
+		child->udesc = udesc;
+		child->ctx.sp_usr = stack_top;
+		child->ctx.pc = INIT_CODE_VA;
+		child->state = 1; /* runnable */
+		child->progid = -1;
+		child->uprog_idx = 0;
+
+		spawn_parent = sched_cur;
+		spawn_done = 0;
+		daemons[sched_cur].state = 2; /* WAITING */
+		printf("spawn: '%s' (%d byte), parent=%d menunggu\n",
+		       kpath, len, sched_cur);
+		return 0;
+	}
+	case SYS_SPAWN_WAIT: {
+		/* Q9: parent cek status spawn. Return -1 bila child masih
+		 * jalan, exit code (0..255) bila sudah selesai. */
+		if (spawn_parent != sched_cur)
+			return (unsigned int)-1;
+		if (!spawn_done)
+			return (unsigned int)-1;
+		spawn_parent = -1;
+		daemons[sched_cur].state = 1; /* kembali runnable */
+		return spawn_exitcode;
+	}
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
 	}
@@ -924,7 +1009,7 @@ pick_next(void)
 	unsigned int i;
 	for (i = 1; i <= NDAEMON; i++) {
 		unsigned int j = (unsigned int)(sched_cur + (int)i) % NDAEMON;
-		if (daemons[j].state)
+		if (daemons[j].state == 1)	/* Q9: hanya runnable, bukan WAITING */
 			return &daemons[j];
 	}
 	return 0;
@@ -963,7 +1048,17 @@ sched_exit_switch(struct arm_trap_frame *f, unsigned int code)
 	struct daemon *next;
 	net_pump();
 	printf("sched: '%s' exit 0x%x\n", daemons[sched_cur].name, code);
-	daemons[sched_cur].state = 0;
+	/* Q9: bila yang exit adalah child spawn, bangunkan parent. */
+	if (sched_cur == (int)(NDAEMON - 1) && spawn_parent != -1) {
+		spawn_exitcode = code;
+		spawn_done = 1;
+		daemons[sched_cur].state = 0;
+		daemons[spawn_parent].state = 1; /* parent runnable lagi */
+		printf("spawn: child exit 0x%x, parent %d dibangunkan\n",
+		       code, spawn_parent);
+	} else {
+		daemons[sched_cur].state = 0;
+	}
 	uprog_states[daemons[sched_cur].uprog_idx] = 2u;	/* EXITED */
 	next = pick_next();
 	if (next == 0) {
@@ -1375,6 +1470,7 @@ static struct uprog_image daemon_images[] = {
 	/* { "utcpcli", utcpcli_img, &utcpcli_img_len, 1u }, */	/* Nonaktif: tcc hanya 1 koneksi (race dengan utlscli). Aktifkan untuk uji Q2a saja. */
 	/* { "utlscli", utlscli_img, &utlscli_img_len, 8u }, */	/* Nonaktif Q2c: tcc 1 koneksi */
 	{ "qabotd", qabotd_img, &qabotd_img_len, 8u },	/* progid 2: Qabot daemon persisten (Q4) */
+	{ "sh", sh_img, &sh_img_len, 1u },	/* progid 3: shell qaon> (Q9) */
 
 };
 #define	NDAEMON_IMAGES	(sizeof(daemon_images) / sizeof(daemon_images[0]))

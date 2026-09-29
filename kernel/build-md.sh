@@ -316,6 +316,28 @@ python3 "$USR/embed.py" "$BUILD/qabotd.bin" "$GEN/qabotd_img.c" "qabotd_img" 104
     { echo "FAIL embed qabotd_img"; exit 1; }
 echo "USER: qabotd.elf entry=$ENTRY ok"
 
+# --- 1f. user program sh (Q8/Q9 shell): single-file, pola sama. ---
+echo "BUILD user program sh"
+clang $UCFLAGS -c "$USR/sh.c" -o "$BUILD/sh.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/sh.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/sh.elf" "$BUILD/sh.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/sh.elf (see $LOG)"; exit 1; }
+ENTRY=$(llvm-readelf-18 -h "$BUILD/sh.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: sh entry $ENTRY != 0x100000"; exit 1; }
+llvm-objcopy-18 -O binary "$BUILD/sh.elf" "$BUILD/sh.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/sh.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/sh.bin" "$BUILD/sh.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/sh.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/sh.bin" "$GEN/sh_img.c" "sh_img" 32768 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed sh_img"; exit 1; }
+echo "USER: sh.elf entry=$ENTRY ok"
+
 # --- 2. MD compile ---
 mkdir -p "$OBJMD"
 : > "$LOG"
@@ -354,12 +376,12 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }
 done
-echo "MD: *_img.o ok (15 programs)"
+echo "MD: *_img.o ok (16 programs)"
 
 # --- 3. link ---
 MI_OBJS=$(find "$OBJ" -name '*.o' | sort)
