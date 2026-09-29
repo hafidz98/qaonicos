@@ -34,9 +34,26 @@ tls_init(void)
 const char *
 tls_err(int r)
 {
-	static char buf[128];
+	static char buf[32];
+	unsigned	u;
+	int		i;
 
-	mbedtls_strerror(r, buf, sizeof(buf));
+	/* Utang teknis Q2: mbedtls_strerror hang (dugaan snprintf).
+	 * Ganti dengan format hex minimal, tanpa libc. */
+	buf[0] = '-';
+	buf[1] = '0';
+	buf[2] = 'x';
+	u = (unsigned)(r < 0 ? -r : r);
+	for (i = 7; i >= 0; i--) {
+		unsigned	d = (u >> (i * 4u)) & 0xfu;
+		buf[3 + (7 - i)] = (char)(d < 10u ? '0' + d : 'a' + d - 10u);
+	}
+	buf[11] = 0;
+	if (r >= 0) {
+		/* Geser bila non-negatif (tak ada minus). */
+		for (i = 0; i < 11; i++)
+			buf[i] = buf[i + 1];
+	}
 	return buf;
 }
 
