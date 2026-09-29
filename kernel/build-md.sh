@@ -110,21 +110,30 @@ python3 "$USR/embed.py" "$BUILD/face.bin" "$GEN/face_img.c" "face_img" 32768 >>"
     { echo "FAIL embed face_img"; exit 1; }
 echo "USER: face.elf entry=$ENTRY ok"
 
-# --- 1d. user program uiapp (App A2): multi-file (main.c + ui.c +
-# ui_draw.c + scr_*.c), pola sama: link di 0x100000, objcopy, pad-bss. ---
+# --- 1d. user program uiapp (App A2/A3): multi-file (main.c + ui.c +
+# ui_draw.c + scr_*.c + uartproto), pola sama: link di 0x100000, objcopy, pad-bss. ---
 echo "BUILD user program uiapp"
-UCFLAGS2="$UCFLAGS -I$USR/uiapp -I$USR/face -Wno-unused-function"
-for f in main ui ui_draw scr_menu scr_mon scr_settings scr_power; do
+UCFLAGS2="$UCFLAGS -I$USR/uiapp -I$USR/face -I$USR -Wno-unused-function"
+for f in main ui ui_draw scr_menu scr_mon scr_settings scr_power scr_wifi scr_ble scr_llm scr_passkey scr_textedit; do
     # shellcheck disable=SC2086
     clang $UCFLAGS2 -c "$USR/uiapp/$f.c" -o "$BUILD/uiapp_$f.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/uiapp/$f.c (see $LOG)"; exit 1; }
+done
+for f in uartproto mock_comcu; do
+    # shellcheck disable=SC2086
+    clang $UCFLAGS2 -c "$USR/uartproto/$f.c" -o "$BUILD/uartproto_$f.o" >>"$LOG" 2>&1 || \
+        { echo "FAIL user/uartproto/$f.c (see $LOG)"; exit 1; }
 done
 # shellcheck disable=SC2086
 clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     -o "$BUILD/uiapp.elf" "$BUILD/uiapp_main.o" "$BUILD/uiapp_ui.o" \
     "$BUILD/uiapp_ui_draw.o" "$BUILD/uiapp_scr_menu.o" \
     "$BUILD/uiapp_scr_mon.o" "$BUILD/uiapp_scr_settings.o" \
-    "$BUILD/uiapp_scr_power.o" "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    "$BUILD/uiapp_scr_power.o" "$BUILD/uiapp_scr_wifi.o" \
+    "$BUILD/uiapp_scr_ble.o" "$BUILD/uiapp_scr_llm.o" \
+    "$BUILD/uiapp_scr_passkey.o" "$BUILD/uiapp_scr_textedit.o" \
+    "$BUILD/uartproto_uartproto.o" "$BUILD/uartproto_mock_comcu.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL link user/uiapp.elf (see $LOG)"; exit 1; }
 ENTRY=$(llvm-readelf-18 -h "$BUILD/uiapp.elf" | sed -n 's/.*Entry point address: *//p')
