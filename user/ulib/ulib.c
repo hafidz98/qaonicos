@@ -681,3 +681,81 @@ sys_udp_recv(void *buf, unsigned maxlen,
 		: "r7", "lr", "memory", "cc");
 	return ret;
 }
+
+/* TCP client (Q2a): 73-77. Pola sama dengan wrapper syscall lain. */
+
+int
+sys_tcp_connect(unsigned dst_ip, unsigned dst_port)
+{
+	register unsigned _r0 __asm__("r0") = dst_ip;
+	register unsigned _r1 __asm__("r1") = dst_port;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #73\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0), "r" (_r1)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_tcp_status(void)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r7, #74\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		:
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_tcp_send(const void *buf, unsigned len)
+{
+	register unsigned _r0 __asm__("r0") = (unsigned)buf;
+	register unsigned _r1 __asm__("r1") = len;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #75\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0), "r" (_r1)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_tcp_recv(void *buf, unsigned maxlen)
+{
+	register unsigned _r0 __asm__("r0") = (unsigned)buf;
+	register unsigned _r1 __asm__("r1") = maxlen;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #76\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0), "r" (_r1)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_tcp_close(void)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r7, #77\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		:
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}

@@ -61,6 +61,10 @@ extern unsigned char	uiapp_img[];	/* App A2: menu/settings/monitor */
 extern unsigned int	uiapp_img_len;
 extern unsigned char	ntp_img[];	/* App A4: sinkron jam via NTP */
 extern unsigned int	ntp_img_len;
+extern unsigned char	utcpcli_img[];	/* Q2a SEMENTARA: uji TCP client */
+extern unsigned int	utcpcli_img_len;
+extern unsigned char	utlscli_img[];	/* Q2b SEMENTARA: uji TLS client */
+extern unsigned int	utlscli_img_len;
 extern unsigned char	qabot_img[];	/* Qabot harness Q1: ReAct + mock */
 extern unsigned int	qabot_img_len;
 
@@ -73,6 +77,13 @@ extern int	netstack_udp_send(unsigned int dst, unsigned short dport,
 extern int	netstack_udp_recv(unsigned char *buf, unsigned maxlen,
 				      unsigned int *src_ip,
 				      unsigned short *src_port);
+
+/* tcp.c (Q2a: TCP client, satu koneksi aktif). */
+extern int	tcp_client_connect(unsigned int dst_ip, unsigned short dst_port);
+extern int	tcp_client_status(void);
+extern int	tcp_client_send(const unsigned char *p, unsigned len);
+extern int	tcp_client_recv(unsigned char *buf, unsigned maxlen);
+extern void	tcp_client_close(void);
 
 /* clock.c (Fase B) */
 extern void	arm_timer_enable(void);
@@ -135,8 +146,11 @@ extern void	arm_pmap_activate_kernel(void);
 
 /* Fase B init task layout (separate user task from the selftest above). */
 #define	INIT_CODE_VA	0x100000u	/* init image (npages, R/W) */
-#define	INIT_STACK_VA	0x110000u	/* 1 page; SP starts at 0x111000 */
-#define	INIT_HEAP_VA	0x120000u	/* sbrk region */
+/* Q2b: stack & heap VA kini DINAMIS per program (setup_uprog_task):
+ * stack tepat setelah code (stack_pages), heap tepat setelah stack.
+ * INIT_STACK_VA/INIT_HEAP_VA di bawah hanya untuk user_selftest. */
+#define	INIT_STACK_VA	0x110000u	/* selftest: 1 page */
+#define	INIT_HEAP_VA	0x120000u	/* selftest: sbrk region */
 #define	INIT_HEAP_PAGES	16u		/* 64 KB pre-allocated heap */
 #define	USER_VA_BASE	0x100000u	/* lowest valid user VA */
 #define	USER_VA_TOP	0x130000u	/* highest valid user VA */
@@ -180,6 +194,12 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_TIME_GET	70u	/* App A4: -> detik Unix / 0 (belum di-set) */
 #define	SYS_UDP_SEND	71u	/* App A4: udp_send(ip,port,buf,len) -> 0/-1 */
 #define	SYS_UDP_RECV	72u	/* App A4: udp_recv(buf,max,&ip,&port) -> n/0/-1 */
+/* Q2a: TCP client (satu koneksi aktif, pola request/response). */
+#define	SYS_TCP_CONNECT	73u	/* tcp_connect(ip,port) -> 0/-1 */
+#define	SYS_TCP_STATUS	74u	/* -> 0=CLOSED 1=SYN_SENT 2=ESTAB 3=FIN_SENT */
+#define	SYS_TCP_SEND	75u	/* tcp_send(buf,len) -> n/0(coba lagi)/-1 */
+#define	SYS_TCP_RECV	76u	/* tcp_recv(buf,max) -> n/0(belum ada)/-1 */
+#define	SYS_TCP_CLOSE	77u	/* tcp_close() -> 0 */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -251,6 +271,7 @@ struct user_task {
 	vm_offset_t	heap_base;	/* VA: start of sbrk region */
 	vm_offset_t	brk;		/* current break */
 	vm_offset_t	heap_end;	/* VA: hard limit */
+	vm_offset_t	va_top;		/* Q2b: VA tertinggi valid (layout dinamis) */
 };
 
 /* Task user yang sedang berjalan (di-set sebelum user_enter_test).
@@ -279,7 +300,7 @@ struct user_ctx {
 	unsigned int	spsr;
 };
 
-#define	NDAEMON		3u	/* face, uiapp, ntp (App A4) */
+#define	NDAEMON		3u	/* face, uiapp, utlscli (Q2b); ntp+utcpcli nonaktif sementara */
 #define	PROG_FACE	0
 #define	PROG_UIAPP	1
 #define	PROG_NTP	2	/* App A4: sinkron jam (tak pegang display) */
@@ -409,11 +430,15 @@ static unsigned		nuprog = 0;
 static int
 user_range_ok(unsigned int va, unsigned int len)
 {
+	unsigned int va_top = USER_VA_TOP;
+	/* Q2b: pakai batas dinamis per-task (image besar >192KB). */
+	if (cur_udesc != 0 && cur_udesc->va_top > USER_VA_BASE)
+		va_top = cur_udesc->va_top;
 	if (va < USER_VA_BASE)
 		return 0;
-	if (len > USER_VA_TOP - USER_VA_BASE)
+	if (len > va_top - USER_VA_BASE)
 		return 0;
-	if (va + len > USER_VA_TOP)
+	if (va + len > va_top)
 		return 0;
 	if (va + len < va)	/* wraparound */
 		return 0;
@@ -780,6 +805,32 @@ user_syscall(struct arm_trap_frame *frame)
 		}
 		return (unsigned int)n;
 	}
+	case SYS_TCP_CONNECT:
+		/* a0=ip dst, a1=port dst -> 0/-1 */
+		if (a1 > 65535u)
+			return (unsigned int)-1;
+		return (unsigned int)tcp_client_connect(a0, (unsigned short)a1);
+	case SYS_TCP_STATUS:
+		return (unsigned int)tcp_client_status();
+	case SYS_TCP_SEND: {
+		/* a0=buf, a1=len -> n/0/-1 */
+		int n;
+		if (a1 == 0u || a1 > 1200u || !user_range_ok(a0, a1))
+			return (unsigned int)-1;
+		n = tcp_client_send((const unsigned char *)a0, a1);
+		return (unsigned int)n;
+	}
+	case SYS_TCP_RECV: {
+		/* a0=buf, a1=maxlen -> n/0/-1 */
+		int n;
+		if (a1 == 0u || a1 > 4096u || !user_range_ok(a0, a1))
+			return (unsigned int)-1;
+		n = tcp_client_recv((unsigned char *)a0, a1);
+		return (unsigned int)n;
+	}
+	case SYS_TCP_CLOSE:
+		tcp_client_close();
+		return 0;
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
 	}
@@ -1074,20 +1125,23 @@ machine_halt(void)
  */
 static int
 setup_uprog_task(const char *name, unsigned char *img, unsigned int img_len,
-		 struct user_task *udesc, task_t *out_task, pmap_t *out_pmap)
+		 unsigned int stack_pages,
+		 struct user_task *udesc, task_t *out_task, pmap_t *out_pmap,
+		 unsigned int *out_stack_top)
 {
 	task_t		utask;
 	thread_t	uthread;
 	pmap_t		upmap;
 	kern_return_t	kr;
 	vm_offset_t	mem, pa, va;
-	unsigned int	i, npages;
+	unsigned int	i, npages, ntotal;
 	unsigned char	*dst;
 	spl_t		s;
+	unsigned int	stack_va, heap_va;
 
 	printf("setup_uprog_task: '%s'...\n", name);
 
-	if (img_len == 0 || img_len > 16 * USER_PGBYTES) {
+	if (img_len == 0 || img_len > 256 * USER_PGBYTES) {	/* Q2b: utlscli butuh >512KB */
 		printf("setup_uprog_task: FAIL (bad image size %u)\n", img_len);
 		return -1;
 	}
@@ -1112,10 +1166,14 @@ setup_uprog_task(const char *name, unsigned char *img, unsigned int img_len,
 		return -1;
 	}
 
-	/* code pages + 1 stack page + heap pages (contiguous, identity). */
+	/* code pages + stack pages + heap pages (contiguous, identity).
+	 * Q2b: layout dinamis — stack diletakkan SETELAH code (bukan di
+	 * alamat tetap), agar image besar (TLS ~80 page) tak menimpa stack. */
+	if (stack_pages == 0)
+		stack_pages = 1;
 	npages = (img_len + USER_PGBYTES - 1) / USER_PGBYTES;
-	kr = kmem_alloc(kernel_map, &mem,
-			(npages + 1 + INIT_HEAP_PAGES) * USER_PGBYTES);
+	ntotal = npages + stack_pages + INIT_HEAP_PAGES;
+	kr = kmem_alloc(kernel_map, &mem, ntotal * USER_PGBYTES);
 	if (kr != KERN_SUCCESS) {
 		(void) splx(s);
 		printf("setup_uprog_task: FAIL (kmem_alloc kr=%d)\n", kr);
@@ -1135,31 +1193,36 @@ setup_uprog_task(const char *name, unsigned char *img, unsigned int img_len,
 		pmap_enter(upmap, va, pa,
 			   VM_PROT_READ | VM_PROT_WRITE, FALSE);
 
-	/* stack (zeroed) */
+	/* stack (zeroed), tepat setelah code */
+	stack_va = INIT_CODE_VA + npages * USER_PGBYTES;
 	dst = (unsigned char *)pa;
-	for (i = 0; i < USER_PGBYTES; i++)
+	for (i = 0; i < stack_pages * USER_PGBYTES; i++)
 		dst[i] = 0;
-	pmap_enter(upmap, INIT_STACK_VA, pa,
-		   VM_PROT_READ | VM_PROT_WRITE, FALSE);
-	pa += USER_PGBYTES;
+	for (i = 0, va = stack_va; i < stack_pages;
+	     i++, va += USER_PGBYTES, pa += USER_PGBYTES)
+		pmap_enter(upmap, va, pa,
+			   VM_PROT_READ | VM_PROT_WRITE, FALSE);
 
-	/* heap (zeroed sbrk region) */
+	/* heap (zeroed sbrk region), tepat setelah stack */
+	heap_va = stack_va + stack_pages * USER_PGBYTES;
 	dst = (unsigned char *)pa;
 	for (i = 0; i < INIT_HEAP_PAGES * USER_PGBYTES; i++)
 		dst[i] = 0;
-	va = INIT_HEAP_VA;
+	va = heap_va;
 	for (i = 0; i < INIT_HEAP_PAGES; i++,
 	     va += USER_PGBYTES, pa += USER_PGBYTES)
 		pmap_enter(upmap, va, pa,
 			   VM_PROT_READ | VM_PROT_WRITE, FALSE);
 
 	udesc->task = utask;
-	udesc->heap_base = INIT_HEAP_VA;
-	udesc->brk = INIT_HEAP_VA;
-	udesc->heap_end = INIT_HEAP_VA + INIT_HEAP_PAGES * USER_PGBYTES;
+	udesc->heap_base = heap_va;
+	udesc->brk = heap_va;
+	udesc->heap_end = heap_va + INIT_HEAP_PAGES * USER_PGBYTES;
+	udesc->va_top = udesc->heap_end;	/* Q2b: valid s/d akhir heap */
 
 	*out_task = utask;
 	*out_pmap = upmap;
+	*out_stack_top = stack_va + stack_pages * USER_PGBYTES;
 	return 0;
 }
 
@@ -1173,14 +1236,15 @@ setup_uprog_task(const char *name, unsigned char *img, unsigned int img_len,
  */
 static unsigned int
 launch_uprog(const char *name, unsigned char *img, unsigned int img_len,
-	     struct user_task *udesc)
+	     unsigned int stack_pages, struct user_task *udesc)
 {
 	task_t		utask;
 	pmap_t		upmap;
-	unsigned int	rc;
+	unsigned int	rc, stack_top;
 
 	printf("launch_uprog: creating task for '%s'...\n", name);
-	if (setup_uprog_task(name, img, img_len, udesc, &utask, &upmap) != 0)
+	if (setup_uprog_task(name, img, img_len, stack_pages, udesc,
+			     &utask, &upmap, &stack_top) != 0)
 		return ~0u;
 
 	/* Register for SYS_TLIST + set as current for syscalls. */
@@ -1195,7 +1259,7 @@ launch_uprog(const char *name, unsigned char *img, unsigned int img_len,
 
 	printf("launch_uprog: entering user mode ('%s')...\n", name);
 	arm_pmap_activate_user(upmap);
-	rc = user_enter_test(INIT_STACK_VA + USER_PGBYTES, INIT_CODE_VA);
+	rc = user_enter_test(stack_top, INIT_CODE_VA);
 	arm_pmap_activate_kernel();
 
 	if (nuprog > 0)
@@ -1215,17 +1279,19 @@ launch_uprog(const char *name, unsigned char *img, unsigned int img_len,
  */
 static void
 launch_daemon(const char *name, unsigned char *img, unsigned int img_len,
+	      unsigned int stack_pages,
 	      struct user_task *udesc, unsigned int progid)
 {
 	task_t	utask;
 	pmap_t	upmap;
+	unsigned int stack_top;
 
-	if (setup_uprog_task(name, img, img_len, udesc, &utask, &upmap) != 0) {
+	if (setup_uprog_task(name, img, img_len, stack_pages, udesc,
+			     &utask, &upmap, &stack_top) != 0) {
 		printf("launch_daemon: FAIL ('%s')\n", name);
 		return;
 	}
-	sched_register_daemon(name, utask, upmap, udesc,
-			    INIT_STACK_VA + USER_PGBYTES, progid);
+	sched_register_daemon(name, utask, upmap, udesc, stack_top, progid);
 }
 
 /* Program user Fase C: diluncurkan berurutan. */
@@ -1233,27 +1299,31 @@ struct uprog_image {
 	const char	*name;
 	unsigned char	*img;
 	unsigned int	*lenp;
+	unsigned int	stack_pages;	/* Q2b: halaman stack (default 1) */
 };
 
 /* Program one-shot Fase C/D: jalan berurutan sampai SYS_EXIT. */
 static struct uprog_image uprogs[] = {
-	{ "init",  init_img,  &init_img_len  },
-	{ "ucat",  ucat_img,  &ucat_img_len  },
-	{ "uls",   uls_img,   &uls_img_len   },
-	{ "uecho", uecho_img, &uecho_img_len },
-	{ "umon",  umon_img,  &umon_img_len  },
-	{ "ugpio", ugpio_img, &ugpio_img_len },
-	{ "usd",   usd_img,   &usd_img_len   },
-	{ "ufs",   ufs_img,   &ufs_img_len   },
-	{ "qabot", qabot_img, &qabot_img_len },	/* Q1: harness, one-shot */
+	{ "init",  init_img,  &init_img_len,  1u },
+	{ "ucat",  ucat_img,  &ucat_img_len,  1u },
+	{ "uls",   uls_img,   &uls_img_len,   1u },
+	{ "uecho", uecho_img, &uecho_img_len, 1u },
+	{ "umon",  umon_img,  &umon_img_len,  1u },
+	{ "ugpio", ugpio_img, &ugpio_img_len, 1u },
+	{ "usd",   usd_img,   &usd_img_len,   1u },
+	{ "ufs",   ufs_img,   &ufs_img_len,   1u },
+	{ "qabot", qabot_img, &qabot_img_len, 1u },	/* Q1: harness, one-shot */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))
 
 /* Daemon persisten App A2/A4: jalan di scheduler kooperatif. */
 static struct uprog_image daemon_images[] = {
-	{ "face",  face_img,  &face_img_len  },	/* progid 0: Qabot server */
-	{ "uiapp", uiapp_img, &uiapp_img_len },	/* progid 1: menu */
-	{ "ntp",   ntp_img,   &ntp_img_len   },	/* progid 2: sinkron jam */
+	{ "face",  face_img,  &face_img_len,  1u },	/* progid 0: Qabot server */
+	{ "uiapp", uiapp_img, &uiapp_img_len, 1u },	/* progid 1: menu */
+	/* { "ntp",   ntp_img,   &ntp_img_len,   1u }, */	/* Nonaktif sementara Q2b: UDP sandbox blokir, ganggu timing */
+	/* { "utcpcli", utcpcli_img, &utcpcli_img_len, 1u }, */	/* Nonaktif: tcc hanya 1 koneksi (race dengan utlscli). Aktifkan untuk uji Q2a saja. */
+	{ "utlscli", utlscli_img, &utlscli_img_len, 8u },	/* progid 2: uji TLS Q2b */
+
 };
 #define	NDAEMON_IMAGES	(sizeof(daemon_images) / sizeof(daemon_images[0]))
 
@@ -1296,6 +1366,7 @@ user_launch_init(void)
 	for (i = 0; i < NUPROGS; i++) {
 		unsigned int rc = launch_uprog(uprogs[i].name, uprogs[i].img,
 					       *uprogs[i].lenp,
+					       uprogs[i].stack_pages,
 					       &uprog_udesc[i]);
 		if (rc != 0) {
 			printf("user_launch_init: FAIL ('%s' exit 0x%x)\n",
@@ -1328,6 +1399,7 @@ user_launch_init(void)
 	for (i = 0; i < NDAEMON_IMAGES; i++)
 		launch_daemon(daemon_images[i].name, daemon_images[i].img,
 			      *daemon_images[i].lenp,
+			      daemon_images[i].stack_pages,
 			      &uprog_udesc[NUPROGS + i], i);
 	sched_run();
 	/* NOTREACHED */

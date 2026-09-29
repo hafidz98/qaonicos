@@ -61,6 +61,11 @@ pointer Mach task). Sinkronisasi via `splhigh()`/`splx()`.
 | 70 | `SYS_TIME_GET` | — | detik Unix / `0` | App A4: jam dinding = nilai SET + (ticks berlalu)/100. `0` bila belum pernah di-set (fallback: `SYS_UPTIME`) |
 | 71 | `SYS_UDP_SEND` | r0=dst_ip, r1=dst_port, r2=buf, r3=len (≤512) | `0` / `-1` | App A4: kirim datagram UDP (proto 17) via `netstack_ip_send`. Source port ephemeral kernel (49152+). `-1` bila MAC dst belum dikenal (ARP dikirim; coba lagi) |
 | 72 | `SYS_UDP_RECV` | r0=buf, r1=maxlen (≤512), r2=&src_ip, r3=&src_port | n / `0` / `-1` | App A4: ambil datagram balasan (non-blocking). Slot RX tunggal; hanya paket yang dport-nya = port ephemeral kiriman terakhir yang disimpan. `0`=belum ada |
+| 73 | `SYS_TCP_CONNECT` | r0=dst_ip, r1=dst_port | `0` / `-1` | Q2a: buka koneksi TCP client (SYN). Satu koneksi client dalam satu waktu; `-1` bila sibuk |
+| 74 | `SYS_TCP_STATUS` | — | `0`..`3` | Q2a: 0=CLOSED, 1=SYN_SENT, 2=ESTABLISHED, 3=FIN_SENT |
+| 75 | `SYS_TCP_SEND` | r0=buf, r1=len (≤1200) | n / `0` / `-1` | Q2a: kirim (stop-and-wait per segmen). `0`=coba lagi (belum di-ack / ARP); `-1`=tak tersambung |
+| 76 | `SYS_TCP_RECV` | r0=buf, r1=maxlen (≤4096) | n / `0` | Q2a: baca buffer RX; `0`=belum ada data |
+| 77 | `SYS_TCP_CLOSE` | — | `0` | Q2a: kirim FIN (active close) |
 
 ### Event input (`EV_*`, via 65)
 

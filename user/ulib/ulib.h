@@ -133,6 +133,13 @@ int	sys_udp_send(unsigned dst_ip, unsigned dst_port,
 int	sys_udp_recv(void *buf, unsigned maxlen,
 		       unsigned *src_ip, unsigned short *src_port);
 
+/* TCP client (Q2a): 73-77. */
+int	sys_tcp_connect(unsigned dst_ip, unsigned dst_port);
+int	sys_tcp_status(void);
+int	sys_tcp_send(const void *buf, unsigned len);
+int	sys_tcp_recv(void *buf, unsigned maxlen);
+int	sys_tcp_close(void);
+
 /* Helper kecil. */
 int	puts(const char *s);
 unsigned ustrlen(const char *s);

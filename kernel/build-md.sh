@@ -176,6 +176,82 @@ python3 "$USR/embed.py" "$BUILD/ntp.bin" "$GEN/ntp_img.c" "ntp_img" 32768 >>"$LO
     { echo "FAIL embed ntp_img"; exit 1; }
 echo "USER: ntp.elf entry=$ENTRY ok"
 
+# --- 1d2. user program utcpcli (Q2a SEMENTARA): uji TCP client. ---
+echo "BUILD user program utcpcli"
+# shellcheck disable=SC2086
+clang $UCFLAGS -c "$USR/utcpcli.c" -o "$BUILD/utcpcli.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/utcpcli.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/utcpcli.elf" "$BUILD/utcpcli.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/utcpcli.elf (see $LOG)"; exit 1; }
+ENTRY=$(llvm-readelf-18 -h "$BUILD/utcpcli.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: utcpcli entry $ENTRY != 0x100000"; exit 1; }
+llvm-objcopy-18 -O binary "$BUILD/utcpcli.elf" "$BUILD/utcpcli.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/utcpcli.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/utcpcli.bin" "$BUILD/utcpcli.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/utcpcli.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/utcpcli.bin" "$GEN/utcpcli_img.c" "utcpcli_img" 32768 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed utcpcli_img"; exit 1; }
+echo "USER: utcpcli.elf entry=$ENTRY ok"
+
+# --- 1d3. lib TLS (Q2b): mbedTLS subset + port + API. ---
+echo "BUILD lib TLS (mbedTLS subset)"
+TLSCFLAGS="--target=arm-none-eabi -march=armv7-a -O1 -fno-builtin -ffreestanding -I$USR/tls/inc -I$USR/tls/mbedtls/include"
+for f in "$USR"/tls/mbedtls/src/*.c; do
+    base=$(basename "$f" .c)
+    # shellcheck disable=SC2086
+    clang $TLSCFLAGS -c "$f" -o "$BUILD/tls_$base.o" >>"$LOG" 2>&1 || \
+        { echo "FAIL $f (see $LOG)"; exit 1; }
+done
+TLSOBJS=""
+for f in "$USR"/tls/mbedtls/src/*.c; do
+    base=$(basename "$f" .c)
+    TLSOBJS="$TLSOBJS $BUILD/tls_$base.o"
+done
+for f in tls_port tls_bio tls_api; do
+    # shellcheck disable=SC2086
+    clang $UCFLAGS -I"$USR/tls/inc" -I"$USR/tls/mbedtls/include" \
+        -c "$USR/tls/$f.c" -o "$BUILD/tls_$f.o" >>"$LOG" 2>&1 || \
+        { echo "FAIL user/tls/$f.c (see $LOG)"; exit 1; }
+    TLSOBJS="$TLSOBJS $BUILD/tls_$f.o"
+done
+echo "TLS: mbedTLS + port ok"
+
+# --- 1d4. user program utlscli (Q2b SEMENTARA): uji TLS client. ---
+echo "BUILD user program utlscli"
+python3 "$USR/../tools/pem2c.py" "$USR/tls/testcerts/ca.crt" \
+    "$BUILD/ca_pem.c" "qaonic_test_ca_pem" >>"$LOG" 2>&1 || \
+    { echo "FAIL pem2c ca.crt (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang $UCFLAGS -c "$BUILD/ca_pem.c" -o "$BUILD/ca_pem.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL ca_pem.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang $UCFLAGS -I"$USR/tls/inc" -I"$USR/tls/mbedtls/include" \
+    -c "$USR/utlscli.c" -o "$BUILD/utlscli.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/utlscli.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/utlscli.elf" "$BUILD/utlscli.o" "$BUILD/ca_pem.o" \
+    $TLSOBJS "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/utlscli.elf (see $LOG)"; exit 1; }
+ENTRY=$(llvm-readelf-18 -h "$BUILD/utlscli.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: utlscli entry $ENTRY != 0x100000"; exit 1; }
+llvm-objcopy-18 -O binary "$BUILD/utlscli.elf" "$BUILD/utlscli.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/utlscli.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/utlscli.bin" "$BUILD/utlscli.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/utlscli.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/utlscli.bin" "$GEN/utlscli_img.c" "utlscli_img" 1048576 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed utlscli_img"; exit 1; }
+echo "USER: utlscli.elf entry=$ENTRY ok"
+
 # --- 1e. user program qabot (Qabot harness Q1): ReAct loop + mock provider. ---
 echo "BUILD user program qabot"
 for f in history tools policy provider loop eventlog main; do
@@ -243,12 +319,12 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp qabot; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }
 done
-echo "MD: *_img.o ok (12 programs)"
+echo "MD: *_img.o ok (14 programs)"
 
 # --- 3. link ---
 MI_OBJS=$(find "$OBJ" -name '*.o' | sort)
@@ -267,3 +343,4 @@ else
     echo "LINK FAILED (see $LOG)"
     exit 1
 fi
+exit 0
