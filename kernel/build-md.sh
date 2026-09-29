@@ -50,7 +50,7 @@ clang $UCFLAGS -c "$USR/udiv.c" -o "$BUILD/udiv.o" >>"$LOG" 2>&1 || \
 # shellcheck disable=SC2086
 clang $UCFLAGS -c "$USR/hello.c" -o "$BUILD/hello.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/hello.c (see $LOG)"; exit 1; }
-for prog in init ucat uls uecho umon ugpio usd ufs; do
+for prog in init ucat uls uecho umon ugpio usd ufs sh; do
     # shellcheck disable=SC2086
     clang $UCFLAGS -c "$USR/$prog.c" -o "$BUILD/$prog.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/$prog.c (see $LOG)"; exit 1; }
