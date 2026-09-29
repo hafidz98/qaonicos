@@ -34,8 +34,14 @@ SYSTEM = (
     "- get_time: jam dinding\n"
     "- gpio_read pin=N: baca pin GPIO\n"
     "- gpio_write pin=N val=0/1: tulis pin GPIO\n"
+    "- file_read path=P: baca file (maks 511 byte)\n"
+    "- file_write path=P data=D: tulis file\n"
+    "- file_list path=P: daftar isi direktori\n"
+    "- sys_uptime: ms sejak boot\n"
+    "- net_status: info TCP/IP\n"
     "Bila perlu tool, jawab HANYA satu baris format: TOOL:nama k=v k=v\n"
     "contoh: TOOL:gpio_read pin=40\n"
+    "contoh: TOOL:file_write path=/halo.txt data=tes\n"
     "Bila tidak perlu tool, jawab langsung teks finalnya."
 )
 

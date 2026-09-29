@@ -253,5 +253,11 @@ qb_parse_response(const char *body, struct qb_toolcall *tc,
 	}
 	if (!json_get_string(body, "content", final_out, flen))
 		return -1;
+	/* Proxy Horde menaruh "TOOL:..." di content (bukan tool_calls JSON).
+	 * Kenali prefix-nya agar loop mengeksekusi tool. */
+	if (qb_starts(final_out, "TOOL:")) {
+		if (qb_parse_toolcall(final_out, tc) == 0)
+			return 1;
+	}
 	return 0;
 }

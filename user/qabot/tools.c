@@ -110,6 +110,128 @@ tool_gpio_write(struct qb_toolcall *tc, char *out, unsigned outlen)
 	return 0;
 }
 
+/* Q7: file_read path=P (AMAN). Baca file dari FAT (maks 511 byte). */
+static int
+tool_file_read(struct qb_toolcall *tc, char *out, unsigned outlen)
+{
+	const char	*pp;
+	static char	buf[512];
+	int		n;
+
+	pp = qb_arg(tc, "path");
+	if (!pp) {
+		qb_snprintf(out, outlen, "error: arg path hilang");
+		return -1;
+	}
+	n = sys_fat_read(pp, buf, sizeof(buf) - 1);
+	if (n < 0) {
+		qb_snprintf(out, outlen, "error: baca %s gagal", pp);
+		return -1;
+	}
+	buf[n] = 0;
+	qb_snprintf(out, outlen, "path=%s bytes=%d", pp, n);
+	/* Sambung data (dibatasi outlen). */
+	{
+		unsigned	i = 0, j = 0;
+		while (out[i])
+			i++;
+		if (i + 7 < outlen) {
+			const char	*sep = " data=";
+			while (*sep && i + 1 < outlen)
+				out[i++] = *sep++;
+			while (j < (unsigned)n && i + 1 < outlen)
+				out[i++] = buf[j++];
+			out[i] = 0;
+		}
+	}
+	return 0;
+}
+
+/* Q7: file_write path=P data=D (KONFIRMASI). Tulis file ke FAT. */
+static int
+tool_file_write(struct qb_toolcall *tc, char *out, unsigned outlen)
+{
+	const char	*pp, *dp;
+	unsigned	dlen;
+	int		n;
+
+	pp = qb_arg(tc, "path");
+	dp = qb_arg(tc, "data");
+	if (!pp || !dp) {
+		qb_snprintf(out, outlen, "error: arg path/data hilang");
+		return -1;
+	}
+	for (dlen = 0; dp[dlen]; dlen++)
+		;
+	n = sys_fat_write(pp, dp, dlen);
+	if (n < 0) {
+		qb_snprintf(out, outlen, "error: tulis %s gagal", pp);
+		return -1;
+	}
+	qb_snprintf(out, outlen, "path=%s bytes=%d ok", pp, n);
+	return 0;
+}
+
+/* Q7: file_list path=P (AMAN). Daftar isi direktori FAT. */
+static int
+tool_file_list(struct qb_toolcall *tc, char *out, unsigned outlen)
+{
+	const char	*pp;
+	static char	buf[512];
+	int		n;
+
+	pp = qb_arg(tc, "path");
+	if (!pp)
+		pp = "/";
+	n = sys_readdir(pp, buf, sizeof(buf) - 1);
+	if (n < 0) {
+		qb_snprintf(out, outlen, "error: list %s gagal", pp);
+		return -1;
+	}
+	buf[sizeof(buf) - 1] = 0;
+	qb_snprintf(out, outlen, "path=%s count=%d", pp, n);
+	{
+		unsigned	i = 0, j = 0;
+		while (out[i])
+			i++;
+		if (i + 8 < outlen) {
+			const char	*sep = " files=";
+			while (*sep && i + 1 < outlen)
+				out[i++] = *sep++;
+			while (buf[j] && i + 1 < outlen)
+				out[i++] = buf[j++];
+			out[i] = 0;
+		}
+	}
+	return 0;
+}
+
+/* Q7: sys_uptime (AMAN). Ms sejak boot. */
+static int
+tool_sys_uptime(struct qb_toolcall *tc, char *out, unsigned outlen)
+{
+	unsigned	ms;
+
+	(void)tc;
+	ms = sys_uptime();
+	qb_snprintf(out, outlen, "uptime_ms=%u uptime_s=%u", ms, ms / 1000u);
+	return 0;
+}
+
+/* Q7: net_status (AMAN). Info TCP/IP. */
+static int
+tool_net_status(struct qb_toolcall *tc, char *out, unsigned outlen)
+{
+	int		st;
+
+	(void)tc;
+	st = sys_tcp_status();
+	/* Jaringan via slirp QEMU: guest 10.0.2.15, gateway/host 10.0.2.2. */
+	qb_snprintf(out, outlen, "ip=10.0.2.15 gw=10.0.2.2 tcp_status=%d",
+	    st);
+	return 0;
+}
+
 static const struct qb_tooldef qb_tools[] = {
 	{ "get_info",	"statistik sistem (uptime, memori)",
 	  QB_RISK_SAFE,		tool_get_info },
@@ -119,6 +241,16 @@ static const struct qb_tooldef qb_tools[] = {
 	  QB_RISK_SAFE,		tool_gpio_read },
 	{ "gpio_write",	"tulis pin GPIO (arg: pin=N val=0/1)",
 	  QB_RISK_CONFIRM,	tool_gpio_write },
+	{ "file_read",	"baca file FAT (arg: path=P)",
+	  QB_RISK_SAFE,		tool_file_read },
+	{ "file_write",	"tulis file FAT (arg: path=P data=D)",
+	  QB_RISK_CONFIRM,	tool_file_write },
+	{ "file_list",	"daftar isi direktori FAT (arg: path=P)",
+	  QB_RISK_SAFE,		tool_file_list },
+	{ "sys_uptime",	"ms sejak boot",
+	  QB_RISK_SAFE,		tool_sys_uptime },
+	{ "net_status",	"info TCP/IP (ip, gateway, status tcp)",
+	  QB_RISK_SAFE,		tool_net_status },
 };
 
 unsigned

@@ -10,7 +10,7 @@
 /* Batas statis. */
 #define QB_HIST_MAX	24	/* pesan dalam history */
 #define QB_MSG_MAX	256	/* byte per pesan */
-#define QB_TOOLS_MAX	8
+#define QB_TOOLS_MAX	10
 #define QB_ARGS_MAX	4
 #define QB_ARGK_MAX	16
 #define QB_ARGV_MAX	48
