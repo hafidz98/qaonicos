@@ -55,6 +55,8 @@ extern unsigned char	usd_img[];
 extern unsigned int	usd_img_len;
 extern unsigned char	ufs_img[];
 extern unsigned int	ufs_img_len;
+extern unsigned char	utimeset_img[];	/* F2: regression test TIME_SET/GET */
+extern unsigned int	utimeset_img_len;
 extern unsigned char	face_img[];	/* App A1/A2: Qabot server */
 extern unsigned int	face_img_len;
 extern unsigned char	sh_img[];	/* Q9: shell qaon> */
@@ -1508,6 +1510,7 @@ static struct uprog_image uprogs[] = {
 	{ "ugpio", ugpio_img, &ugpio_img_len, 1u },
 	{ "usd",   usd_img,   &usd_img_len,   1u },
 	{ "ufs",   ufs_img,   &ufs_img_len,   1u },
+	{ "utimeset", utimeset_img, &utimeset_img_len, 1u },	/* F2: time regression */
 	{ "qabot", qabot_img, &qabot_img_len, 1u },	/* Q1: harness, one-shot */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))
@@ -1518,7 +1521,7 @@ static struct uprog_image daemon_images[] = {
 	{ "uiapp", uiapp_img, &uiapp_img_len, 1u },	/* progid 1: menu */
 	/* { "ntp",   ntp_img,   &ntp_img_len,   1u }, */	/* Nonaktif sementara Q2b: UDP sandbox blokir, ganggu timing */
 	/* { "utcpcli", utcpcli_img, &utcpcli_img_len, 1u }, */	/* Nonaktif: tcc hanya 1 koneksi (race dengan utlscli). Aktifkan untuk uji Q2a saja. */
-	/* { "utlscli", utlscli_img, &utlscli_img_len, 8u }, */	/* Nonaktif Q2c: tcc 1 koneksi */
+	/* { "utlscli", utlscli_img, &utlscli_img_len, 8u }, */	/* Nonaktif Q2c/F2: tcc 1 koneksi; aktifkan sementara untuk uji TLS */
 	{ "qabotd", qabotd_img, &qabotd_img_len, 8u },	/* progid 2: Qabot daemon persisten (Q4) */
 	{ "sh", sh_img, &sh_img_len, 1u },	/* progid 3: shell qaon> (Q9) */
 

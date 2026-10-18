@@ -14,22 +14,31 @@ Respons HTTP tanpa FIN menetes lambat/parsial di guest. Root cause di
 "tanpa keep-alive" sebagai limitasi resmi.
 
 ## 2. sys_time_set (TIME_GET < TIME_SET)
-**Status:** BUTUH VERIFIKASI RUNTIME.
+**Status:** RESOLVED — BUG TIDAK TERBUKTI ADA (2026-10-18, F2).
 
-Laporan App A4: `TIME_GET` kembali `0x6abba840` setelah
-`TIME_SET(0x6abf5a00)` (selisih ~51 hari — bukan error pembulatan).
+Investigasi F2: inspeksi kernel (`user.c`: `time_unix_set = a0`,
+`TIME_GET = set + dt/100`), wrapper ulib, daemon NTP, dan
+`arm_timer_ticks()` (100 Hz) — semua benar. Regression test baru
+`user/utimeset.c` (one-shot, jalan tiap boot): `TIME_SET(X)` →
+`TIME_GET == X` bit-exact untuk 3 nilai known-good
+(`0x6abf5a00`, `1790683200`, `0x12345678`) — **UTIMESET: PASS**.
 
-Inspeksi kode (`kernel/kernel/arm/user.c:780-791`):
-- `time_unix_set = a0` (unsigned, langsung)
-- `TIME_GET = time_unix_set + (ticks_now - ticks_set)/100`
-- `arm_timer_ticks()` = 100 Hz (terdokumentasi di http.c)
+Root cause laporan: kemungkinan salah catat heksadesimal.
+`1790683200` (FAKE_NOW yang dipakai uji Q2b) = **`0x6abba840` persis** —
+digit yang sama dengan "nilai salah" di laporan. Tidak ada bug di
+syscall; tidak ada perbaikan kode yang dibutuhkan selain pencabutan
+bypass.
 
-Kode terlihat benar untuk aritmetika unsigned. Kandidat:
-- `sys_display_simple(69u, ...)` di ulib memotong argumen, atau
-- NTP daemon salah panggil, atau
-- korupsi memori di sekitar `time_unix_set`.
+**Perubahan F2:**
+- `user/tls/tls_port.c`: bypass hardcode `1790683200L` di
+  `tls_time_get()` DICABUT — kini pakai `sys_time_get()` beneran.
+- Verifikasi: `UTLSCLI: PASS` (handshake TLS 1.2 vs `openssl s_server`,
+  validasi cert penuh via jalur jam real). Upaya pertama FAIL timeout
+  (flaky TCP, lihat §1), retry bersih PASS.
+- `user/utimeset.c`: regression test permanen (one-shot tiap boot).
 
-**Target:** uji runtime dengan nilai known-good, trace a0 di syscall.
+**Sisa:** uji end-to-end daemon NTP tak bisa di sandbox (UDP diblokir) —
+perlu verifikasi di lingkungan dengan jaringan real.
 
 ## 3. mbedtls_strerror hang
 **Status:** DIPERBAIKI (2026-09-29).

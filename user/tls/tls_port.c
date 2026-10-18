@@ -433,9 +433,9 @@ tls_assert_fail(const char *expr, const char *file, int line)
 long
 tls_time_get(long *t)
 {
-	/* Q2b SEMENTARA: bypass sys_time_get (syscall TIME_SET bermasalah);
-	 * pakai waktu fixed dalam masa berlaku cert (2026-09-29 s/d 2036). */
-	long now = 1790683200L;	/* 2026-09-29 12:00 UTC */
+	/* F2 (2026-10-18): sys_time_set/get terverifikasi benar via UTIMESET
+	 * (regression test, PASS 3/3 nilai known-good). Bypass Q2b dicabut. */
+	long now = (long)sys_time_get();
 
 	if (t != 0)
 		*t = now;

@@ -67,10 +67,18 @@ atau korupsi memori di sekitar `time_unix_set`.
   validity window-nya ketat (menolak jika jam meleset > 1 hari).
 
 **Kriteria selesai F2:**
-- [ ] `TIME_SET(X)` → `TIME_GET` == X (uji known-good, 3 nilai)
-- [ ] Handshake TLS lolos dengan cert validity ketat (tanpa hardcode waktu)
-- [ ] NTP daemon (A4) sinkronisasi jam benar ujung-ke-ujung
-- [ ] `UTANG-TEKNIS.md` §2 di-update: RESOLVED
+- [x] `TIME_SET(X)` → `TIME_GET` == X (uji known-good, 3 nilai) — DONE
+      2026-10-18: `user/utimeset.c` (one-shot tiap boot), UTIMESET: PASS 3/3.
+      Temuan: bug yang dilaporkan kemungkinan tidak pernah ada
+      (`1790683200` = `0x6abba840` persis — salah catat heksadesimal di
+      laporan). Tidak ada perbaikan kernel yang dibutuhkan.
+- [x] Handshake TLS lolos dengan cert validity ketat (tanpa hardcode waktu)
+      — DONE 2026-10-18: bypass `1790683200L` di `tls_time_get()` dicabut,
+      `UTLSCLI: PASS` via jalur jam real (upaya pertama FAIL timeout flaky,
+      retry bersih PASS).
+- [ ] NTP daemon (A4) sinkronisasi jam benar ujung-ke-ujung — TERBATAS:
+      tak bisa di sandbox (UDP diblokir); perlu lingkungan dengan jaringan real.
+- [x] `UTANG-TEKNIS.md` §2 di-update: RESOLVED
 
 ## 4. F3 — Audio input: riset + rencana driver
 
