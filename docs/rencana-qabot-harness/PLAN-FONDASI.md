@@ -103,10 +103,15 @@ untuk STT** — cocok.
 5. Tulis `docs/riset-audio-rv1103/` (RINGKASAN + rencana driver).
 
 **Kriteria selesai F3:**
-- [ ] Dokumen riset lengkap: register map, clock, jalur DMA, desain syscall
-- [ ] Rencana driver per tahap (bawa ke plan implementasi terpisah)
-- [ ] Keputusan tercatat: on-device STT (Moonshine/whisper.cpp tiny) vs
-      streaming mentah ke cloud (butuh F1 selesai untuk streaming stabil)
+- [x] Dokumen riset lengkap: register map, clock, jalur DMA, desain syscall
+      — DONE 2026-10-18: `docs/riset-audio-rv1103/RINGKASAN.md`. Offset
+      register diverifikasi dari `rv1106_codec.h` (offset TRM V0.3 tidak
+      cocok dengan driver shipping).
+- [x] Rencana driver per tahap (D1–D4, fase implementasi terpisah)
+- [x] Keputusan tercatat: **streaming mentah ke cloud via ESP32-C6**
+      (bukan on-device STT — 64 MB tidak realistis)
+- Caveat: pin mic kemungkinan unconnected di board Pico Mini —
+  verifikasi fisik sebelum implementasi driver.
 
 **Catatan:** implementasi driver audio = fase tersendiri setelah riset ini
 disetujui — jangan langsung coding driver di fase fondasi.
@@ -163,3 +168,4 @@ F1 ke backlog.
 
 **Kriteria selesai fase:** F2–F5 checklist hijau + `UTANG-TEKNIS.md` bersih
 dari item "butuh investigasi" (kecuali F1 yang pindah ke backlog).
+**STATUS 2026-10-18: FASE SELESAI** — F1 backlog, F2/F3/F4/F5 done.
