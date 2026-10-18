@@ -95,14 +95,29 @@ Tahapan (detail implementasi = plan terpisah setelah v2 freeze):
    STT (pola: chunked POST atau WebSocket).
 3. **FW-3:** evaluasi gabung Muse Gadget SDK (BLE pairing) satu firmware.
 
-## 7. Open questions
+## 7. Open questions — TERJAWAB 2026-10-18
 
-1. Baud maksimum UART RV1103 yang stabil (butuh 921600)? — cek TRM/clock tree.
-2. Satu firmware gabungan (network + gadget) vs dua peran terpisah di C6?
-   (Kendala SRAM tanpa PSRAM — ukur footprint NimBLE + TLS + WiFi.)
-3. Pin UART mana di Pico Mini untuk link RV1103↔C6? — cek skematik.
-4. Mic tetap di RV1103 (codec built-in, F3) atau pindah ke I2S C6?
-   Rekomendasi sementara: tetap RV1103 (sudah ada codec + MICBIAS).
+1. **Baud maksimum UART RV1103? → TERJAWAB: ya, 921600 didukung.**
+   Datasheet §1.x: 4 UART (UART2–UART5), *"up to 4Mbps baud rate"*,
+   *"auto flow control mode for all UART"*. 921600 aman; **pakai RTS/CTS**
+   untuk streaming audio (tersedia di UART4_M1 / UART5_M0_M1).
+2. **Satu firmware vs dua peran? → TERJAWAB: satu firmware, tunnel mati.**
+   Bukti: overlay C6 SDK Muse sendiri menonaktifkan `HOMEHUB_TUNNEL`
+   (BLE+Tunnel+TLS > SRAM). Kebutuhan kita (WiFi + TLS/HTTP client + UART +
+   NimBLE gadget, tanpa tunnel) muat di 512 KB — tapi **ukur footprint saat
+   build FW-3**, itu gate-nya.
+3. **Pin UART di Pico Mini? → TERJAWAB: tersedia di header.**
+   Board: 2× header 11-pin + castellated holes, hingga **17 GPIO, 4× UART**,
+   5V/3V3/1V8/GND
+   ([CNX](http://cnx-software.com/2024/08/16/luckfox-pico-mini-tiny-arm-linux-camera-board-rockchip-rv1103-64mb-ram/)).
+   Rekomendasi: **UART2 = debug console** (tetap), **UART4/UART5 = link ke
+   ESP32-C6** (dengan RTS/CTS). Bonus temuan: ada **5 castellated holes
+   untuk Ethernet** (pin FEPHY) — opsi kabel tetap ada secara fisik bila
+   suatu hari dibutuhkan, tapi keputusan C6 tidak berubah.
+4. **Mic di RV1103 atau C6? → TERJAWAB: tetap RV1103.**
+   Codec built-in + pin MICBIAS sudah di skematik; 16 kHz native; pindah ke
+   I2S C6 butuh chip mic/codec eksternal (tambah BOM) tanpa keuntungan
+   arsitektur. F3 tetap.
 
 ## 8. Langkah berikutnya (checklist F5)
 
