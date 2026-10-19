@@ -107,11 +107,13 @@ Tahapan (detail implementasi = plan terpisah setelah v2 freeze):
    NimBLE gadget, tanpa tunnel) muat di 512 KB — tapi **ukur footprint saat
    build FW-3**, itu gate-nya.
 3. **Pin UART di Pico Mini? → TERJAWAB: tersedia di header.**
-   Board: 2× header 11-pin + castellated holes, hingga **17 GPIO, 4× UART**,
-   5V/3V3/1V8/GND
-   ([CNX](http://cnx-software.com/2024/08/16/luckfox-pico-mini-tiny-arm-linux-camera-board-rockchip-rv1103-64mb-ram/)).
-   Rekomendasi: **UART2 = debug console** (tetap), **UART4/UART5 = link ke
-   ESP32-C6** (dengan RTS/CTS). Bonus temuan: ada **5 castellated holes
+   **KOREKSI 2026-10-19** (wiki resmi Luckfox): Pico Mini A/B hanya
+   expose **3 UART: UART2, UART3, UART4** (UART2 = debug console).
+   UART5 hanya ada di **Pico Plus**, tidak di-routing di Mini.
+   Klaim "4× UART" sebelumnya = capability chip RV1103, bukan board.
+   Rekomendasi revisi: **UART2 = debug console** (tetap),
+   **UART4 = link ke ESP32-C6** (dengan RTS/CTS; UART3 cadangan).
+   Bonus temuan: ada **5 castellated holes
    untuk Ethernet** (pin FEPHY) — opsi kabel tetap ada secara fisik bila
    suatu hari dibutuhkan, tapi keputusan C6 tidak berubah.
 4. **Mic di RV1103 atau C6? → TERJAWAB: tetap RV1103.**
