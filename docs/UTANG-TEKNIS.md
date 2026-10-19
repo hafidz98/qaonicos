@@ -76,27 +76,31 @@ kunci sesi TLS dapat diprediksi.
 TLS hanya untuk uji/QEMU, bukan produksi.
 
 ## 5. ufs mkdir FAIL (filesystem)
-**Status:** BUG AKTIF — ditemukan 2026-10-19 via boot log.
+**Status:** BUG AKTIF — ditemukan 2026-10-19 via boot log. Investigasi parsial.
 
-`user/ufs.c` (test filesystem): perintah `mkdir <path>` dari `/fat.cmd`
-gagal — `u_mkdir()` return non-zero. Juga `ufs FAIL: eksekusi perintah`.
+`user/ufs.c` (test filesystem): perintah `mkdir /sd/T` dari `/fat.cmd`
+gagal — `u_mkdir()` → `sys_mkdir()` → `fat32_mkdir()` return non-zero.
 
 **Dampak:** shell `qaon>` perintah `ls`/`cat` juga gagal baca filesystem
 (`ls: gagal`, `cat: baca gagal`). Filesystem FAT tidak bisa dimodifikasi
 via shell.
 
-**Target:** investigasi `u_mkdir` di driver FAT; kemungkinan bug di
-alokasi cluster/entri direktori.
+**Investigasi 2026-10-19:**
+- `split_path("/sd/T")` — logika benar (parent=m_root, leaf="T").
+- Kandidat gagal: `alloc_cluster()` (return 0) atau `create_entry()`.
+- Perlu: instrumentasi `fat32_mkdir` untuk identifikasi titik gagal persis.
+
+**Target:** instrumentasi + perbaiki `fat32_mkdir`/`alloc_cluster`.
 
 ## 6. QABOT S2 FAIL (test expectation usang)
-**Status:** BUG TEST — ditemukan 2026-10-19, bukan bug fungsional.
+**Status:** FIXED 2026-10-19 (commit 29b595c).
 
 Skenario S2 (`user/qabot/main.c`): ekspektasi `confirm: auto-yes`, tapi
 kode (`policy.c`) mencetak `confirm: ya (mode uji)`. Eksekusi
 `gpio_write` sendiri BERHASIL (`exec: gpio_write -> pin=5 val=1 ok`).
 
-**Target:** update ekspektasi test ke string baru, atau standarkan format
-pesan konfirmasi.
+**Perbaikan:** update ekspektasi test ke string baru. Verifikasi:
+`QABOT: 3/3 PASS`.
 
 ## 7. Panic boot dengan virtio-gpu
 **Status:** BUG AKTIF — ditemukan 2026-10-19 via capture GUI.
