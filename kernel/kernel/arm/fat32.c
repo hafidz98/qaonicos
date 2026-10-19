@@ -490,8 +490,12 @@ int fat32_mkdir(const char *path)
         return -1;
     if (split_path(path, &parent, leaf, &is_root) != 0 || is_root)
         return -1;
-    if (find_in_dir(parent, leaf, e, &sec, &off) == 0)
-        return -1;                      /* sudah ada */
+    if (find_in_dir(parent, leaf, e, &sec, &off) == 0) {
+        /* Sudah ada: sukses idempoten bila direktori, gagal bila file. */
+        if (e[DE_ATTR] & ATTR_DIR)
+            return 0;
+        return -1;
+    }
     cl = alloc_cluster();
     if (cl == 0u)
         return -1;
