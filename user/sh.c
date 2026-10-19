@@ -130,17 +130,17 @@ sh_atou(const char *s)
 static void
 bi_help(void)
 {
-	sh_puts("perintah:\n");
-	sh_puts("  help            daftar perintah\n");
-	sh_puts("  ls [path]       daftar isi direktori (/ -> /sd)\n");
-	sh_puts("  cat <path>      tampilkan isi file (/motd.txt, /sd/...)\n");
-	sh_puts("  gpio get <pin>  baca pin GPIO\n");
-	sh_puts("  gpio set <pin> <0/1> tulis pin GPIO\n");
-	sh_puts("  time            jam dinding (0=belum NTP)\n");
-	sh_puts("  uptime          ms sejak boot\n");
-	sh_puts("  face <0-7> [teks] set ekspresi wajah\n");
-	sh_puts("  qabot           info daemon Qabot\n");
-	sh_puts("  run <path>      jalankan program (Q9 spawn)\n");
+	sh_puts("commands:\n");
+	sh_puts("  help            list commands\n");
+	sh_puts("  ls [path]       list directory (/ -> /sd)\n");
+	sh_puts("  cat <path>      show file contents (/motd.txt, /sd/...)\n");
+	sh_puts("  gpio get <pin>  read GPIO pin\n");
+	sh_puts("  gpio set <pin> <0/1> write GPIO pin\n");
+	sh_puts("  time            wall clock (0=no NTP yet)\n");
+	sh_puts("  uptime          ms since boot\n");
+	sh_puts("  face <0-7> [text] set face expression\n");
+	sh_puts("  qabot           Qabot daemon info\n");
+	sh_puts("  run <path>      run program (Q9 spawn)\n");
 }
 
 static void
@@ -159,7 +159,7 @@ bi_ls(void)
 	if (n < 0) {
 		sh_puts("ls: '");
 		sh_puts(pp);
-		sh_puts("' gagal (coba /sd)\n");
+		sh_puts("' failed (try /sd)\n");
 		return;
 	}
 	buf[sizeof(buf) - 1u] = 0;
@@ -181,7 +181,7 @@ bi_cat(void)
 	int		fd, n;
 
 	if (sh_argc < 2) {
-		sh_puts("cat: butuh path (cth: cat /motd.txt, cat /sd/T/A.BIN)\n");
+		sh_puts("cat: need path (e.g. cat /motd.txt, cat /sd/T/A.BIN)\n");
 		return;
 	}
 	/* Coba FS memori dulu (untuk /motd.txt dkk), lalu FAT (/sd/...). */
@@ -190,7 +190,7 @@ bi_cat(void)
 		n = sys_read(fd, buf, sizeof(buf) - 1u);
 		sys_close(fd);
 		if (n < 0) {
-			sh_puts("cat: baca gagal\n");
+			sh_puts("cat: read failed\n");
 			return;
 		}
 		buf[n] = 0;
@@ -204,7 +204,7 @@ bi_cat(void)
 	if (n < 0) {
 		sh_puts("cat: '");
 		sh_puts(sh_argv[1]);
-		sh_puts("' tidak ditemukan\n");
+		sh_puts("' not found\n");
 		return;
 	}
 	buf[n] = 0;
@@ -337,7 +337,7 @@ _start(void)
 	sys_console_takeover();	/* Q9: sh pemilik eksklusif console */
 	sh_puts("\n");
 	sh_puts("QaonicOS ready. CLI mode.\n");
-	sh_puts("Ketik 'help' untuk daftar perintah.\n");
+	sh_puts("Type 'help' for commands.\n");
 	sh_puts("\n");
 	/* Q9 self-test: spawn embed:uls, verifikasi exit code. */
 	{

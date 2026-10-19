@@ -93,7 +93,7 @@ if read_until(b"qaon> ") is None:
 print("got prompt, testing commands...", flush=True)
 
 results = []
-results.append(cmd("help", "daftar perintah"))
+results.append(cmd("help", "list commands"))
 results.append(cmd("uptime", "uptime"))
 results.append(cmd("time", "20"))
 results.append(cmd("ls", "/sd:"))
