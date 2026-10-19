@@ -46,22 +46,29 @@ path* (write → readback cocok), bukan silikon. Verifikasi silikon = H4.
   CTL2=0xa0, CTL3=0x33, CTL6=0xff — semua sesuai bit-def driver).
   Syscall baru: `SYS_AUDIO_INIT` (82), `SYS_AUDIO_REG` (83).
 
-### D2 — I2S RX + DMA ch 21 + ring buffer
-- I2S base `0xFFAE0000`; DMA RX channel 21.
-- Ring buffer kernel 8 KB (pola TCP RX Q2a); `SYS_AUDIO_READ`
-  blocking + timeout ala `tls_bio.c`.
-- Verifikasi QEMU: terbatas (tanpa model ACODEC); target hardware:
-  capture 10 dtk = 320000 byte.
+### D2 — I2S RX + ring buffer + SYS_AUDIO_READ ✅ SELESAI 2026-10-19
+- I2S0 base `0xFFAE0000`; RXCR=0x04 (16-bit, I2S, 2ch, right-justified),
+  XFER=0x1c, CLR=0x20, RXDR=0x28, RXFIFOLR=0x2c.
+- **PIO** (poll RXFIFOLR + baca RXDR); DMA PL330 ch 21 = D2b follow-up.
+- Ring buffer 8 KB; `SYS_AUDIO_START` (84), `SYS_AUDIO_READ` (85,
+  blocking+timeout di ulib), `SYS_AUDIO_STOP` (86).
+- Test `uaudiocap`: `UAUDIOCAP: PASS` (4096 byte, pola terverifikasi).
+- TODO(H4): CKR divider butuh MCLK aktual dari CRU.
 
-### D3 — START/STOP + gain + overrun counter
-- `SYS_AUDIO_START(16000,16,1)`, `SYS_AUDIO_STOP()`, gain
-  (`init-mic-gain` 0x22 = 20+20 dB, range 0–48 dB), overrun counter.
-- Verifikasi: H4.1.
+### D3 — START/STOP + gain + overrun counter ✅ SELESAI 2026-10-19
+- `SYS_AUDIO_GAIN` (87): level 0=0dB, 1=12dB, 2=20dB → ANA_CTL2.
+- `SYS_AUDIO_OVERRUN` (88): baca overrun counter.
+- Test `uaudiogain`: `UAUDIOGAIN: PASS`.
 
-### D4 — VOICE.START → uplink C6
-- Integrasi protokol v2 F5: `VOICE.START` → streaming frame `AUD`
-  biner via UART 921600 ke ESP32-C6.
-- Verifikasi: H4.2.
+### D4 — VOICE.START → uplink C6 ✅ SELESAI 2026-10-19 (QEMU)
+- Frame AUD: `[AUD len(2B BE) payload(PCM16 LE) crc16(2B BE)]`,
+  CRC-16-CCITT atas magic+len+payload (F5 §5).
+- `uproto_voice_start/stop`, `uproto_aud_frame` di `user/uartproto/`;
+  mock co-MCU: handler `VOICE.START/STOP` + validator frame
+  (`mock_comcu_aud`).
+- Test `uvoice`: 8 frame terkirim, mock hitung cocok →
+  `UVOICE: PASS`.
+- Verifikasi hardware (uplink real ke C6): H4.2.
 
 ## Kriteria selesai keseluruhan
 - D1–D3: kode + test boot di QEMU (PASS via virtual reg file).

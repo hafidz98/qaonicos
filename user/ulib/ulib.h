@@ -144,6 +144,15 @@ int	sys_tcp_close(void);
 int	sys_audio_init(void);
 unsigned	sys_audio_reg(unsigned off);
 
+/* D2: I2S RX capture (84/85/86). */
+int	sys_audio_start(unsigned rate, unsigned bits, unsigned ch);
+int	sys_audio_read(void *buf, unsigned len, unsigned timeout_ms);
+int	sys_audio_stop(void);
+
+/* D3: gain + overrun (87/88). */
+int	sys_audio_gain(unsigned level);
+unsigned	sys_audio_overrun(void);
+
 /* Q4: ekspresi wajah Qabot. expr 0..7 (face_expr_t); text = status
  * kustom ("" = default face) atau NULL. Ambil: 0=ada, -1=tak ada. */
 int	sys_face_expr(unsigned expr, const char *text);

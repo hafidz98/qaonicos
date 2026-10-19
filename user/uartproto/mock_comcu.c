@@ -261,6 +261,10 @@ kv_free(void)
 	return -1;
 }
 
+/* --- Data plane: penerima frame AUD (D4) --- */
+static unsigned voice_frames;
+static int voice_active;
+
 int
 mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 {
@@ -470,5 +474,71 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 	if (scmp(tx, "FIDO.LIST") == 0)
 		return ok1("0", rx, rsz);
 
+	/* --- VOICE (protokol v2, D4) --- */
+	if (scmp(tx, "VOICE.START 16000 16") == 0) {
+		voice_frames = 0u;
+		voice_active = 1;
+		return ok1("", rx, rsz);
+	}
+	if (scmp(tx, "VOICE.STOP") == 0) {
+		char nbuf[16];
+		unsigned i = 0u, v = voice_frames;
+
+		voice_active = 0;
+		do {
+			nbuf[i++] = (char)('0' + v % 10u);
+			v /= 10u;
+		} while (v && i + 1 < sizeof(nbuf));
+		nbuf[i] = 0;
+		{
+			unsigned j;
+			for (j = 0u; j < i / 2u; j++) {
+				char t = nbuf[j];
+				nbuf[j] = nbuf[i - 1u - j];
+				nbuf[i - 1u - j] = t;
+			}
+		}
+		return ok1(nbuf, rx, rsz);
+	}
+
 	return err("UNKNOWN", rx, rsz);
+}
+
+/* --- Data plane: penerima frame AUD (D4), lanjutan --- */
+
+static unsigned
+mock_crc16(const unsigned char *p, unsigned len)
+{
+	unsigned crc = 0xffffu;
+	unsigned i, j;
+
+	for (i = 0u; i < len; i++) {
+		crc ^= (unsigned)p[i] << 8;
+		for (j = 0u; j < 8u; j++)
+			crc = (crc & 0x8000u) ? (crc << 1) ^ 0x1021u :
+			    crc << 1;
+	}
+	return crc & 0xffffu;
+}
+
+int
+mock_comcu_aud(const unsigned char *frame, unsigned flen)
+{
+	unsigned len, crc, expect;
+
+	if (!voice_active)
+		return -1;
+	if (flen < 7u)
+		return -1;
+	if (frame[0] != 'A' || frame[1] != 'U' || frame[2] != 'D')
+		return -1;
+	len = ((unsigned)frame[3] << 8) | frame[4];
+	if (flen != 5u + len + 2u)
+		return -1;
+	crc = ((unsigned)frame[5u + len] << 8) | frame[5u + len + 1u];
+	expect = mock_crc16(frame, 5u + len);
+	if (crc != expect)
+		return -1;
+	voice_frames++;
+	return 0;
 }

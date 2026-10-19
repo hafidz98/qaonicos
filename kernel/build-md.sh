@@ -65,7 +65,7 @@ clang $UCFLAGS -c "$USR/udiv.c" -o "$BUILD/udiv.o" >>"$LOG" 2>&1 || \
 # shellcheck disable=SC2086
 clang $UCFLAGS -c "$USR/hello.c" -o "$BUILD/hello.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/hello.c (see $LOG)"; exit 1; }
-for prog in init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest; do
+for prog in init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest uaudiocap uaudiogain; do
     # shellcheck disable=SC2086
     clang $UCFLAGS -c "$USR/$prog.c" -o "$BUILD/$prog.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/$prog.c (see $LOG)"; exit 1; }
@@ -167,6 +167,31 @@ python3 "$USR/pad-bss.py" "$BUILD/uiapp.bin" "$BUILD/uiapp.elf" \
 python3 "$USR/embed.py" "$BUILD/uiapp.bin" "$GEN/uiapp_img.c" "uiapp_img" 65536 >>"$LOG" 2>&1 || \
     { echo "FAIL embed uiapp_img"; exit 1; }
 echo "USER: uiapp.elf entry=$ENTRY ok"
+
+# --- 1d0. user program uvoice (D4): VOICE.START + AUD uplink test. ---
+echo "BUILD user program uvoice"
+# shellcheck disable=SC2086
+clang $UCFLAGS -I"$USR" -c "$USR/uvoice.c" -o "$BUILD/uvoice.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/uvoice.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/uvoice.elf" "$BUILD/uvoice.o" \
+    "$BUILD/uartproto_uartproto.o" "$BUILD/uartproto_mock_comcu.o" \
+    "$BUILD/cfg.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/uvoice.elf (see $LOG)"; exit 1; }
+ENTRY=$("$LLVM_READELF" -h "$BUILD/uvoice.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: uvoice entry $ENTRY != 0x100000"; exit 1; }
+"$LLVM_OBJCOPY" -O binary "$BUILD/uvoice.elf" "$BUILD/uvoice.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/uvoice.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/uvoice.bin" "$BUILD/uvoice.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/uvoice.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/uvoice.bin" "$GEN/uvoice_img.c" "uvoice_img" 32768 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed uvoice_img"; exit 1; }
+echo "USER: uvoice.elf entry=$ENTRY ok"
 
 # --- 1d. user program ntp (App A4): daemon sinkron jam via NTP. ---
 echo "BUILD user program ntp"
@@ -438,7 +463,7 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }

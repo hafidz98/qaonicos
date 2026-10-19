@@ -59,6 +59,12 @@ extern unsigned char	utimeset_img[];	/* F2: regression test TIME_SET/GET */
 extern unsigned int	utimeset_img_len;
 extern unsigned char	uaudiotest_img[];	/* D1: ACODEC init + readback */
 extern unsigned int	uaudiotest_img_len;
+extern unsigned char	uaudiocap_img[];	/* D2: I2S RX capture */
+extern unsigned int	uaudiocap_img_len;
+extern unsigned char	uaudiogain_img[];	/* D3: gain + overrun */
+extern unsigned int	uaudiogain_img_len;
+extern unsigned char	uvoice_img[];	/* D4: VOICE.START + AUD uplink */
+extern unsigned int	uvoice_img_len;
 extern unsigned char	utcpkeep_img[];	/* F1 SEMENTARA: keep-alive RX test */
 extern unsigned int	utcpkeep_img_len;
 extern unsigned char	utlskeep_img[];	/* F1 SEMENTARA: TLS keep-alive RX test */
@@ -94,6 +100,12 @@ extern int	netstack_udp_recv(unsigned char *buf, unsigned maxlen,
 extern int	tcp_client_connect(unsigned int dst_ip, unsigned short dst_port);
 extern int	acodec_init(void);
 extern unsigned int	acodec_reg_read(unsigned int off);
+extern int	audio_start(unsigned int rate, unsigned int bits,
+			    unsigned int ch);
+extern int	audio_read(unsigned char *dst, unsigned int len);
+extern void	audio_stop(void);
+extern int	audio_set_mic_gain(unsigned int level);
+extern unsigned int	audio_overrun_count(void);
 extern int	tcp_client_status(void);
 extern int	tcp_client_send(const unsigned char *p, unsigned len);
 extern int	tcp_client_recv(unsigned char *buf, unsigned maxlen);
@@ -220,6 +232,11 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_CONSOLE_TAKEOVER 81u /* Q9: jadi eksklusif pembaca console */
 #define	SYS_AUDIO_INIT	82u	/* D1: acodec_init() -> 0/-1 */
 #define	SYS_AUDIO_REG	83u	/* D1: acodec_reg_read(off) -> val */
+#define	SYS_AUDIO_START	84u	/* D2: audio_start(rate,bits,ch) -> 0/-1 */
+#define	SYS_AUDIO_READ	85u	/* D2: audio_read(buf,len) -> n/0/-1 */
+#define	SYS_AUDIO_STOP	86u	/* D2: audio_stop() -> 0 */
+#define	SYS_AUDIO_GAIN	87u	/* D3: audio_set_mic_gain(level) -> 0/-1 */
+#define	SYS_AUDIO_OVERRUN 88u	/* D3: audio_overrun_count() -> n */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -1035,6 +1052,27 @@ user_syscall(struct arm_trap_frame *frame)
 	case SYS_AUDIO_REG:
 		/* D1: a0=offset byte -> nilai register. */
 		return acodec_reg_read(a0);
+	case SYS_AUDIO_START:
+		/* D2: a0=rate, a1=bits, a2=ch -> 0/-1. */
+		return (unsigned int)audio_start(a0, a1, a2);
+	case SYS_AUDIO_READ: {
+		/* D2: a0=buf, a1=len -> n/0(belum ada)/-1. */
+		int n;
+		if (a1 == 0u || a1 > 8192u || !user_range_ok(a0, a1))
+			return (unsigned int)-1;
+		n = audio_read((unsigned char *)a0, a1);
+		return (unsigned int)n;
+	}
+	case SYS_AUDIO_STOP:
+		/* D2: stop I2S RX -> 0. */
+		audio_stop();
+		return 0;
+	case SYS_AUDIO_GAIN:
+		/* D3: a0=level(0..2) -> 0/-1. */
+		return (unsigned int)audio_set_mic_gain(a0);
+	case SYS_AUDIO_OVERRUN:
+		/* D3: -> overrun counter. */
+		return audio_overrun_count();
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
 	}
@@ -1528,6 +1566,9 @@ static struct uprog_image uprogs[] = {
 	{ "ufs",   ufs_img,   &ufs_img_len,   1u },
 	{ "utimeset", utimeset_img, &utimeset_img_len, 1u },	/* F2: time regression */
 	{ "uaudiotest", uaudiotest_img, &uaudiotest_img_len, 1u },	/* D1: ACODEC */
+	{ "uaudiocap", uaudiocap_img, &uaudiocap_img_len, 1u },	/* D2: I2S RX */
+	{ "uaudiogain", uaudiogain_img, &uaudiogain_img_len, 1u },	/* D3: gain */
+	{ "uvoice", uvoice_img, &uvoice_img_len, 1u },	/* D4: VOICE uplink */
 	{ "qabot", qabot_img, &qabot_img_len, 1u },	/* Q1: harness, one-shot */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))

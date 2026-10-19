@@ -869,3 +869,102 @@ sys_audio_reg(unsigned off)
 		: "r7", "lr", "memory", "cc");
 	return ret;
 }
+
+/* D2: I2S RX + capture. */
+int
+sys_audio_start(unsigned rate, unsigned bits, unsigned ch)
+{
+	register unsigned _r0 __asm__("r0") = rate;
+	register unsigned _r1 __asm__("r1") = bits;
+	register unsigned _r2 __asm__("r2") = ch;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #84\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0), "r" (_r1), "r" (_r2)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_audio_stop(void)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r7, #86\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		:
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+/* D3: mic gain + overrun counter. */
+int
+sys_audio_gain(unsigned level)
+{
+	register unsigned _r0 __asm__("r0") = level;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #87\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+unsigned
+sys_audio_overrun(void)
+{
+	unsigned ret;
+	__asm__ volatile(
+		"mov r7, #88\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		:
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+/*
+ * sys_audio_read: blocking read with timeout (ms).
+ * Accumulates until len bytes or timeout.
+ * Returns bytes read, 0 on timeout (no data), -1 on error.
+ */
+int
+sys_audio_read(void *buf, unsigned len, unsigned timeout_ms)
+{
+	unsigned t0 = sys_uptime();
+	unsigned total = 0u;
+	int n;
+
+	if (len > 8192u)
+		return -1;
+	while (total < len) {
+		register unsigned _r0 __asm__("r0") =
+		    (unsigned)buf + total;
+		register unsigned _r1 __asm__("r1") = len - total;
+		__asm__ volatile(
+			"mov r7, #85\n\t"
+			"svc #0\n\t"
+			"mov %0, r0"
+			: "=r" (n)
+			: "r" (_r0), "r" (_r1)
+			: "r7", "lr", "memory", "cc");
+		if (n < 0)
+			return -1;
+		total += (unsigned)n;
+		if (total >= len)
+			break;
+		if (sys_uptime() - t0 >= timeout_ms)
+			break;
+		sys_yield();
+	}
+	return (int)total;
+}
