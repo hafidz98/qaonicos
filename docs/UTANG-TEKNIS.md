@@ -99,11 +99,23 @@ kode (`policy.c`) mencetak `confirm: ya (mode uji)`. Eksekusi
 `QABOT: 3/3 PASS`.
 
 ## 7. Panic boot dengan virtio-gpu
-**Status:** BUG AKTIF — ditemukan 2026-10-19 via capture GUI.
+**Status:** BUG AKTIF — investigasi parsial 2026-10-19.
 
-Boot dengan `-device virtio-gpu-device`: face jalan (`display 240x240 ok`),
-tapi kemudian `panic: data abort: pc=0x4000cbdc dfar=0x4c6c530c dfsr=0x805`
-di shell `qaon>`, lalu `halting cpu`. Boot tanpa GPU stabil.
+Boot dengan `-device virtio-gpu-device`: face jalan (`display 240x240 ok`,
+screenshot berhasil), tapi kemudian `panic: data abort: pc=0x4000cbec
+dfar=0x4c6c530c dfsr=0x805` di shell `qaon>`, lalu `halting cpu`.
+Boot tanpa GPU stabil.
 
-**Target:** investigasi akses memori di path GPU/shell; kemungkinan
-use-after-free atau mapping framebuffer yang salah.
+**Investigasi 2026-10-19:**
+- Fault di kernel mode (bukan user) — `dfar` konsisten `0x4c6c530c`
+  antar-boot, `dfsr` bit 10 set = write fault.
+- Alamat `0x4c6c530c` di luar RAM QEMU (0x40000000-0x44000000) —
+  wild pointer atau buffer overflow deterministik.
+- Bukan di path UART (`UART0_BASE=0x09000000`) atau framebuffer
+  (`gpu_backing` static, sudah terbukti jalan via screenshot).
+- **Konteks:** bug spesifik QEMU virtio-gpu. Hardware Pico Mini pakai
+  display SPI (ST7789), bukan virtio-gpu — kemungkinan tidak terdampak
+  di hardware.
+
+**Target:** debug dengan gdb stub QEMU (`-s -S`) untuk stack trace;
+atau tunda sampai hardware (verifikasi GUI di hardware pakai SPI).
