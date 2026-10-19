@@ -98,24 +98,18 @@ kode (`policy.c`) mencetak `confirm: ya (mode uji)`. Eksekusi
 **Perbaikan:** update ekspektasi test ke string baru. Verifikasi:
 `QABOT: 3/3 PASS`.
 
-## 7. Panic boot dengan virtio-gpu
-**Status:** BUG AKTIF — investigasi parsial 2026-10-19.
+## 7. GPU boot panic (virtio-gpu)
+**Status:** FIXED 2026-10-20 (commit 0ddf2df).
 
-Boot dengan `-device virtio-gpu-device`: face jalan (`display 240x240 ok`,
-screenshot berhasil), tapi kemudian `panic: data abort: pc=0x4000cbec
-dfar=0x4c6c530c dfsr=0x805` di shell `qaon>`, lalu `halting cpu`.
-Boot tanpa GPU stabil.
+**Root cause:** `SYS_DISPLAY_GET_EVENT` (65) — the face (display holder)
+drained the console via `con_getc()` even when the shell held
+`console_owner` (via `sys_console_takeover`). This caused a wild write
+to `0x4c6cd30c` (data abort, dfsr=0x805, syscall=65).
 
-**Investigasi 2026-10-19:**
-- Fault di kernel mode (bukan user) — `dfar` konsisten `0x4c6c530c`
-  antar-boot, `dfsr` bit 10 set = write fault.
-- Alamat `0x4c6c530c` di luar RAM QEMU (0x40000000-0x44000000) —
-  wild pointer atau buffer overflow deterministik.
-- Bukan di path UART (`UART0_BASE=0x09000000`) atau framebuffer
-  (`gpu_backing` static, sudah terbukti jalan via screenshot).
-- **Konteks:** bug spesifik QEMU virtio-gpu. Hardware Pico Mini pakai
-  display SPI (ST7789), bukan virtio-gpu — kemungkinan tidak terdampak
-  di hardware.
+**Fix:** when `console_owner` is set and caller != owner, return
+`evq_pop()` without draining the console.
 
-**Target:** debug dengan gdb stub QEMU (`-s -S`) untuk stack trace;
-atau tunda sampai hardware (verifikasi GUI di hardware pakai SPI).
+**Verification:** boot with virtio-gpu, no panic, `qaon>` stable.
+
+**Debug aids added:** register dump on data abort + `dbg_cur_syscall`
+tracking for future diagnosis.
