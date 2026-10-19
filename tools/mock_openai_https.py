@@ -23,6 +23,8 @@ import sys
 
 PORT = 18444
 HERE = os.path.dirname(os.path.abspath(__file__))
+# F1: --keep-alive => server tidak menutup koneksi (tanpa FIN).
+KEEP_ALIVE = "--keep-alive" in sys.argv
 CERT = os.path.join(HERE, "..", "user", "tls", "testcerts", "server.crt")
 KEY = os.path.join(HERE, "..", "user", "tls", "testcerts", "server.key")
 
@@ -91,7 +93,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # Q2c: tutup koneksi setelah respons (seperti HTTP/1.0). Keep-alive
         # murni (tanpa FIN) memicu isu timing di TCP stack guest (data
         # menetes; TODO investigasi). Untuk uji deterministik, FIN dulu.
-        self.close_connection = True
+        # F1: --keep-alive untuk menguji jalur keep-alive (tanpa FIN).
+        self.close_connection = not KEEP_ALIVE
+        # F1 debug: log TCP_INFO (retransmit, rtt) dari sisi host.
+        try:
+            import struct
+            info = self.connection.getsockopt(6, 11, 256)
+            rtx = struct.unpack_from("I", info, 84)[0]
+            rtt = struct.unpack_from("I", info, 32)[0]
+            sys.stderr.write("mock-openai: TCP_INFO rtx=%d rtt=%dus\n"
+                             % (rtx, rtt))
+        except Exception as e:
+            sys.stderr.write("mock-openai: TCP_INFO gagal: %s\n" % e)
 
 
 def main():
@@ -99,7 +112,10 @@ def main():
         if not os.path.exists(f):
             sys.stderr.write("mock-openai: cert tak ada: %s\n" % f)
             sys.exit(1)
-    httpd = socketserver.TCPServer(("127.0.0.1", PORT), Handler,
+    # F1: Threading agar koneksi mati dari run sebelumnya tidak
+    # memblokir accept() koneksi baru (single-threaded TCPServer
+    # nyangkut di recv() koneksi lama -> handshake timeout palsu).
+    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", PORT), Handler,
                                    bind_and_activate=False)
     httpd.allow_reuse_address = True
     httpd.server_bind()

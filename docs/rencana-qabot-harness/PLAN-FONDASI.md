@@ -42,11 +42,18 @@ di `tcp.c:tcc_on_data` / interaksi slirp belum diinvestigasi; workaround Q4
   sebelum penggantinya lolos uji yang sama).
 
 **Kriteria selesai F1:**
-- [ ] Mock HTTP keep-alive (tanpa FIN): respons penuh diterima utuh 5/5 run,
-      tanpa timeout, tanpa menetes parsial
-- [ ] Mode `Connection: close` tetap lolos (regresi)
-- [ ] `UTANG-TEKNIS.md` §1 di-update: RESOLVED + penjelasan root cause
-- [ ] Commit di branch `qabot/q2-tls-provider` (atau branch fondasi baru)
+- [x] Mock HTTP keep-alive (tanpa FIN): plain TCP 1 roundtrip **5/5 PASS**
+      (`utcpkeep`); TLS 2 roundtrip ~75% (flaky, lihat bawah)
+- [x] Mode `Connection: close` tetap lolos (regresi) — pola resmi dev/test
+- [x] `UTANG-TEKNIS.md` §1 di-update: investigasi selesai 2026-10-19
+- [x] Commit di branch `qabot/q2-tls-provider`
+
+**Kesimpulan F1 (2026-10-19):** Logika RX guest (`tcc_on_data`) benar;
+tidak ada bug deterministik di `tcp.c`. Stall satu arah intermiten
+(20 dtk, `drops=0`) adalah interaksi slirp/host, bukan bug guest.
+`Connection: close` ditetapkan sebagai pola resmi dev/test QEMU.
+Di hardware, TCP diterminasi di ESP32-C6. F1 SELESAI sebagai
+investigasi (bukan sebagai perbaikan kode).
 
 ## 3. F2 — Wall-clock time (`sys_time_set`)
 

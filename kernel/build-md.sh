@@ -353,6 +353,53 @@ python3 "$USR/embed.py" "$BUILD/sh.bin" "$GEN/sh_img.c" "sh_img" 32768 >>"$LOG" 
     { echo "FAIL embed sh_img"; exit 1; }
 echo "USER: sh.elf entry=$ENTRY ok"
 
+# --- 1f. user program utcpkeep (F1 SEMENTARA): TCP keep-alive RX test. ---
+echo "BUILD user program utcpkeep"
+# shellcheck disable=SC2086
+clang $UCFLAGS -c "$USR/utcpkeep.c" -o "$BUILD/utcpkeep.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/utcpkeep.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/utcpkeep.elf" "$BUILD/utcpkeep.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/utcpkeep.elf (see $LOG)"; exit 1; }
+ENTRY=$("$LLVM_READELF" -h "$BUILD/utcpkeep.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: utcpkeep entry $ENTRY != 0x100000"; exit 1; }
+"$LLVM_OBJCOPY" -O binary "$BUILD/utcpkeep.elf" "$BUILD/utcpkeep.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/utcpkeep.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/utcpkeep.bin" "$BUILD/utcpkeep.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/utcpkeep.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/utcpkeep.bin" "$GEN/utcpkeep_img.c" "utcpkeep_img" 32768 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed utcpkeep_img"; exit 1; }
+echo "USER: utcpkeep.elf entry=$ENTRY ok"
+
+# --- 1f2. user program utlskeep (F1 SEMENTARA): TLS keep-alive RX test. ---
+echo "BUILD user program utlskeep"
+# shellcheck disable=SC2086
+clang $UCFLAGS -I"$USR/tls/inc" -I"$USR/tls/mbedtls/include" \
+    -c "$USR/utlskeep.c" -o "$BUILD/utlskeep.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/utlskeep.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/utlskeep.elf" "$BUILD/utlskeep.o" "$BUILD/ca_pem.o" \
+    $TLSOBJS "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/utlskeep.elf (see $LOG)"; exit 1; }
+ENTRY=$("$LLVM_READELF" -h "$BUILD/utlskeep.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: utlskeep entry $ENTRY != 0x100000"; exit 1; }
+"$LLVM_OBJCOPY" -O binary "$BUILD/utlskeep.elf" "$BUILD/utlskeep.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/utlskeep.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/utlskeep.bin" "$BUILD/utlskeep.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/utlskeep.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/utlskeep.bin" "$GEN/utlskeep_img.c" "utlskeep_img" 1048576 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed utlskeep_img"; exit 1; }
+echo "USER: utlskeep.elf entry=$ENTRY ok"
+
 # --- 2. MD compile ---
 mkdir -p "$OBJMD"
 : > "$LOG"
@@ -391,7 +438,7 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }

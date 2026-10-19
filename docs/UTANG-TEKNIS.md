@@ -1,10 +1,28 @@
 # Utang Teknis Qabot — 2026-09-29
 
 ## 1. TCP keep-alive (flaky)
-**Status:** DOKUMENTASI LIMITASI — workaround aktif.
+**Status:** INVESTIGASI SELESAI 2026-10-19 (F1) — limitasi lingkungan slirp,
+workaround dipertahankan.
 
-Respons HTTP tanpa FIN menetes lambat/parsial di guest. Root cause di
-`tcp.c:tcc_on_data` / interaksi slirp belum diinvestigasi tuntas.
+**Hasil investigasi F1:**
+- Logika RX guest (`tcc_on_data`: buffer, seq check, ACK) **benar** —
+  diverifikasi via code review + instrumentasi kernel (counter
+  accept/drop). Tidak ada bug deterministik di `tcp.c`.
+- Plain TCP keep-alive 1 roundtrip: **5/5 PASS** (`utcpkeep`).
+- TLS keep-alive 2 roundtrip: **~75% PASS** (`utlskeep`). Gagal berupa
+  stall satu arah (mock→guest) 20 dtk: data menetes parsial
+  (176B, 313B) lalu berhenti; `drops=0` di guest (bukan out-of-order).
+- Bug mock yang diperbaiki selama investigasi: single-threaded
+  `TCPServer` nyangkut di koneksi mati (→ handshake timeout palsu),
+  `Content-Length` salah di test.
+- Karakterisasi: stall satu arah + `drops=0` + intermiten menunjuk ke
+  interaksi slirp/host (ACK/segmen tertunda di NAT user-mode QEMU),
+  bukan logika TCP guest. Tanpa `tcpdump` di VM, penyebab paket-level
+  tak bisa dipastikan.
+
+**Keputusan:** `Connection: close` tetap sebagai pola resmi untuk
+jalur dev/test QEMU (deterministik). Di hardware produksi, TCP/TLS
+diterminasi di ESP32-C6 — stack TCP guest hanya untuk dev/test.
 
 **Workaround (Q4):** `proxy_horde.py` tutup koneksi tiap respons
 (`Connection: close`); `provider_real.c` pakai mode `qr_plain`

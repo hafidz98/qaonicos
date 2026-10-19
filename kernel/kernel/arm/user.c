@@ -57,6 +57,10 @@ extern unsigned char	ufs_img[];
 extern unsigned int	ufs_img_len;
 extern unsigned char	utimeset_img[];	/* F2: regression test TIME_SET/GET */
 extern unsigned int	utimeset_img_len;
+extern unsigned char	utcpkeep_img[];	/* F1 SEMENTARA: keep-alive RX test */
+extern unsigned int	utcpkeep_img_len;
+extern unsigned char	utlskeep_img[];	/* F1 SEMENTARA: TLS keep-alive RX test */
+extern unsigned int	utlskeep_img_len;
 extern unsigned char	face_img[];	/* App A1/A2: Qabot server */
 extern unsigned int	face_img_len;
 extern unsigned char	sh_img[];	/* Q9: shell qaon> */
@@ -310,7 +314,7 @@ struct user_ctx {
 	unsigned int	spsr;
 };
 
-#define	NDAEMON		5u	/* face, uiapp, qabotd, sh (Q9), + slot spawn (Q9) */
+#define	NDAEMON		6u	/* face, uiapp, qabotd, sh (Q9), utcpkeep (F1), + slot spawn (Q9) */
 #define	PROG_FACE	0
 #define	PROG_UIAPP	1
 #define	PROG_NTP	2	/* App A4: sinkron jam (tak pegang display) */
@@ -1524,6 +1528,8 @@ static struct uprog_image daemon_images[] = {
 	/* { "utlscli", utlscli_img, &utlscli_img_len, 8u }, */	/* Nonaktif Q2c/F2: tcc 1 koneksi; aktifkan sementara untuk uji TLS */
 	{ "qabotd", qabotd_img, &qabotd_img_len, 8u },	/* progid 2: Qabot daemon persisten (Q4) */
 	{ "sh", sh_img, &sh_img_len, 1u },	/* progid 3: shell qaon> (Q9) */
+	/* { "utcpkeep", utcpkeep_img, &utcpkeep_img_len, 1u }, */	/* F1: nonaktif (tcc 1 koneksi) */
+	/* { "utlskeep", utlskeep_img, &utlskeep_img_len, 1u }, */	/* F1: nonaktif (investigasi selesai) */
 
 };
 #define	NDAEMON_IMAGES	(sizeof(daemon_images) / sizeof(daemon_images[0]))
