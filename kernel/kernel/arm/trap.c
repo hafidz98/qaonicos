@@ -127,8 +127,18 @@ arm_trap_handler(struct arm_trap_frame *frame, int trapno)
 			user_fault(frame, USER_EXIT_DABT);
 			break;
 		}
-		panic("data abort: pc=0x%x dfar=0x%x dfsr=0x%x",
-		      frame->lr, read_dfar(), read_dfsr());
+		/* #7: dump registers untuk debug. */
+		printf("data abort: pc=0x%x dfar=0x%x dfsr=0x%x\n",
+		    frame->lr, read_dfar(), read_dfsr());
+		printf("  r0=%x r1=%x r2=%x r3=%x\n", frame->r[0],
+		    frame->r[1], frame->r[2], frame->r[3]);
+		printf("  r4=%x r5=%x r6=%x r7=%x\n", frame->r[4],
+		    frame->r[5], frame->r[6], frame->r[7]);
+		printf("  r8=%x r9=%x r10=%x r11=%x\n", frame->r[8],
+		    frame->r[9], frame->r[10], frame->r[11]);
+		printf("  r12=%x svc_lr=%x spsr=%x\n", frame->r[12],
+		    frame->svc_lr, frame->spsr);
+		panic("data abort halted");
 
 	case TRAP_PABT:
 		if ((frame->spsr & 0x1fu) == ARM_MODE_USR) {

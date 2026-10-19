@@ -26,7 +26,17 @@ int		cold = 1;		/* cold boot indicator */
 int		master_cpu = 0;
 struct cpu_data	cpu_data[1];
 
-char		version[] = "Mach 3.0 (ARMv7 port, QEMU virt)\n";
+char		version[] =
+"\n"
+"   QQQ   A   OOO  N   N I  CCC  OOO   SSS\n"
+"  Q   Q A A O   O NN  N I C    O   O S\n"
+"  Q   QAAAAAO   O N N N I C    O   O  SSS\n"
+"  Q  QQ A A O   O N  NN I C    O   O     S\n"
+"   QQQQ A A  OOO  N   N I  CCC  OOO  SSSS\n"
+"\n"
+"  QaonicOS - Mach 3.0 on ARMv7 (QEMU virt)\n"
+"  Booting...\n"
+"\n";
 
 void		uart_init(void);
 void		pmap_bootstrap(void);

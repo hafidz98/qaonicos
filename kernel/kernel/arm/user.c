@@ -1436,7 +1436,10 @@ setup_uprog_task(const char *name, unsigned char *img, unsigned int img_len,
 	spl_t		s;
 	unsigned int	stack_va, heap_va;
 
+	/* Boot bersih: hanya tampil bila gagal. */
+#if 0
 	printf("setup_uprog_task: '%s'...\n", name);
+#endif
 
 	if (img_len == 0 || img_len > 256 * USER_PGBYTES) {	/* Q2b: utlscli butuh >512KB */
 		printf("setup_uprog_task: FAIL (bad image size %u)\n", img_len);
@@ -1539,7 +1542,10 @@ launch_uprog(const char *name, unsigned char *img, unsigned int img_len,
 	pmap_t		upmap;
 	unsigned int	rc, stack_top;
 
+	/* Boot bersih: hanya tampil bila gagal. */
+#if 0
 	printf("launch_uprog: creating task for '%s'...\n", name);
+#endif
 	if (setup_uprog_task(name, img, img_len, stack_pages, udesc,
 			     &utask, &upmap, &stack_top) != 0)
 		return ~0u;
@@ -1554,7 +1560,9 @@ launch_uprog(const char *name, unsigned char *img, unsigned int img_len,
 	cur_udesc = udesc;
 	cur_progid = -1;	/* one-shot: bukan pemegang token */
 
+#if 0
 	printf("launch_uprog: entering user mode ('%s')...\n", name);
+#endif
 	arm_pmap_activate_user(upmap);
 	rc = user_enter_test(stack_top, INIT_CODE_VA);
 	arm_pmap_activate_kernel();
@@ -1565,7 +1573,9 @@ launch_uprog(const char *name, unsigned char *img, unsigned int img_len,
 	cur_udesc = 0;
 	cur_progid = -1;
 
-	printf("launch_uprog: '%s' exited with code 0x%x\n", name, rc);
+	/* Boot bersih: hanya tampil bila gagal. */
+	if (rc != 0)
+		printf("launch_uprog: '%s' FAIL (code 0x%x)\n", name, rc);
 	return rc;
 }
 

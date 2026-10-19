@@ -335,7 +335,10 @@ void
 _start(void)
 {
 	sys_console_takeover();	/* Q9: sh pemilik eksklusif console */
-	sh_puts("QaonicOS shell (Q8). ketik help.\n");
+	sh_puts("\n");
+	sh_puts("QaonicOS ready. CLI mode.\n");
+	sh_puts("Ketik 'help' untuk daftar perintah.\n");
+	sh_puts("\n");
 	/* Q9 self-test: spawn embed:uls, verifikasi exit code. */
 	{
 		int rc, w;

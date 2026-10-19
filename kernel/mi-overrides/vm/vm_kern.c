@@ -993,16 +993,21 @@ kmem_suballoc(parent, min, max, size, pageable)
 	 */
 	vm_object_reference(vm_submap_object);
 
+	/* Boot bersih: debug kmem_suballoc dimatikan. */
+#if 0
 	printf("kmem_suballoc: parent=%x min=%x max=%x size=%x submap_obj=%x\n",
 	       (unsigned)parent, (unsigned)vm_map_min(parent),
 	       (unsigned)vm_map_max(parent), (unsigned)size,
 	       (unsigned)vm_submap_object);
+#endif
 	addr = (vm_offset_t) vm_map_min(parent);
 	kr = vm_map_enter(parent, &addr, size,
 			  (vm_offset_t) 0, TRUE,
 			  vm_submap_object, (vm_offset_t) 0, FALSE,
 			  VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
+#if 0
 	printf("kmem_suballoc: vm_map_enter kr=%d addr=%x\n", kr, (unsigned)addr);
+#endif
 	if (kr != KERN_SUCCESS)
 		panic("kmem_suballoc kr=%d", kr);
 
