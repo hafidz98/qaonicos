@@ -96,8 +96,8 @@ results = []
 results.append(cmd("help", "daftar perintah"))
 results.append(cmd("uptime", "uptime"))
 results.append(cmd("time", "20"))
-# NOTE: 'ls' dan 'cat' gagal baca filesystem via shell (bug terpisah).
-# Verifikasi shell fokus ke interaktivitas: prompt responsif + built-in jalan.
+results.append(cmd("ls", "/sd:"))
+results.append(cmd("cat /motd.txt", "QaonicOS"))
 
 s.close()
 log.close()

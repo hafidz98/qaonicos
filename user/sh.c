@@ -132,8 +132,8 @@ bi_help(void)
 {
 	sh_puts("perintah:\n");
 	sh_puts("  help            daftar perintah\n");
-	sh_puts("  ls [path]       daftar isi direktori\n");
-	sh_puts("  cat <path>      tampilkan isi file\n");
+	sh_puts("  ls [path]       daftar isi direktori (/ -> /sd)\n");
+	sh_puts("  cat <path>      tampilkan isi file (/motd.txt, /sd/...)\n");
 	sh_puts("  gpio get <pin>  baca pin GPIO\n");
 	sh_puts("  gpio set <pin> <0/1> tulis pin GPIO\n");
 	sh_puts("  time            jam dinding (0=belum NTP)\n");
@@ -151,10 +151,15 @@ bi_ls(void)
 	int		n;
 	unsigned	i;
 
-	pp = sh_argc > 1 ? sh_argv[1] : "/";
+	/* "/" dipetakan ke /sd (FAT mount). Path /sd/... langsung. */
+	pp = sh_argc > 1 ? sh_argv[1] : "/sd";
+	if (sh_streq(pp, "/"))
+		pp = "/sd";
 	n = sys_readdir(pp, buf, sizeof(buf) - 1u);
 	if (n < 0) {
-		sh_puts("ls: gagal\n");
+		sh_puts("ls: '");
+		sh_puts(pp);
+		sh_puts("' gagal (coba /sd)\n");
 		return;
 	}
 	buf[sizeof(buf) - 1u] = 0;
@@ -173,20 +178,39 @@ static void
 bi_cat(void)
 {
 	static char	buf[512];
-	int		n;
+	int		fd, n;
 
 	if (sh_argc < 2) {
-		sh_puts("cat: butuh path\n");
+		sh_puts("cat: butuh path (cth: cat /motd.txt, cat /sd/T/A.BIN)\n");
 		return;
 	}
+	/* Coba FS memori dulu (untuk /motd.txt dkk), lalu FAT (/sd/...). */
+	fd = sys_open(sh_argv[1], 0u);
+	if (fd >= 0) {
+		n = sys_read(fd, buf, sizeof(buf) - 1u);
+		sys_close(fd);
+		if (n < 0) {
+			sh_puts("cat: baca gagal\n");
+			return;
+		}
+		buf[n] = 0;
+		sh_puts(buf);
+		if (n > 0 && buf[n - 1] != '\n')
+			sh_puts("\n");
+		return;
+	}
+	/* Fallback ke FAT. */
 	n = sys_fat_read(sh_argv[1], buf, sizeof(buf) - 1u);
 	if (n < 0) {
-		sh_puts("cat: baca gagal\n");
+		sh_puts("cat: '");
+		sh_puts(sh_argv[1]);
+		sh_puts("' tidak ditemukan\n");
 		return;
 	}
 	buf[n] = 0;
 	sh_puts(buf);
-	sh_puts("\n");
+	if (n > 0 && buf[n - 1] != '\n')
+		sh_puts("\n");
 }
 
 static void
