@@ -76,21 +76,17 @@ kunci sesi TLS dapat diprediksi.
 TLS hanya untuk uji/QEMU, bukan produksi.
 
 ## 5. ufs mkdir FAIL (filesystem)
-**Status:** BUG AKTIF — ditemukan 2026-10-19 via boot log. Investigasi parsial.
+**Status:** FIXED 2026-10-19 (commit dc6eb3a).
 
-`user/ufs.c` (test filesystem): perintah `mkdir /sd/T` dari `/fat.cmd`
-gagal — `u_mkdir()` → `sys_mkdir()` → `fat32_mkdir()` return non-zero.
+**Root cause:** bukan bug filesystem — `/sd/T` sudah ada dari boot
+sebelumnya (SD image persisten antar test manual). `fat32_mkdir`
+benar menolak bikin direktori yang sudah ada.
 
-**Dampak:** shell `qaon>` perintah `ls`/`cat` juga gagal baca filesystem
-(`ls: gagal`, `cat: baca gagal`). Filesystem FAT tidak bisa dimodifikasi
-via shell.
+**Perbaikan:** `fat32_mkdir` kini idempoten — return 0 bila entry sudah
+ada dan berupa direktori, -1 bila berupa file. Verifikasi: `[ufs] ok`.
 
-**Investigasi 2026-10-19:**
-- `split_path("/sd/T")` — logika benar (parent=m_root, leaf="T").
-- Kandidat gagal: `alloc_cluster()` (return 0) atau `create_entry()`.
-- Perlu: instrumentasi `fat32_mkdir` untuk identifikasi titik gagal persis.
-
-**Target:** instrumentasi + perbaiki `fat32_mkdir`/`alloc_cluster`.
+**Catatan:** shell `qaon>` perintah `ls`/`cat` masih gagal baca filesystem
+— investigasi terpisah (kemungkinan path handling di shell, bukan driver).
 
 ## 6. QABOT S2 FAIL (test expectation usang)
 **Status:** FIXED 2026-10-19 (commit 29b595c).
