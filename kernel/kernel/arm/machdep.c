@@ -46,6 +46,7 @@ machine_init(void)
 	extern void	ipc_selftest(void);
 	extern void	blk_selftest(void);
 	extern void	gpio_init(void);
+	extern void	audio_init(void);
 	extern int	fat32_mount(void);
 	extern int	gpu_init(void);
 
@@ -54,6 +55,7 @@ machine_init(void)
 	ipc_selftest();		/* M4: verify IPC ports/port sets */
 	blk_selftest();		/* M4: verify virtio-blk read/write */
 	gpio_init();		/* Fase D: GPIO (mock di QEMU) */
+	audio_init();		/* D1: ACODEC (virtual regs di QEMU) */
 	if (gpu_init() != 0)
 		printf("gpu: display dinonaktifkan (lanjut tanpa display)\n");
 	if (fat32_mount() == 0)

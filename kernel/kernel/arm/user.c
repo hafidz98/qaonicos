@@ -57,6 +57,8 @@ extern unsigned char	ufs_img[];
 extern unsigned int	ufs_img_len;
 extern unsigned char	utimeset_img[];	/* F2: regression test TIME_SET/GET */
 extern unsigned int	utimeset_img_len;
+extern unsigned char	uaudiotest_img[];	/* D1: ACODEC init + readback */
+extern unsigned int	uaudiotest_img_len;
 extern unsigned char	utcpkeep_img[];	/* F1 SEMENTARA: keep-alive RX test */
 extern unsigned int	utcpkeep_img_len;
 extern unsigned char	utlskeep_img[];	/* F1 SEMENTARA: TLS keep-alive RX test */
@@ -90,6 +92,8 @@ extern int	netstack_udp_recv(unsigned char *buf, unsigned maxlen,
 
 /* tcp.c (Q2a: TCP client, satu koneksi aktif). */
 extern int	tcp_client_connect(unsigned int dst_ip, unsigned short dst_port);
+extern int	acodec_init(void);
+extern unsigned int	acodec_reg_read(unsigned int off);
 extern int	tcp_client_status(void);
 extern int	tcp_client_send(const unsigned char *p, unsigned len);
 extern int	tcp_client_recv(unsigned char *buf, unsigned maxlen);
@@ -214,6 +218,8 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_SPAWN	79u	/* Q9: spawn(path) -> 0 ok, -1 gagal */
 #define	SYS_SPAWN_WAIT	80u	/* Q9: tunggu spawn -> -1 jalan, else exit code */
 #define	SYS_CONSOLE_TAKEOVER 81u /* Q9: jadi eksklusif pembaca console */
+#define	SYS_AUDIO_INIT	82u	/* D1: acodec_init() -> 0/-1 */
+#define	SYS_AUDIO_REG	83u	/* D1: acodec_reg_read(off) -> val */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -1023,6 +1029,12 @@ user_syscall(struct arm_trap_frame *frame)
 		       daemons[sched_cur].name, sched_cur);
 		return 0;
 	}
+	case SYS_AUDIO_INIT:
+		/* D1: init ACODEC -> 0. */
+		return (unsigned int)acodec_init();
+	case SYS_AUDIO_REG:
+		/* D1: a0=offset byte -> nilai register. */
+		return acodec_reg_read(a0);
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
 	}
@@ -1515,6 +1527,7 @@ static struct uprog_image uprogs[] = {
 	{ "usd",   usd_img,   &usd_img_len,   1u },
 	{ "ufs",   ufs_img,   &ufs_img_len,   1u },
 	{ "utimeset", utimeset_img, &utimeset_img_len, 1u },	/* F2: time regression */
+	{ "uaudiotest", uaudiotest_img, &uaudiotest_img_len, 1u },	/* D1: ACODEC */
 	{ "qabot", qabot_img, &qabot_img_len, 1u },	/* Q1: harness, one-shot */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))

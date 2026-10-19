@@ -839,3 +839,33 @@ sys_console_takeover(void)
 		: "r7", "lr", "memory", "cc");
 	return ret;
 }
+
+/* D1: ACODEC init + register readback. */
+int
+sys_audio_init(void)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r7, #82\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		:
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+unsigned
+sys_audio_reg(unsigned off)
+{
+	register unsigned _r0 __asm__("r0") = off;
+	unsigned ret;
+	__asm__ volatile(
+		"mov r7, #83\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}

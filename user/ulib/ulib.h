@@ -140,6 +140,10 @@ int	sys_tcp_send(const void *buf, unsigned len);
 int	sys_tcp_recv(void *buf, unsigned maxlen);
 int	sys_tcp_close(void);
 
+/* D1: ACODEC init (82) + register readback (83). */
+int	sys_audio_init(void);
+unsigned	sys_audio_reg(unsigned off);
+
 /* Q4: ekspresi wajah Qabot. expr 0..7 (face_expr_t); text = status
  * kustom ("" = default face) atau NULL. Ambil: 0=ada, -1=tak ada. */
 int	sys_face_expr(unsigned expr, const char *text);
