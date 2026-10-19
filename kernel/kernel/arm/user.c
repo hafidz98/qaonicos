@@ -555,6 +555,9 @@ static void	sched_yield_switch(struct arm_trap_frame *frame);
 static void	sched_exit_switch(struct arm_trap_frame *frame, unsigned int code);
 extern void	net_pump(void);
 
+/* #7 debug: current syscall number (for panic diagnosis). */
+unsigned int	dbg_cur_syscall;
+
 unsigned int
 user_syscall(struct arm_trap_frame *frame)
 {
@@ -563,6 +566,10 @@ user_syscall(struct arm_trap_frame *frame)
 	unsigned int a1 = frame->r[1];
 	unsigned int a2 = frame->r[2];
 	unsigned int a3 = frame->r[3];
+
+	/* #7 debug: track current syscall for panic diagnosis. */
+	extern unsigned int dbg_cur_syscall;
+	dbg_cur_syscall = num;
 	unsigned int a4 = frame->r[4];
 	unsigned int a5 = frame->r[5];
 
@@ -814,6 +821,10 @@ user_syscall(struct arm_trap_frame *frame)
 		/* Hanya pemegang token yang dapat antrean event. */
 		if (cur_progid != dpy_holder)
 			return (unsigned int)-1;
+		/* #7: jangan kuras console bila dimiliki pihak lain
+		 * (mis. shell via sys_console_takeover). */
+		if (console_owner != -1 && cur_progid != console_owner)
+			return (unsigned int)evq_pop();
 		/* Kuras console -> terjemahkan -> antrekan. */
 		for (;;) {
 			b = con_getc();

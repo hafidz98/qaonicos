@@ -128,8 +128,9 @@ arm_trap_handler(struct arm_trap_frame *frame, int trapno)
 			break;
 		}
 		/* #7: dump registers untuk debug. */
-		printf("data abort: pc=0x%x dfar=0x%x dfsr=0x%x\n",
-		    frame->lr, read_dfar(), read_dfsr());
+		extern unsigned int dbg_cur_syscall;
+		printf("data abort: pc=0x%x dfar=0x%x dfsr=0x%x syscall=%u\n",
+		    frame->lr, read_dfar(), read_dfsr(), dbg_cur_syscall);
 		printf("  r0=%x r1=%x r2=%x r3=%x\n", frame->r[0],
 		    frame->r[1], frame->r[2], frame->r[3]);
 		printf("  r4=%x r5=%x r6=%x r7=%x\n", frame->r[4],
