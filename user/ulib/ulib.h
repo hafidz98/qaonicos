@@ -153,6 +153,10 @@ int	sys_audio_stop(void);
 int	sys_audio_gain(unsigned level);
 unsigned	sys_audio_overrun(void);
 
+/* D2b: PL330 DMA (89/90). */
+int	sys_pl330_init(void);
+int	sys_pl330_rx(void *dst, unsigned nwords);
+
 /* Q4: ekspresi wajah Qabot. expr 0..7 (face_expr_t); text = status
  * kustom ("" = default face) atau NULL. Ambil: 0=ada, -1=tak ada. */
 int	sys_face_expr(unsigned expr, const char *text);

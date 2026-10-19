@@ -932,6 +932,37 @@ sys_audio_overrun(void)
 	return ret;
 }
 
+/* D2b: PL330 DMA. */
+int
+sys_pl330_init(void)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r7, #89\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		:
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+sys_pl330_rx(void *dst, unsigned nwords)
+{
+	register unsigned _r0 __asm__("r0") = (unsigned)dst;
+	register unsigned _r1 __asm__("r1") = nwords;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #90\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0), "r" (_r1)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
 /*
  * sys_audio_read: blocking read with timeout (ms).
  * Accumulates until len bytes or timeout.

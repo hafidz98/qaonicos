@@ -65,7 +65,7 @@ clang $UCFLAGS -c "$USR/udiv.c" -o "$BUILD/udiv.o" >>"$LOG" 2>&1 || \
 # shellcheck disable=SC2086
 clang $UCFLAGS -c "$USR/hello.c" -o "$BUILD/hello.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/hello.c (see $LOG)"; exit 1; }
-for prog in init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest uaudiocap uaudiogain; do
+for prog in init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest uaudiocap uaudiogain upl330; do
     # shellcheck disable=SC2086
     clang $UCFLAGS -c "$USR/$prog.c" -o "$BUILD/$prog.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/$prog.c (see $LOG)"; exit 1; }
@@ -463,7 +463,7 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice upl330; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }

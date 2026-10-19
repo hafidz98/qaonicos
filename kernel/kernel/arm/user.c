@@ -65,6 +65,8 @@ extern unsigned char	uaudiogain_img[];	/* D3: gain + overrun */
 extern unsigned int	uaudiogain_img_len;
 extern unsigned char	uvoice_img[];	/* D4: VOICE.START + AUD uplink */
 extern unsigned int	uvoice_img_len;
+extern unsigned char	upl330_img[];	/* D2b: PL330 microcode */
+extern unsigned int	upl330_img_len;
 extern unsigned char	utcpkeep_img[];	/* F1 SEMENTARA: keep-alive RX test */
 extern unsigned int	utcpkeep_img_len;
 extern unsigned char	utlskeep_img[];	/* F1 SEMENTARA: TLS keep-alive RX test */
@@ -106,6 +108,12 @@ extern int	audio_read(unsigned char *dst, unsigned int len);
 extern void	audio_stop(void);
 extern int	audio_set_mic_gain(unsigned int level);
 extern unsigned int	audio_overrun_count(void);
+extern int	pl330_init(void);
+extern int	pl330_audio_rx(unsigned int dst, unsigned int nwords);
+extern unsigned int	pl330_ucode_len(void);
+extern unsigned int	pl330_ucode_byte(unsigned int idx);
+extern unsigned char	pl330_ucode_buf[64];
+extern unsigned int	pl330_ucode_buflen;
 extern int	tcp_client_status(void);
 extern int	tcp_client_send(const unsigned char *p, unsigned len);
 extern int	tcp_client_recv(unsigned char *buf, unsigned maxlen);
@@ -237,6 +245,10 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_AUDIO_STOP	86u	/* D2: audio_stop() -> 0 */
 #define	SYS_AUDIO_GAIN	87u	/* D3: audio_set_mic_gain(level) -> 0/-1 */
 #define	SYS_AUDIO_OVERRUN 88u	/* D3: audio_overrun_count() -> n */
+#define	SYS_PL330_INIT	89u	/* D2b: pl330_init() -> 0/-1 */
+#define	SYS_PL330_RX	90u	/* D2b: pl330_audio_rx(dst,n) -> 0/-1 */
+#define	SYS_PL330_UCLEN	91u	/* D2b: pl330_ucode_len() -> n */
+#define	SYS_PL330_UCBYTE 92u	/* D2b: pl330_ucode_byte(i) -> b */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -1073,6 +1085,39 @@ user_syscall(struct arm_trap_frame *frame)
 	case SYS_AUDIO_OVERRUN:
 		/* D3: -> overrun counter. */
 		return audio_overrun_count();
+	case SYS_PL330_INIT:
+		/* D2b: init PL330 -> 0/-1. */
+		return (unsigned int)pl330_init();
+	case SYS_PL330_RX: {
+		/* D2b: a0=dst, a1=nwords -> 0/-1. */
+		if ((a0 & 3u) || a1 == 0u || a1 > 256u ||
+		    !user_range_ok(a0, a1 * 4u))
+			return (unsigned int)-1;
+		return (unsigned int)pl330_audio_rx(a0, a1);
+	}
+	case SYS_PL330_UCLEN:
+		/* D2b: -> panjang microcode. */
+		return pl330_ucode_len();
+	case SYS_PL330_UCBYTE: {
+		/* D2b: a0=idx -> byte, atau verifikasi (a0=0xFFFFFFFF). */
+		unsigned int fails = 0u;
+		if (a0 == 0xffffffffu) {
+			/* Verifikasi struktur: kembalikan bitmask fail. */
+			if (pl330_ucode_buf[0] != 0xbcu ||
+			    pl330_ucode_buf[1] != 0x00u)
+				fails |= 1u;	/* DMAMOV SAR */
+			if (pl330_ucode_buf[6] != 0xbcu ||
+			    pl330_ucode_buf[7] != 0x02u)
+				fails |= 2u;	/* DMAMOV DAR */
+			if (pl330_ucode_buf[2] != 0x28u ||
+			    pl330_ucode_buf[5] != 0xffu)
+				fails |= 4u;	/* SAR addr */
+			if (pl330_ucode_buf[pl330_ucode_buflen - 1u] != 0x00u)
+				fails |= 8u;	/* DMAEND */
+			return fails;
+		}
+		return pl330_ucode_byte(a0);
+	}
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
 	}
@@ -1569,6 +1614,7 @@ static struct uprog_image uprogs[] = {
 	{ "uaudiocap", uaudiocap_img, &uaudiocap_img_len, 1u },	/* D2: I2S RX */
 	{ "uaudiogain", uaudiogain_img, &uaudiogain_img_len, 1u },	/* D3: gain */
 	{ "uvoice", uvoice_img, &uvoice_img_len, 1u },	/* D4: VOICE uplink */
+	{ "upl330", upl330_img, &upl330_img_len, 1u },	/* D2b: PL330 */
 	{ "qabot", qabot_img, &qabot_img_len, 1u },	/* Q1: harness, one-shot */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))
