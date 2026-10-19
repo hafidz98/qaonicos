@@ -61,7 +61,7 @@ run_one(const char *tag, const char *prompt,
 		/* S2: gpio_write lewat CONFIRM (auto-yes tercatat). */
 		if (!qb_ev_contains(&r, "gate: gpio_write -> CONFIRM"))
 			ok = 0;
-		if (!qb_ev_contains(&r, "confirm: auto-yes"))
+		if (!qb_ev_contains(&r, "confirm: ya (mode uji)"))
 			ok = 0;
 		if (!qb_ev_contains(&r, "exec: gpio_write -> pin=5"))
 			ok = 0;
