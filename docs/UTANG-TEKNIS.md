@@ -74,3 +74,36 @@ kunci sesi TLS dapat diprediksi.
 
 **Target:** driver TRNG RV1103 saat porting hardware; sampai saat itu,
 TLS hanya untuk uji/QEMU, bukan produksi.
+
+## 5. ufs mkdir FAIL (filesystem)
+**Status:** BUG AKTIF — ditemukan 2026-10-19 via boot log.
+
+`user/ufs.c` (test filesystem): perintah `mkdir <path>` dari `/fat.cmd`
+gagal — `u_mkdir()` return non-zero. Juga `ufs FAIL: eksekusi perintah`.
+
+**Dampak:** shell `qaon>` perintah `ls`/`cat` juga gagal baca filesystem
+(`ls: gagal`, `cat: baca gagal`). Filesystem FAT tidak bisa dimodifikasi
+via shell.
+
+**Target:** investigasi `u_mkdir` di driver FAT; kemungkinan bug di
+alokasi cluster/entri direktori.
+
+## 6. QABOT S2 FAIL (test expectation usang)
+**Status:** BUG TEST — ditemukan 2026-10-19, bukan bug fungsional.
+
+Skenario S2 (`user/qabot/main.c`): ekspektasi `confirm: auto-yes`, tapi
+kode (`policy.c`) mencetak `confirm: ya (mode uji)`. Eksekusi
+`gpio_write` sendiri BERHASIL (`exec: gpio_write -> pin=5 val=1 ok`).
+
+**Target:** update ekspektasi test ke string baru, atau standarkan format
+pesan konfirmasi.
+
+## 7. Panic boot dengan virtio-gpu
+**Status:** BUG AKTIF — ditemukan 2026-10-19 via capture GUI.
+
+Boot dengan `-device virtio-gpu-device`: face jalan (`display 240x240 ok`),
+tapi kemudian `panic: data abort: pc=0x4000cbdc dfar=0x4c6c530c dfsr=0x805`
+di shell `qaon>`, lalu `halting cpu`. Boot tanpa GPU stabil.
+
+**Target:** investigasi akses memori di path GPU/shell; kemungkinan
+use-after-free atau mapping framebuffer yang salah.
