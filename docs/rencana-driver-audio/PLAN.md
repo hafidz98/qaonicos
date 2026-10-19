@@ -70,6 +70,15 @@ path* (write → readback cocok), bukan silikon. Verifikasi silikon = H4.
   `UVOICE: PASS`.
 - Verifikasi hardware (uplink real ke C6): H4.2.
 
+### D2b — PL330 DMA (microcode) ✅ SELESAI 2026-10-19 tahap 1 (QEMU)
+- `kernel/kernel/arm/pl330.{c,h}`: driver minimal ARM PL330.
+- Microcode I2S RX (peripheral 21) → RAM: `DMAMOV SAR/DAR/CCR`,
+  `DMALP`/`DMAWFP`/`DMALDP`/`DMAST`/`DMALPEND`/`DMAEND` (28 byte).
+- Syscall 89–92: `SYS_PL330_INIT/RX/UCLEN/UCBYTE`.
+- Test `upl330`: verifikasi struktur microcode → `UPL330: PASS`.
+- **TODO H4:** eksekusi DMAGO aktual + integrasi ke `audio_poll()`
+  (staging buffer DMA → ring buffer). Validasi di hardware.
+
 ## Kriteria selesai keseluruhan
 - D1–D3: kode + test boot di QEMU (PASS via virtual reg file).
 - D4: kode + protokol v2 freeze; uji real menunggu hardware (H4).
