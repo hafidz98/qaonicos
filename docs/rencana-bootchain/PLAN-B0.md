@@ -34,22 +34,19 @@ a booting board and keeps maskrom recovery intact.
 - `parameter.txt` — partition layout (from SDK, adjusted).
 - `update.img` — packaged image for flashing (afptool).
 
-## 2. Boot methods (two paths)
+## 2. Boot methods
 
-### 2.1 SD card boot (DEVELOPMENT — primary)
-The Mini B has BOTH 128MB SPI NAND and a TF (microSD) slot.
-BootROM checks SD for a valid idbloader — **Mini B can boot from SD**.
+### 2.1 IMPORTANT CORRECTION (2026-10-20)
+The Mini B does **NOT** have a TF/microSD slot. Only the Mini A does.
+- Mini A: TF card slot, no NAND.
+- Mini B: 128MB SPI NAND, **no TF slot**.
 
-Flow:
-1. Create bootable SD (SocToolKit "SD Card Boot" mode, or dd the
-   idbloader + U-Boot + kernel to the right offsets).
-2. Insert SD, power on. BootROM loads idbloader from SD.
-3. U-Boot loads `qaonic_kernel.bin` from SD FAT partition.
-4. Kernel runs. NAND untouched — non-destructive, fast iteration.
+The RV1103 chip has an SDMMC controller (`0xffaa0000`), but on the
+Mini B board those pins are not routed to a card slot. SD boot is
+therefore **not available on Mini B**. The plan below is adjusted:
+NAND is the only boot path for Mini B.
 
-This is the recommended dev loop: no flashing, swap SD to test.
-
-### 2.2 NAND boot (PRODUCTION)
+### 2.2 NAND boot (Mini B — only path)
 1. Hold BOOT button + plug USB -> MaskROM mode (VID 0x2207).
 2. Flash `update.img`:
    - Linux: `upgrade_tool uf update.img` or `rkdeveloptool`.
@@ -61,6 +58,11 @@ SPI NAND partition layout (from SDK):
 256K(env), 256K@256K(idblock), 512K(uboot), 4M(boot),
 30M(oem), 6M(userdata), 85M(rootfs)
 ```
+
+### 2.3 SD boot (Mini A only — for reference)
+If a Mini A is ever used: create bootable SD (SocToolKit "SD Card
+Boot" mode), insert, power on. BootROM loads idbloader from SD,
+U-Boot loads the kernel from the SD FAT partition.
 
 ## 3. Kernel loading via U-Boot
 
@@ -82,29 +84,35 @@ Automated: set `bootcmd` to the above + `saveenv`.
 
 ## 4. SD card support in QaonicOS
 
-### 4.1 Current state
+### 4.1 Hardware reality
+- **Mini B (your board)**: No TF slot. SDMMC controller exists in the
+  chip (`0xffaa0000`) but pins are not routed to a slot. **SD cards
+  cannot be used on Mini B** without hardware modification.
+- **Mini A**: Has TF slot. SD is the primary storage.
+
+### 4.2 Current driver state
 - QEMU: SD works via virtio-blk (`blk.c` dev 1), FAT32 on top
   (`fat32.c`). Test `ufs` PASS. Shell `ls`/`cat` work on `/sd`.
-- Hardware: **no SDMMC driver yet.** The RV1103 uses a DesignWare
-  MSHC controller at `0xffaa0000` (from `docs/hw-addrs.md`) —
-  completely different from virtio-blk.
+- Hardware (Mini A): **no SDMMC driver yet.** Needs a DesignWare MSHC
+  driver for `0xffaa0000`. The existing `fat32.c` works unchanged once
+  `sd_read`/`sd_write` are backed by real hardware.
 
-### 4.2 What B0 needs vs what B1 needs
-- **B0 (boot)**: U-Boot loads the kernel from SD. The kernel does
-  NOT need an SD driver to boot. SD-as-storage can wait.
-- **B1 (storage)**: Implement SDMMC (DW_mshc) driver so the running
-  OS can read/write the SD card. The existing `fat32.c` then works
-  unchanged (it only calls `sd_read`/`sd_write`).
-
-### 4.3 How the user uses the SD card (target UX)
-Once B1 lands, the SD card is the user's removable storage:
+### 4.3 How the user would use an SD card (Mini A, or future board)
 - **Insert card** -> auto-detected, mounted at `/sd`.
 - **Shell**: `ls /sd`, `cat /sd/file.txt` (already works in QEMU).
-- **Data**: user files, logs, audio recordings live on SD.
-- **Boot**: card with idbloader+kernel boots the board (dev mode);
-  a plain FAT card is just storage.
-- **Format**: FAT32 (interoperable with PC — copy files by plugging
-  the card into a computer).
+- **Data**: user files, logs, audio recordings on SD.
+- **Format**: FAT32 (works in any PC — copy files directly).
+
+### 4.4 For Mini B: what replaces SD?
+Since Mini B has no slot, removable/user storage options are:
+- **USB mass storage** (USB 2.0 port) — needs USB host + MSC driver.
+- **NAND data partition** (`userdata`, 6M in the layout) — internal,
+  not removable.
+- **Network** (via C6 WiFi) — cloud sync.
+
+**Recommendation**: For Mini B, treat USB storage as the "SD card
+equivalent" for user files. SDMMC driver is only needed if Mini A
+support is ever required.
 
 ## 5. B0 tasks
 
@@ -112,18 +120,16 @@ Once B1 lands, the SD card is the user's removable storage:
       parameter.txt, boot_merger, upgrade_tool/SocToolKit.
       (Shortcut: `afptool -unpack` a stock firmware image.)
 - [ ] B0.2 Build `qaonic_kernel.bin` from mach3.elf (objcopy -O binary).
-- [ ] B0.3 Create bootable SD; test U-Boot `fatload` + `go`.
-- [ ] B0.4 Resolve Q1-Q4 (U-Boot `go`, load address, UART pins,
-      boot priority).
-- [ ] B0.5 Package `update.img` (afptool) for NAND flashing.
-- [ ] B0.6 Write flashing guide (docs) for both SD and NAND paths.
+- [ ] B0.3 Package `update.img` (afptool) for NAND flashing.
+- [ ] B0.4 Flash via maskrom; verify U-Boot loads kernel.
+- [ ] B0.5 Resolve open questions (U-Boot `go` availability, load
+      address, debug UART pins).
+- [ ] B0.6 Write flashing guide (docs) for NAND path.
 - [ ] B0.7 Hardware test entries -> `docs/rencana-uji-hardware/`
-      (H0 extension: boot from SD, boot from NAND, maskrom recovery).
+      (boot from NAND, maskrom recovery).
 
 ## 6. Acceptance criteria
-- Board boots from SD to `qaon>` prompt with no manual steps
-  beyond inserting the card and powering on.
-- Board boots from NAND after flashing `update.img`.
+- Board boots from NAND to `qaon>` prompt after flashing `update.img`.
 - Maskrom recovery still works after a bad flash (unbrickable).
 - Kernel banner + logo show on serial console.
 
