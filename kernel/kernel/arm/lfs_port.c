@@ -369,3 +369,107 @@ lfs_run_test(void)
 	lfs_mounted = 0;
 	return mask;
 }
+
+/* --- File API for the shell (/data) --- */
+
+/* Mount the data filesystem; format on first use. 0 ok, -1 fail. */
+int
+lfs_port_mount(void)
+{
+	int err;
+
+	if (lfs_mounted)
+		return 0;
+	lfs_cfg_init();
+	lfsbd_live = 1;
+	lfsbd_cut_budget = -1;
+	err = lfs_mount(&lfs_vfs, &lfs_cfg);
+	if (err) {
+		err = lfs_format(&lfs_vfs, &lfs_cfg);
+		if (err)
+			return -1;
+		err = lfs_mount(&lfs_vfs, &lfs_cfg);
+		if (err)
+			return -1;
+	}
+	lfs_mounted = 1;
+	return 0;
+}
+
+/* List root entries, one "name\n" per line. Returns bytes or -1. */
+int
+lfs_port_list(char *dst, unsigned int max)
+{
+	lfs_dir_t d;
+	struct lfs_info info;
+	unsigned int pos = 0;
+	int err;
+
+	if (!lfs_mounted)
+		return -1;
+	err = lfs_dir_open(&lfs_vfs, &d, "/");
+	if (err)
+		return -1;
+	for (;;) {
+		unsigned int i;
+
+		err = lfs_dir_read(&lfs_vfs, &d, &info);
+		if (err <= 0)
+			break;
+		if (info.name[0] == '.')
+			continue;
+		for (i = 0; info.name[i]; i++) {
+			if (pos + 2 >= max)
+				break;
+			dst[pos++] = info.name[i];
+		}
+		if (pos + 1 < max)
+			dst[pos++] = '\n';
+	}
+	lfs_dir_close(&lfs_vfs, &d);
+	if (pos < max)
+		dst[pos] = '\0';
+	return (int)pos;
+}
+
+/* Read a whole file. Returns length or -1. */
+int
+lfs_port_read(const char *path, unsigned char *dst, unsigned int max)
+{
+	lfs_file_t f;
+	lfs_ssize_t r;
+	int err;
+
+	if (!lfs_mounted)
+		return -1;
+	err = lfs_file_open(&lfs_vfs, &f, path, LFS_O_RDONLY);
+	if (err)
+		return -1;
+	r = lfs_file_read(&lfs_vfs, &f, dst, max);
+	lfs_file_close(&lfs_vfs, &f);
+	if (r < 0)
+		return -1;
+	return (int)r;
+}
+
+/* Write (create/truncate) a whole file. 0 ok, -1 fail. */
+int
+lfs_port_write(const char *path, const unsigned char *src,
+    unsigned int len)
+{
+	lfs_file_t f;
+	int err;
+
+	if (!lfs_mounted)
+		return -1;
+	err = lfs_file_open(&lfs_vfs, &f, path,
+	    LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC);
+	if (err)
+		return -1;
+	if (len && lfs_file_write(&lfs_vfs, &f, src, len) < 0) {
+		lfs_file_close(&lfs_vfs, &f);
+		return -1;
+	}
+	err = lfs_file_close(&lfs_vfs, &f);
+	return err ? -1 : 0;
+}

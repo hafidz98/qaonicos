@@ -44,8 +44,11 @@ first, then user-facing paths are migrated.
       (format/mount, write/remount/verify, cut mid-write ->
       clean remount, old file intact, recovery write ok).
       All other boot tests still pass.
-- [ ] B1.5 Shell integration: `ls`/`cat` can target the lfs mount
-      (e.g. `/data/...`) alongside `/sd`.
+- [x] B1.5 Shell integration — DONE 2026-10-20: `ls /data`,
+      `cat /data/<name>`, `put /data/<name> <text>` via syscalls
+      94-97. SHELL-VERIFY 9/9 PASS (incl. new `qfetch` command).
+      Note: verify-shell.sh checker fixed (cumulative transcript
+      search; QEMU kill fallback added).
 - [ ] B1.6 Dev log + docs update (`docs/UTANG-TEKNIS.md` if new
       debt appears).
 

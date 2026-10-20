@@ -133,14 +133,85 @@ bi_help(void)
 	sh_puts("commands:\n");
 	sh_puts("  help            list commands\n");
 	sh_puts("  ls [path]       list directory (/ -> /sd)\n");
-	sh_puts("  cat <path>      show file contents (/motd.txt, /sd/...)\n");
+	sh_puts("  cat <path>      show file contents (/motd.txt, /sd/..., /data/..)\n");
+	sh_puts("  put /data/<name> <text> write text to a /data file\n");
 	sh_puts("  gpio get <pin>  read GPIO pin\n");
 	sh_puts("  gpio set <pin> <0/1> write GPIO pin\n");
 	sh_puts("  time            wall clock (0=no NTP yet)\n");
 	sh_puts("  uptime          ms since boot\n");
 	sh_puts("  face <0-7> [text] set face expression\n");
 	sh_puts("  qabot           Qabot daemon info\n");
+	sh_puts("  qfetch          system summary (neofetch-style)\n");
 	sh_puts("  run <path>      run program (Q9 spawn)\n");
+}
+
+/* --- littlefs (/data) syscall wrappers (B1.5) --- */
+
+static int
+sh_lfs_mount(void)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r7, #94\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret) : : "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+static int
+sh_lfs_list(char *buf, unsigned max)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r1, %2\n\t"
+		"mov r7, #95\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret) : "r" (buf), "r" (max)
+		: "r0", "r1", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+static int
+sh_lfs_read(const char *path, char *buf, unsigned max)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r1, %2\n\t"
+		"mov r2, %3\n\t"
+		"mov r7, #96\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret) : "r" (path), "r" (buf), "r" (max)
+		: "r0", "r1", "r2", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+static int
+sh_lfs_write(const char *path, const char *buf, unsigned len)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r1, %2\n\t"
+		"mov r2, %3\n\t"
+		"mov r7, #97\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret) : "r" (path), "r" (buf), "r" (len)
+		: "r0", "r1", "r2", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+static int
+sh_is_data(const char *p)
+{
+	return p[0] == '/' && p[1] == 'd' && p[2] == 'a' &&
+	    p[3] == 't' && p[4] == 'a' &&
+	    (p[5] == 0 || p[5] == '/');
 }
 
 static void
@@ -155,6 +226,24 @@ bi_ls(void)
 	pp = sh_argc > 1 ? sh_argv[1] : "/sd";
 	if (sh_streq(pp, "/"))
 		pp = "/sd";
+	if (sh_is_data(pp)) {
+		if (sh_lfs_mount() != 0) {
+			sh_puts("ls: /data mount failed\n");
+			return;
+		}
+		n = sh_lfs_list(buf, sizeof(buf) - 1u);
+		if (n < 0) {
+			sh_puts("ls: /data list failed\n");
+			return;
+		}
+		buf[sizeof(buf) - 1u] = 0;
+		sh_puts("/data: ");
+		sh_puts(buf);
+		if (n == 0)
+			sh_puts("(empty)");
+		sh_puts("\n");
+		return;
+	}
 	n = sys_readdir(pp, buf, sizeof(buf) - 1u);
 	if (n < 0) {
 		sh_puts("ls: '");
@@ -184,6 +273,25 @@ bi_cat(void)
 		sh_puts("cat: need path (e.g. cat /motd.txt, cat /sd/T/A.BIN)\n");
 		return;
 	}
+	/* littlefs /data/<name>. */
+	if (sh_is_data(sh_argv[1]) && sh_argv[1][5] == '/') {
+		if (sh_lfs_mount() != 0) {
+			sh_puts("cat: /data mount failed\n");
+			return;
+		}
+		n = sh_lfs_read(sh_argv[1] + 6, buf, sizeof(buf) - 1u);
+		if (n < 0) {
+			sh_puts("cat: '");
+			sh_puts(sh_argv[1]);
+			sh_puts("' not found in /data\n");
+			return;
+		}
+		buf[n] = 0;
+		sh_puts(buf);
+		if (n > 0 && buf[n - 1] != '\n')
+			sh_puts("\n");
+		return;
+	}
 	/* Coba FS memori dulu (untuk /motd.txt dkk), lalu FAT (/sd/...). */
 	fd = sys_open(sh_argv[1], 0u);
 	if (fd >= 0) {
@@ -211,6 +319,40 @@ bi_cat(void)
 	sh_puts(buf);
 	if (n > 0 && buf[n - 1] != '\n')
 		sh_puts("\n");
+}
+
+/* put /data/<name> <text...> -- write text into a littlefs file. */
+static void
+bi_put(void)
+{
+	static char	text[256];
+	unsigned	i, pos = 0;
+
+	if (sh_argc < 3 || !sh_is_data(sh_argv[1]) ||
+	    sh_argv[1][5] != '/') {
+		sh_puts("put: usage: put /data/<name> <text>\n");
+		return;
+	}
+	for (i = 2; i < sh_argc; i++) {
+		unsigned j;
+
+		if (pos && pos < sizeof(text) - 1u)
+			text[pos++] = ' ';
+		for (j = 0; sh_argv[i][j] && pos < sizeof(text) - 1u; j++)
+			text[pos++] = sh_argv[i][j];
+	}
+	text[pos] = 0;
+	if (sh_lfs_mount() != 0) {
+		sh_puts("put: /data mount failed\n");
+		return;
+	}
+	if (sh_lfs_write(sh_argv[1] + 6, text, pos) != 0) {
+		sh_puts("put: write failed\n");
+		return;
+	}
+	sh_puts("put: ok (");
+	sh_putu(pos);
+	sh_puts(" bytes)\n");
 }
 
 static void
@@ -274,6 +416,76 @@ bi_uptime(void)
 	sh_puts(" (");
 	sh_putu(ms / 1000u);
 	sh_puts(" dtk)\n");
+}
+
+/* qfetch: neofetch-style system summary, QaonicOS edition. */
+static const char *qf_logo[] = {
+	"   QQQ   A   OOO  N   N I  CCC  OOO   SSS  ",
+	"  Q   Q A A O   O NN  N I C    O   O S     ",
+	"  Q   QAAAAAO   O N N N I C    O   O  SSS  ",
+	"  Q  QQ A A O   O N  NN I C    O   O     S ",
+	"   QQQQ A A  OOO  N   N I  CCC  OOO  SSSS  ",
+	"                                           ",
+	"                                           ",
+	"                                           ",
+	"                                           ",
+	"                                           ",
+	"                                           ",
+	"                                           ",
+};
+
+static void
+bi_qfetch(void)
+{
+	struct qaon_stat st;
+	unsigned up_s;
+
+	if (u_stat(&st) != 0) {
+		sh_puts("qfetch: stat unavailable\n");
+		return;
+	}
+	up_s = st.uptime_ms / 1000u;
+	sh_puts(qf_logo[0]);
+	sh_puts("qaon@qaonicos\n");
+	sh_puts(qf_logo[1]);
+	sh_puts("-----------------\n");
+	sh_puts(qf_logo[2]);
+	sh_puts("OS: QaonicOS (Mach 3.0)\n");
+	sh_puts(qf_logo[3]);
+	sh_puts("SoC: Rockchip RV1103 (target)\n");
+	sh_puts(qf_logo[4]);
+	sh_puts("CPU: Cortex-A7 @ 1.2 GHz\n");
+	sh_puts(qf_logo[5]);
+	sh_puts("Uptime: ");
+	sh_putu(up_s);
+	sh_puts(" s\n");
+	sh_puts(qf_logo[6]);
+	sh_puts("Memory: ");
+	if (st.mem_used_kb != QAON_UNKNOWN) {
+		sh_putu(st.mem_used_kb);
+		sh_puts(" / ");
+		sh_putu(st.mem_total_kb);
+		sh_puts(" KB");
+	} else {
+		sh_puts("unknown");
+	}
+	sh_puts("\n");
+	sh_puts(qf_logo[7]);
+	sh_puts("Threads: ");
+	sh_putu(st.nthreads);
+	sh_puts("\n");
+	sh_puts(qf_logo[8]);
+	sh_puts("Net: rx ");
+	sh_putu(st.net_rx_kb);
+	sh_puts(" KB, tx ");
+	sh_putu(st.net_tx_kb);
+	sh_puts(" KB\n");
+	sh_puts(qf_logo[9]);
+	sh_puts("Shell: qaon> (Q8/Q9)\n");
+	sh_puts(qf_logo[10]);
+	sh_puts("Agent: Qabot\n");
+	sh_puts(qf_logo[11]);
+	sh_puts("Display: QEMU virtio-gpu / SPI ST7789\n");
 }
 
 static void
@@ -371,6 +583,8 @@ _start(void)
 			bi_ls();
 		else if (sh_streq(sh_argv[0], "cat"))
 			bi_cat();
+		else if (sh_streq(sh_argv[0], "put"))
+			bi_put();
 		else if (sh_streq(sh_argv[0], "gpio"))
 			bi_gpio();
 		else if (sh_streq(sh_argv[0], "time"))
@@ -381,6 +595,8 @@ _start(void)
 			bi_face();
 		else if (sh_streq(sh_argv[0], "qabot"))
 			bi_qabot();
+		else if (sh_streq(sh_argv[0], "qfetch"))
+			bi_qfetch();
 		else if (sh_streq(sh_argv[0], "run"))
 			bi_run();
 		else {

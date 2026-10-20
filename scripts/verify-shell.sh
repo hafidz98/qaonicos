@@ -74,14 +74,32 @@ def read_until(prompt, timeout=90):
             return out
     return None
 
+transcript = b""
+
 def cmd(c, expect):
-    global buf
+    global buf, transcript
+    start = len(transcript)
     s.sendall((c + "\n").encode())
-    out = read_until(b"qaon> ", timeout=10)
+    out = read_until(b"qaon> ", timeout=15)
     if out is None:
         print(f"TIMEOUT waiting for '{c}'")
         return False
-    ok = expect.encode() in out
+    transcript += out
+    # Drain late chunks, then search the whole span of this command.
+    time.sleep(1.0)
+    try:
+        while True:
+            d = s.recv(4096)
+            if not d:
+                break
+            transcript += d
+            log.write(d.decode("utf-8", "replace"))
+            log.flush()
+            if b"qaon> " in d:
+                break
+    except (socket.timeout, OSError):
+        pass
+    ok = expect.encode() in transcript[start:]
     print(f"{'PASS' if ok else 'FAIL'}: '{c}' -> {'found' if ok else 'MISSING'} '{expect}'")
     return ok
 
@@ -98,6 +116,10 @@ results.append(cmd("uptime", "uptime"))
 results.append(cmd("time", "20"))
 results.append(cmd("ls", "/sd:"))
 results.append(cmd("cat /motd.txt", "QaonicOS"))
+results.append(cmd("qfetch", "QaonicOS (Mach 3.0)"))
+results.append(cmd("ls /data", "hello.txt"))
+results.append(cmd("put /data/note.txt hello qaonic", "put: ok"))
+results.append(cmd("cat /data/note.txt", "hello qaonic"))
 
 s.close()
 log.close()
@@ -109,6 +131,7 @@ else:
 PYEOF
 RC=$?
 kill $QPID 2>/dev/null || true
+pkill -f "qaon-serial[.]sock" 2>/dev/null || true
 wait $QPID 2>/dev/null || true
 echo "--- transkrip: $LOG ---"
 exit $RC

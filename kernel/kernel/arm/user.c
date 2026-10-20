@@ -28,6 +28,11 @@
 extern void	panic(const char *, ...);
 extern int	printf(const char *, ...);
 extern int	lfs_run_test(void);	/* lfs_port.c (B1) */
+extern int	lfs_port_mount(void);
+extern int	lfs_port_list(char *, unsigned int);
+extern int	lfs_port_read(const char *, unsigned char *, unsigned int);
+extern int	lfs_port_write(const char *, const unsigned char *,
+		    unsigned int);
 extern void	uart_putc(char c);
 
 /* userasm.s */
@@ -253,6 +258,10 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_PL330_UCLEN	91u	/* D2b: pl330_ucode_len() -> n */
 #define	SYS_PL330_UCBYTE 92u	/* D2b: pl330_ucode_byte(i) -> b */
 #define	SYS_LFS_RUNTEST	93u	/* B1: lfs_run_test() -> stage bitmask */
+#define	SYS_LFS_MOUNT	94u	/* B1.5: lfs_port_mount() -> 0/-1 */
+#define	SYS_LFS_LIST	95u	/* B1.5: (buf, max) -> bytes/-1 */
+#define	SYS_LFS_READ	96u	/* B1.5: (path, buf, max) -> len/-1 */
+#define	SYS_LFS_WRITE	97u	/* B1.5: (path, buf, len) -> 0/-1 */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -1136,6 +1145,29 @@ user_syscall(struct arm_trap_frame *frame)
 	case SYS_LFS_RUNTEST:
 		/* B1: -> bitmask tahap uji littlefs (0x1f = semua lulus). */
 		return (unsigned int)lfs_run_test();
+	case SYS_LFS_MOUNT:
+		return (unsigned int)lfs_port_mount();
+	case SYS_LFS_LIST: {
+		if (!user_range_ok(a0, a1))
+			return (unsigned int)-1;
+		return (unsigned int)lfs_port_list((char *)a0, a1);
+	}
+	case SYS_LFS_READ: {
+		static char kpath[128];
+		if (copy_path_user(a0, kpath, sizeof(kpath)) != 0 ||
+		    !user_range_ok(a1, a2))
+			return (unsigned int)-1;
+		return (unsigned int)lfs_port_read(kpath,
+		    (unsigned char *)a1, a2);
+	}
+	case SYS_LFS_WRITE: {
+		static char kpath[128];
+		if (copy_path_user(a0, kpath, sizeof(kpath)) != 0 ||
+		    !user_range_ok(a1, a2))
+			return (unsigned int)-1;
+		return (unsigned int)lfs_port_write(kpath,
+		    (const unsigned char *)a1, a2);
+	}
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
 	}
