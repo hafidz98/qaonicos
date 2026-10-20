@@ -130,7 +130,13 @@ support is ever required.
 - [x] B0.2 Build `qaonic_kernel.bin` — DONE 2026-10-20:
       `llvm-objcopy -O binary mach3.elf` -> 3.7 MB (fits 4M boot
       partition with ~450 KB spare). At `~/workspace/b0-sdk/`.
-- [ ] B0.3 Package `update.img` (afptool) for NAND flashing.
+- [x] B0.3 Package `update.img` — DONE 2026-10-20:
+      afptool pack (after fixing parameter.txt sector offsets) +
+      rkImageMaker wrap -> `update-final.img` (7.5 MB) in
+      `~/workspace/b0-sdk/`. Contents: download.bin (idbloader),
+      parameter, uboot.img, boot.img (= qaonic_kernel.bin),
+      rootfs.img (1 MB zero placeholder — QaonicOS embeds its
+      files in the kernel image; proper rootfs partition TBD).
 - [ ] B0.4 Flash via maskrom; verify U-Boot loads kernel.
 - [ ] B0.5 Resolve open questions (U-Boot `go` availability, load
       address, debug UART pins).
