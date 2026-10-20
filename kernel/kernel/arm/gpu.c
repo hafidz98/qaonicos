@@ -29,6 +29,8 @@ extern void	dcache_clean_range(unsigned int va, unsigned int len);
 extern void	dcache_inval_range(unsigned int va, unsigned int len);
 extern int	printf(const char *, ...);
 
+#include "splash_text.h"
+
 /* --- Register virtio-mmio legacy (sama dengan net.c) --- */
 #define VMM_MAGIC       0x000u
 #define VMM_VERSION     0x004u
@@ -164,6 +166,7 @@ static void io_barrier(void)
 }
 
 int gpu_available_p(void) { return gpu_available; }
+void gpu_splash(unsigned int pct, unsigned int stage);
 
 /* Tunggu hingga used_idx mengejar avail_idx (dengan batas spin agar
  * tak hang selamanya bila device tak merespons). */
@@ -409,31 +412,62 @@ int gpu_init(void)
 
     gpu_available = 1;
     printf("[gpu] siap: 240x240 XRGB8888 (resource 1, scanout 0)\n");
+    gpu_splash(10u, 0u);
     return 0;
 }
 
 /* Konversi strip RGB565 (user) -> backing XRGB8888, lalu
  * TRANSFER_TO_HOST_2D + RESOURCE_FLUSH untuk rect (x,y,w,h).
  * 0 = ok, -1 = gagal/tak tersedia. */
+/* TRANSFER_TO_HOST_2D + RESOURCE_FLUSH for a rect of the
+ * backing (extracted from gpu_flush_strip; shared with the
+ * boot splash). 0 = ok, -1 = gagal. */
+static int
+gpu_present(unsigned int x, unsigned int y,
+	    unsigned int w, unsigned int h)
+{
+	struct {
+		struct gpu_ctrl_hdr hdr;
+		struct gpu_rect r;
+		unsigned int off_lo, off_hi;
+		unsigned int resource_id;
+		unsigned int pad;
+	} __attribute__((packed)) *t2h;
+	struct {
+		struct gpu_ctrl_hdr hdr;
+		struct gpu_rect r;
+		unsigned int resource_id;
+		unsigned int pad;
+	} __attribute__((packed)) *fl;
+	int rc;
+
+	t2h = (void *)gpu_req;
+	hdr_init(&t2h->hdr, GPU_CMD_TRANSFER_TO_HOST_2D);
+	t2h->r.x = x; t2h->r.y = y;
+	t2h->r.w = w; t2h->r.h = h;
+	t2h->off_lo = (y * GPU_W + x) * 4u;
+	t2h->off_hi = 0u;
+	t2h->resource_id = GPU_RES_ID;
+	t2h->pad = 0u;
+	rc = gpu_cmd(sizeof(*t2h), 1);
+	if (rc != (int)GPU_RESP_OK_NODATA)
+		return -1;
+
+	fl = (void *)gpu_req;
+	hdr_init(&fl->hdr, GPU_CMD_RESOURCE_FLUSH);
+	fl->r.x = x; fl->r.y = y;
+	fl->r.w = w; fl->r.h = h;
+	fl->resource_id = GPU_RES_ID;
+	fl->pad = 0u;
+	rc = gpu_cmd(sizeof(*fl), 1);
+	return (rc == (int)GPU_RESP_OK_NODATA) ? 0 : -1;
+}
+
 int gpu_flush_strip(unsigned int x, unsigned int y,
                     unsigned int w, unsigned int h,
                     const unsigned short *rgb565)
 {
-    struct {
-        struct gpu_ctrl_hdr hdr;
-        struct gpu_rect r;
-        unsigned int off_lo, off_hi;
-        unsigned int resource_id;
-        unsigned int pad;
-    } __attribute__((packed)) *t2h;
-    struct {
-        struct gpu_ctrl_hdr hdr;
-        struct gpu_rect r;
-        unsigned int resource_id;
-        unsigned int pad;
-    } __attribute__((packed)) *fl;
     unsigned int ix, iy;
-    int rc;
 
     if (!gpu_available)
         return -1;
@@ -460,26 +494,149 @@ int gpu_flush_strip(unsigned int x, unsigned int y,
                        &gpu_backing[y * GPU_W + x],
                        h * GPU_W * 4u);
 
-    /* TRANSFER_TO_HOST_2D(rect): offset = posisi rect di backing. */
-    t2h = (void *)gpu_req;
-    hdr_init(&t2h->hdr, GPU_CMD_TRANSFER_TO_HOST_2D);
-    t2h->r.x = x; t2h->r.y = y;
-    t2h->r.w = w; t2h->r.h = h;
-    t2h->off_lo = (y * GPU_W + x) * 4u;
-    t2h->off_hi = 0u;
-    t2h->resource_id = GPU_RES_ID;
-    t2h->pad = 0u;
-    rc = gpu_cmd(sizeof(*t2h), 1);
-    if (rc != (int)GPU_RESP_OK_NODATA)
-        return -1;
+    return gpu_present(x, y, w, h);
+}
 
-    /* RESOURCE_FLUSH(rect). */
-    fl = (void *)gpu_req;
-    hdr_init(&fl->hdr, GPU_CMD_RESOURCE_FLUSH);
-    fl->r.x = x; fl->r.y = y;
-    fl->r.w = w; fl->r.h = h;
-    fl->resource_id = GPU_RES_ID;
-    fl->pad = 0u;
-    rc = gpu_cmd(sizeof(*fl), 1);
-    return (rc == (int)GPU_RESP_OK_NODATA) ? 0 : -1;
+/* ------------------------------------------------------------------ */
+/* Boot splash (PLAN Boot UX, UX1): drawn by the kernel into the
+ * same backing the face later owns, so the display shows the OS
+ * logo + progress from gpu_init on instead of staying black
+ * until the first userspace flush. No-op without a GPU.        */
+
+#define SPL_BG     0x000a0e18u  /* deep navy, face palette */
+#define SPL_ACCENT 0x0057c8dcu  /* cyan ring / bar */
+#define SPL_CORE   0x00e8f4f8u  /* near-white core */
+#define SPL_DIM    0x008a94a6u  /* grey label */
+#define SPL_TRACK  0x002a3242u  /* progress track */
+
+static unsigned int
+splash_isqrt(unsigned int v)
+{
+    unsigned int r = 0;
+    unsigned int bit = 1u << 14;
+
+    while (bit > v)
+        bit >>= 2;
+    while (bit) {
+        if (v >= r + bit) {
+            v -= r + bit;
+            r = (r >> 1) + bit;
+        } else {
+            r >>= 1;
+        }
+        bit >>= 2;
+    }
+    return r;
+}
+
+static unsigned int
+splash_blend(unsigned int bg, unsigned int fg, unsigned int a)
+{
+    unsigned int r = (((fg >> 16) & 0xffu) * a +
+                      ((bg >> 16) & 0xffu) * (255u - a)) / 255u;
+    unsigned int g = (((fg >> 8) & 0xffu) * a +
+                      ((bg >> 8) & 0xffu) * (255u - a)) / 255u;
+    unsigned int b = ((fg & 0xffu) * a +
+                      (bg & 0xffu) * (255u - a)) / 255u;
+
+    return (r << 16) | (g << 8) | b;
+}
+
+static void
+splash_blit(const unsigned char *bm, unsigned int w, unsigned int h,
+            unsigned int x0, unsigned int y0, unsigned int color)
+{
+    unsigned int x, y;
+
+    for (y = 0; y < h && y0 + y < GPU_H; y++)
+        for (x = 0; x < w && x0 + x < GPU_W; x++) {
+            unsigned int a = bm[y * w + x];
+            unsigned int *px = &gpu_backing[(y0 + y) * GPU_W + x0 + x];
+            if (a)
+                *px = splash_blend(*px, color, a);
+        }
+}
+
+/* The logo: a Q ring with a diagonal tail and an "eye" core, the
+ * same visual family as the Qabot face. Drawn procedurally --
+ * a real graphic mark, not text art. */
+static void
+splash_logo(unsigned int cx, unsigned int cy)
+{
+    const int R = 34, TH = 9;
+    int dx, dy;
+
+    for (dy = -R - TH - 28; dy <= R + TH + 28; dy++) {
+        for (dx = -R - TH - 28; dx <= R + TH + 28; dx++) {
+            unsigned int d = splash_isqrt(
+                (unsigned int)(dx * dx + dy * dy));
+            unsigned int *px = &gpu_backing[(cy + dy) * GPU_W + (cx + dx)];
+            int u = (dx + dy) * 181 / 256;  /* along the 45-deg tail */
+            int v = (dx - dy) * 181 / 256;  /* across the tail */
+            int ring = (int)d - R;
+
+            if (ring < 0)
+                ring = -ring;
+            if (ring <= TH) {
+                unsigned int a = ring >= TH - 1 ? 140u : 255u;
+                *px = splash_blend(*px, SPL_ACCENT, a);
+            }
+            /* Tail: from the ring's lower right, outward. */
+            if (u >= R - TH && u <= R + 24 && v >= -7 && v <= 7)
+                *px = splash_blend(*px, SPL_ACCENT, 255u);
+            /* Eye core + pupil. */
+            if (d <= 11u)
+                *px = SPL_CORE;
+            if ((dx + 3) * (dx + 3) + (dy + 3) * (dy + 3) <= 20)
+                *px = SPL_ACCENT;
+        }
+    }
+}
+
+void
+gpu_splash(unsigned int pct, unsigned int stage)
+{
+    static const unsigned char * const stages[4] = {
+        splash_stage0, splash_stage1, splash_stage2, splash_stage3
+    };
+    static const unsigned int stages_w[4] = {
+        SPLASH_STAGE0_W, SPLASH_STAGE1_W,
+        SPLASH_STAGE2_W, SPLASH_STAGE3_W
+    };
+    static const unsigned int stages_h[4] = {
+        SPLASH_STAGE0_H, SPLASH_STAGE1_H,
+        SPLASH_STAGE2_H, SPLASH_STAGE3_H
+    };
+    unsigned int i, x, y;
+
+    if (!gpu_available)
+        return;
+    if (pct > 100u)
+        pct = 100u;
+    if (stage > 3u)
+        stage = 3u;
+
+    for (i = 0; i < GPU_W * GPU_H; i++)
+        gpu_backing[i] = SPL_BG;
+
+    splash_logo(120u, 76u);
+    splash_blit(splash_wordmark, SPLASH_WORDMARK_W, SPLASH_WORDMARK_H,
+                (GPU_W - SPLASH_WORDMARK_W) / 2u, 128u, SPL_CORE);
+    splash_blit(splash_tagline, SPLASH_TAGLINE_W, SPLASH_TAGLINE_H,
+                (GPU_W - SPLASH_TAGLINE_W) / 2u, 168u, SPL_DIM);
+
+    /* Progress track + fill. */
+    for (y = 196u; y < 203u; y++)
+        for (x = 40u; x < 200u; x++) {
+            unsigned int fill = 40u + (160u - 2u) * pct / 100u;
+            gpu_backing[y * GPU_W + x] =
+                (x <= fill && y > 196u && y < 202u && x > 40u)
+                ? SPL_ACCENT : SPL_TRACK;
+        }
+    splash_blit(stages[stage], stages_w[stage], stages_h[stage],
+                (GPU_W - stages_w[stage]) / 2u, 214u, SPL_DIM);
+
+    dcache_clean_range((unsigned int)(unsigned long)gpu_backing,
+                       GPU_BACKING_BYTES);
+    (void)gpu_present(0u, 0u, GPU_W, GPU_H);
 }

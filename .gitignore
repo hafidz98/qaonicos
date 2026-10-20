@@ -4,3 +4,6 @@ kernel/build/
 *.bin
 disk-images/
 __pycache__/
+
+# boot video recording intermediates
+logs/boot-video/

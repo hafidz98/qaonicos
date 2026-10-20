@@ -157,6 +157,7 @@ bi_help(void)
 	sh_puts("  bootctl [crash] boot state / arm crash simulation\n");
 	sh_puts("  bootlog         persistent boot history\n");
 	sh_puts("  setup [name <x>|tz <x>|done|reset]  first-boot setup\n");
+	sh_puts("  gui                   start the GUI dashboard\n");
 	sh_puts("  update [stage <ver>|cancel|sabotage]  A/B updates\n");
 	sh_puts("  run <path>      run program (Q9 spawn)\n");
 }
@@ -547,6 +548,22 @@ bi_setup(void)
 			sh_puts("setup: tz saved\n");
 		return;
 	}
+	if (sh_argc > 1 && sh_streq(sh_argv[1], "mode")) {
+		n = sh_bootstate(3u, info);
+		if (sh_argc > 2 && sh_streq(sh_argv[2], "user")) {
+			sh_bootstate(11u, (unsigned *)1u);
+			sh_puts("setup: mode=user (GUI autostart, next boot)\n");
+		} else if (sh_argc > 2 && sh_streq(sh_argv[2], "dev")) {
+			sh_bootstate(11u, (unsigned *)0u);
+			sh_puts("setup: mode=dev (shell first, next boot)\n");
+		} else {
+			sh_puts("setup: mode=");
+			sh_puts(n >= 0 && (n & 4) ? "user (GUI autostart)"
+			    : "dev (shell first)");
+			sh_puts(" -- 'setup mode user|dev'\n");
+		}
+		return;
+	}
 	/* status */
 	n = sh_bootstate(3u, info);
 	sh_puts("setup: ");
@@ -586,6 +603,23 @@ sh_bootstate_arg(unsigned sub, unsigned arg)
 }
 
 /* update: B4 A/B update manager (status / stage / sabotage). */
+static void
+bi_gui(void)
+{
+	int rc;
+	register unsigned _r7 __asm__("r7") = 102u;
+	__asm__ volatile(
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (rc) : "r" (_r7) : "lr", "memory", "cc");
+	if (rc == 0)
+		sh_puts("gui: starting dashboard (face)...\n");
+	else if (rc == 1)
+		sh_puts("gui: dashboard already running\n");
+	else
+		sh_puts("gui: unavailable (safe mode)\n");
+}
+
 static void
 bi_update(void)
 {
@@ -860,6 +894,8 @@ _start(void)
 			bi_bootlog();
 		else if (sh_streq(sh_argv[0], "setup"))
 			bi_setup();
+		else if (sh_streq(sh_argv[0], "gui"))
+			bi_gui();
 		else if (sh_streq(sh_argv[0], "update"))
 			bi_update();
 		else if (sh_streq(sh_argv[0], "run"))

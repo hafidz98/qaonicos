@@ -42,6 +42,8 @@ extern void	bootstate_info(unsigned int *, unsigned int *,
 extern int	bootstate_log_get(unsigned int, void *);
 extern unsigned int bootstate_flags(void);
 extern void	bootstate_set_provisioned(int);
+extern void	bootstate_set_gui_mode(unsigned int);
+extern unsigned int bootstate_gui_mode(void);
 extern int	bootstate_update_stage(unsigned int);
 extern void	bootstate_update_info(unsigned int *, unsigned int *,
 		    unsigned int *, unsigned int *);
@@ -190,6 +192,7 @@ extern int	fat32_read_file(const char *path, unsigned char *dst,
 extern int	fat32_delete(const char *path);
 extern int	fat32_listdir(const char *path, char *dst, unsigned int max);
 
+extern void	gpu_splash(unsigned int pct, unsigned int stage);
 /* gpu.c (App A1, SYS_DISPLAY_INFO/FLUSH). */
 extern int	gpu_available_p(void);
 extern int	gpu_flush_strip(unsigned int x, unsigned int y,
@@ -293,6 +296,7 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_BOOTLOG	99u	/* B2: a0=idx/0xFFFFFFFF=count, a1=rec */
 #define	SYS_TIME_QUALITY 100u	/* B3: -> 0 unsynced / 1 NTP synced */
 #define	SYS_TIME_SYNC	101u	/* B3: mark clock NTP-synced */
+#define	SYS_GUI_START	102u	/* Boot UX: launch GUI daemons on demand */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -411,6 +415,11 @@ struct daemon {
 
 static struct daemon	daemons[NDAEMON];
 static unsigned		ndaemon_reg = 0;
+
+/* Boot UX: deferred GUI launch. sh asks via SYS_GUI_START; the
+ * scheduler performs the launch from its own context. */
+static volatile unsigned gui_pending = 0;
+static unsigned		gui_launched = 0;
 static int		sched_cur = -1;
 static int		sched_active = 0;
 
@@ -1192,6 +1201,18 @@ user_syscall(struct arm_trap_frame *frame)
 		return (unsigned int)lfs_port_read(kpath,
 		    (unsigned char *)a1, a2);
 	}
+	case SYS_GUI_START: {
+		/* Boot UX: request the GUI daemons (face/uiapp/
+		 * qabotd). The actual launch happens in
+		 * sched_yield_switch -- creating tasks from the
+		 * requester's syscall frame is not safe. */
+		if (bootstate_safe_mode())
+			return (unsigned int)-1;
+		if (gui_launched)
+			return 1u;
+		gui_pending = 1;
+		return 0u;
+	}
 	case SYS_BOOTSTATE: {
 		if (a0 == 0u) {
 			unsigned int *u = (unsigned int *)a1;
@@ -1256,6 +1277,11 @@ user_syscall(struct arm_trap_frame *frame)
 		}
 		if (a0 == 10u)
 			return (unsigned int)bootstate_update_cancel();
+		if (a0 == 11u) {
+			/* Boot UX: set/clear user (GUI) mode. */
+			bootstate_set_gui_mode(a1);
+			return 0u;
+		}
 		return (unsigned int)-1;
 	}
 	case SYS_TIME_QUALITY:
@@ -1328,6 +1354,8 @@ pick_next(void)
 	return 0;
 }
 
+static void	gui_maybe_launch(void);
+
 static void
 sched_activate(struct daemon *d)
 {
@@ -1345,6 +1373,7 @@ sched_yield_switch(struct arm_trap_frame *f)
 	 * daemon.  Driver net polling murni (tanpa IRQ) jadi aman
 	 * dari konteks trap SVC. */
 	net_pump();
+	gui_maybe_launch();	/* Boot UX: deferred GUI launch */
 	cur = &daemons[sched_cur];
 	ctx_save(&cur->ctx, f);
 	next = pick_next();
@@ -1811,6 +1840,10 @@ static struct uprog_image daemon_images[] = {
 };
 #define	NDAEMON_IMAGES	(sizeof(daemon_images) / sizeof(daemon_images[0]))
 
+/* Boot UX: index of the shell in daemon_images[] (the GUI set is
+ * every other entry). The table order above is load-bearing. */
+#define	SH_IMAGE_IDX	(NDAEMON_IMAGES - 1u)
+
 /* One udesc per one-shot (NUPROGS) + per daemon image. This
  * array MUST cover both index ranges: it was sized UPROG_MAX=16
  * while NUPROGS grew past it, so daemon udesc writes (index
@@ -1833,6 +1866,36 @@ static struct user_task	uprog_udesc[NUPROGS + NDAEMON_IMAGES];
  *     menjalankannya bergantian (tak kembali).
  */
 extern void	net_init_all(void);
+
+/* Boot UX: launch one daemon image by table index. */
+static void
+launch_daemon_idx(unsigned int i)
+{
+	launch_daemon(daemon_images[i].name, daemon_images[i].img,
+		      *daemon_images[i].lenp,
+		      daemon_images[i].stack_pages,
+		      &uprog_udesc[NUPROGS + i], i);
+}
+
+/* Boot UX: deferred GUI launch, run from the scheduler switch
+ * path (never from a syscall frame). Launches every daemon
+ * image except the shell. */
+static void
+gui_maybe_launch(void)
+{
+	unsigned int i;
+
+	if (!gui_pending || gui_launched)
+		return;
+	gui_launched = 1;
+	gui_pending = 0;
+	for (i = 0; i < NDAEMON_IMAGES; i++) {
+		if (i == SH_IMAGE_IDX)
+			continue;
+		launch_daemon_idx(i);
+	}
+	printf("gui: dashboard daemons launched\n");
+}
 
 void
 user_launch_init(void)
@@ -1887,6 +1950,7 @@ user_launch_init(void)
 		       (unsigned)(sizeof(want_files) / sizeof(want_files[0])));
 	else
 		printf("user_launch_init: %u FAILs\n", fails);
+	gpu_splash(60u, 1u);	/* Boot UX: one-shots done */
 
 	/* B2: a boot whose one-shots all passed is a healthy boot:
 	 * reset the consecutive-failure counter.
@@ -1900,23 +1964,31 @@ user_launch_init(void)
 
 	/* Fase D: init network (blocking); pump-nya dari scheduler. */
 	net_init_all();
+	gpu_splash(85u, 2u);	/* Boot UX: network up */
+	gpu_splash(100u, 3u);	/* Boot UX: ready (holds as idle screen) */
 
 	/* App A2: daftarkan daemon persisten, lalu jalan.
-	 * B2 safe mode: only the shell daemon is launched. */
+	 * B2 safe mode: only the shell daemon is launched.
+	 * Boot UX: in dev mode only the shell launches at boot;
+	 * the GUI daemons (all images except sh, the last entry)
+	 * start on demand via SYS_GUI_START. In user mode
+	 * (bootstate flag bit2) everything launches as before. */
 	for (i = 0; i < NDAEMON_IMAGES; i++) {
-		if (bootstate_safe_mode() &&
-		    !(daemon_images[i].name[0] == 's' &&
-		      daemon_images[i].name[1] == 'h' &&
-		      daemon_images[i].name[2] == 0)) {
+		if (bootstate_safe_mode() && i != SH_IMAGE_IDX) {
 			printf("bootstate: skipping daemon '%s' (safe mode)\n",
 			    daemon_images[i].name);
 			continue;
 		}
-		launch_daemon(daemon_images[i].name, daemon_images[i].img,
-			      *daemon_images[i].lenp,
-			      daemon_images[i].stack_pages,
-			      &uprog_udesc[NUPROGS + i], i);
+		if (!bootstate_safe_mode() && !bootstate_gui_mode() &&
+		    i != SH_IMAGE_IDX)
+			continue;	/* dev mode: GUI on demand */
+		launch_daemon_idx(i);
+		if (i != SH_IMAGE_IDX)
+			gui_launched = 1;
 	}
+	if (!bootstate_safe_mode() && !bootstate_gui_mode())
+		printf("bootux: dev mode -- shell only; "
+		    "'gui' starts the dashboard\n");
 	sched_run();
 	/* NOTREACHED */
 }

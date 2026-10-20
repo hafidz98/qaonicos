@@ -369,6 +369,25 @@ bootstate_flags(void)
 	return bs_cur.flags;
 }
 
+/* Boot UX: user (GUI) mode flag (bit2 of flags). */
+void
+bootstate_set_gui_mode(unsigned int on)
+{
+	if (!bs_ready)
+		return;
+	if (on)
+		bs_cur.flags |= 4u;
+	else
+		bs_cur.flags &= ~4u;
+	bs_persist();
+}
+
+unsigned int
+bootstate_gui_mode(void)
+{
+	return (bs_ready && (bs_cur.flags & 4u)) ? 1u : 0u;
+}
+
 void
 bootstate_set_provisioned(int on)
 {

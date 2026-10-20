@@ -91,17 +91,30 @@ _start(void)
 		/* 5+6 need the idle state; during a trial/staged boot
 		 * they are skipped (the negatives above still ran). */
 		if (!busy) {
-			/* 5: the genuine v250 package stages. */
-			if (sys_bs_buf(9u, pkg_new, pkg_new_len) != 0)
+			/* 5: the genuine v250 package stages -- unless
+			 * the device already runs >= v250 (possible
+			 * when an earlier test boot was power-cut
+			 * after staging and the trial then confirmed
+			 * legitimately). Then -2 is the correct
+			 * answer and there is nothing to cancel. */
+			r = sys_bs_buf(9u, pkg_new, pkg_new_len);
+			if (r == 0) {
+				if (sys_bs_info(info) != 0 ||
+				    info[2] != 1u || info[3] != 250u)
+					fails++;
+				/* 6: cancel returns to idle. */
+				if (sys_bs_buf(10u, buf, 0u) != 0)
+					fails++;
+				if (sys_bs_info(info) != 0 ||
+				    info[2] != 0u)
+					fails++;
+			} else if (r == -2) {
+				if (sys_bs_info(info) != 0 ||
+				    info[0] < 250u)
+					fails++;
+			} else {
 				fails++;
-			if (sys_bs_info(info) != 0 || info[2] != 1u ||
-			    info[3] != 250u)
-				fails++;
-			/* 6: cancel returns the device to idle. */
-			if (sys_bs_buf(10u, buf, 0u) != 0)
-				fails++;
-			if (sys_bs_info(info) != 0 || info[2] != 0u)
-				fails++;
+			}
 		}
 	}
 
