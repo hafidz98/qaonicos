@@ -4,10 +4,10 @@
  * Loop interaktif: baca 1 baris prompt dari console -> jalankan harness
  * ReAct (qb_run_task, provider real) -> cetak respons.  Ekspresi wajah
  * Qabot di-drive via syscall 78 seiring fase kerja:
- *   LISTENING saat menunggu/mengetik prompt,
+ *   IDLE      saat menganggur menunggu prompt (wajah dasbor),
  *   THINKING  selama provider.chat() (LLM berpikir),
  *   SPEAKING  saat emit respons final,
- *   IDLE      saat selesai / menganggur.
+ *   LISTENING hanya untuk sesi suara (VOICE) -- bukan idle.
  * Teks status tampil di wajah (face_set_status_text).
  *
  * Provider: mode ANONIM + TCP polos ke proxy penerjemah AI Horde di
@@ -133,7 +133,10 @@ _start(void)
 	qb_real_set_plain(1, QD_PROXY_IP, QD_PROXY_PORT, "qabot-proxy");
 
 	for (;;) {
-		sys_face_expr(QD_EXPR_LISTENING, "mendengarkan...");
+		/* Idle = the dashboard face (eyes). LISTENING is
+		 * reserved for real voice sessions, not for waiting
+		 * on a typed prompt (Boot UX feedback 2026-10-21). */
+		sys_face_expr(QD_EXPR_IDLE, "");
 		qd_puts("qabot> ");
 		n = qd_readline();
 		if (n == 0u)

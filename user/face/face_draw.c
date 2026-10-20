@@ -160,6 +160,11 @@ void fb_waveform(int x0, int x1, int y, int amp, uint8_t phase,
 }
 
 static const uint8_t *glyph_for(char ch) {
+    /* The table carries uppercase only; fold lowercase up so
+     * status strings render regardless of the caller's casing
+     * (qabotd's Indonesian strings are lowercase -- without the
+     * fold only their punctuation showed, e.g. "..." alone). */
+    if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
     for (int i = 0; i < FONT5X7_COUNT; i++)
         if (font5x7[i].ch == ch) return font5x7[i].col;
     return 0;
