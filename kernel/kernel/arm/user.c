@@ -42,6 +42,11 @@ extern void	bootstate_info(unsigned int *, unsigned int *,
 extern int	bootstate_log_get(unsigned int, void *);
 extern unsigned int bootstate_flags(void);
 extern void	bootstate_set_provisioned(int);
+extern int	bootstate_update_stage(unsigned int);
+extern void	bootstate_update_info(unsigned int *, unsigned int *,
+		    unsigned int *, unsigned int *);
+extern void	bootstate_sabotage_arm(void);
+extern int	bootstate_sabotage_take(void);
 extern unsigned int bootstate_log_count(void);
 extern unsigned int arm_timer_ticks(void);
 extern void	uart_putc(char c);
@@ -279,7 +284,7 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_LFS_LIST	95u	/* B1.5: (buf, max) -> bytes/-1 */
 #define	SYS_LFS_READ	96u	/* B1.5: (path, buf, max) -> len/-1 */
 #define	SYS_LFS_WRITE	97u	/* B1.5: (path, buf, len) -> 0/-1 */
-#define	SYS_BOOTSTATE	98u	/* B2: a0=sub 0=info 1=healthy 2=crash */
+#define	SYS_BOOTSTATE	98u	/* B2/B3/B4: subs 0 info 1 healthy 2 crash 3 flags 4/5 prov 6 updinfo 7 stage 8 sabotage */
 #define	SYS_BOOTLOG	99u	/* B2: a0=idx/0xFFFFFFFF=count, a1=rec */
 #define	SYS_TIME_QUALITY 100u	/* B3: -> 0 unsynced / 1 NTP synced */
 #define	SYS_TIME_SYNC	101u	/* B3: mark clock NTP-synced */
@@ -1208,6 +1213,19 @@ user_syscall(struct arm_trap_frame *frame)
 			bootstate_set_provisioned(0);
 			return 0u;
 		}
+		if (a0 == 6u) {
+			unsigned int *u = (unsigned int *)a1;
+			if (!user_range_ok(a1, 16u))
+				return (unsigned int)-1;
+			bootstate_update_info(&u[0], &u[1], &u[2], &u[3]);
+			return 0u;
+		}
+		if (a0 == 7u)
+			return (unsigned int)bootstate_update_stage(a1);
+		if (a0 == 8u) {
+			bootstate_sabotage_arm();
+			return 0u;
+		}
 		return (unsigned int)-1;
 	}
 	case SYS_TIME_QUALITY:
@@ -1832,9 +1850,14 @@ user_launch_init(void)
 		printf("user_launch_init: %u FAILs\n", fails);
 
 	/* B2: a boot whose one-shots all passed is a healthy boot:
-	 * reset the consecutive-failure counter. */
-	if (fails == 0)
+	 * reset the consecutive-failure counter.
+	 * B4: an armed sabotage (bad-update simulation) suppresses
+	 * exactly one healthy mark. */
+	if (bootstate_sabotage_take()) {
+		printf("bootstate: sabotage armed -- healthy mark skipped\n");
+	} else if (fails == 0) {
 		bootstate_healthy(arm_timer_ticks() * 10u);
+	}
 
 	/* Fase D: init network (blocking); pump-nya dari scheduler. */
 	net_init_all();

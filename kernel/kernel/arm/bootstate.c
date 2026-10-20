@@ -37,6 +37,10 @@ extern unsigned int blk_total_sectors(void);
 #define BLE_CRASHMARK	4u
 #define BLE_PROVISIONED	5u
 #define BLE_PROV_RESET	6u
+#define BLE_ROLLBACK	7u
+#define BLE_UPD_STAGE	8u
+#define BLE_UPD_TRIAL	9u
+#define BLE_UPD_CONFIRM	10u
 
 struct bs_state {
 	unsigned int magic;
@@ -44,7 +48,13 @@ struct bs_state {
 	unsigned int fail_count;
 	unsigned int last_reason;
 	unsigned int log_seq;	/* next boot-log sequence number */
-	unsigned int flags;	/* B3: bit0 = provisioned */
+	unsigned int flags;	/* B3: bit0 = provisioned;
+				 * B4: bit1 = sabotage armed */
+	unsigned int cur_version;	/* B4: version of active slot */
+	unsigned int active_slot;	/* B4: 0=A, 1=B */
+	unsigned int upd_state;		/* B4: 0 idle, 1 staged, 2 trial */
+	unsigned int pending_slot;	/* B4 */
+	unsigned int pending_version;	/* B4 */
 	unsigned int cksum;
 };
 
@@ -73,7 +83,9 @@ bs_cksum(const struct bs_state *s)
 {
 	return s->magic ^ s->boot_count * 2654435761u ^
 	    s->fail_count * 40503u ^ s->last_reason ^ s->log_seq ^
-	    s->flags * 977u ^ 0xa5a5a5a5u;
+	    s->flags * 977u ^ s->cur_version * 31u ^ s->active_slot ^
+	    s->upd_state * 7u ^ s->pending_slot ^ s->pending_version ^
+	    0xa5a5a5a5u;
 }
 
 static unsigned int
@@ -147,6 +159,11 @@ bootstate_init(void)
 		bs_cur.last_reason = BSR_POWER;
 		bs_cur.log_seq = 0;
 		bs_cur.flags = 0;
+		bs_cur.cur_version = 1;
+		bs_cur.active_slot = 0;
+		bs_cur.upd_state = 0;
+		bs_cur.pending_slot = 0;
+		bs_cur.pending_version = 0;
 	}
 	bs_cur.boot_count++;
 	bs_cur.fail_count++;
@@ -160,10 +177,74 @@ bootstate_init(void)
 	} else {
 		bs_log(BLE_BOOT, 0, "boot");
 	}
+	/* B4: update state machine.
+	 * state==trial here means the previous boot was a trial that
+	 * never confirmed itself healthy -> roll back to the old slot.
+	 * state==staged means a staged update gets its trial boot now. */
+	if (bs_cur.upd_state == 2u) {
+		bs_cur.active_slot ^= 1u;
+		bs_cur.upd_state = 0;
+		bs_cur.pending_version = 0;
+		bs_persist();
+		bs_log(BLE_ROLLBACK, 0, "update rolled back");
+		printf("bootstate: update ROLLBACK (trial unconfirmed)\n");
+	} else if (bs_cur.upd_state == 1u) {
+		bs_cur.active_slot = bs_cur.pending_slot;
+		bs_cur.upd_state = 2u;
+		bs_persist();
+		bs_log(BLE_UPD_TRIAL, 0, "update trial boot");
+		printf("bootstate: update TRIAL slot=%u ver=%u\n",
+		    bs_cur.active_slot, bs_cur.pending_version);
+	}
+
 	printf("bootstate: boot #%u fail=%u reason=%u safe=%d\n",
 	    bs_cur.boot_count, bs_cur.fail_count, bs_cur.last_reason,
 	    bs_safe_mode);
 	return bs_safe_mode;
+}
+
+/* B4: stage an update for trial on the next boot. 0 ok, -1 busy. */
+int
+bootstate_update_stage(unsigned int version)
+{
+	if (!bs_ready || bs_cur.upd_state != 0u)
+		return -1;
+	bs_cur.pending_slot = bs_cur.active_slot ^ 1u;
+	bs_cur.pending_version = version;
+	bs_cur.upd_state = 1u;
+	bs_persist();
+	bs_log(BLE_UPD_STAGE, 0, "update staged");
+	return 0;
+}
+
+void
+bootstate_update_info(unsigned int *cur_version, unsigned int *slot,
+    unsigned int *state, unsigned int *pending_version)
+{
+	*cur_version = bs_cur.cur_version;
+	*slot = bs_cur.active_slot;
+	*state = bs_cur.upd_state;
+	*pending_version = bs_cur.pending_version;
+}
+
+/* B4 test hook: arm a one-shot sabotage (skip one healthy mark). */
+void
+bootstate_sabotage_arm(void)
+{
+	if (!bs_ready)
+		return;
+	bs_cur.flags |= 2u;
+	bs_persist();
+}
+
+int
+bootstate_sabotage_take(void)
+{
+	if (!bs_ready || !(bs_cur.flags & 2u))
+		return 0;
+	bs_cur.flags &= ~2u;
+	bs_persist();
+	return 1;
 }
 
 int
@@ -180,6 +261,16 @@ bootstate_healthy(unsigned int uptime_ms)
 	bs_cur.fail_count = 0;
 	bs_persist();
 	bs_log(BLE_HEALTHY, uptime_ms, "all one-shots passed");
+	/* B4: a healthy trial boot confirms the update. */
+	if (bs_cur.upd_state == 2u) {
+		bs_cur.cur_version = bs_cur.pending_version;
+		bs_cur.pending_version = 0;
+		bs_cur.upd_state = 0;
+		bs_persist();
+		bs_log(BLE_UPD_CONFIRM, uptime_ms, "update confirmed");
+		printf("bootstate: update CONFIRMED ver=%u slot=%u\n",
+		    bs_cur.cur_version, bs_cur.active_slot);
+	}
 }
 
 /* Arm a simulated crash: next boot will reach the threshold. */

@@ -157,6 +157,7 @@ bi_help(void)
 	sh_puts("  bootctl [crash] boot state / arm crash simulation\n");
 	sh_puts("  bootlog         persistent boot history\n");
 	sh_puts("  setup [name <x>|tz <x>|done|reset]  first-boot setup\n");
+	sh_puts("  update [stage <ver>|sabotage]  A/B update manager\n");
 	sh_puts("  run <path>      run program (Q9 spawn)\n");
 }
 
@@ -569,6 +570,60 @@ bi_setup(void)
 	sh_puts("\n");
 }
 
+static int
+sh_bootstate_arg(unsigned sub, unsigned arg)
+{
+	register unsigned _r0 __asm__("r0") = sub;
+	register unsigned _r1 __asm__("r1") = arg;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #98\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret) : "r" (_r0), "r" (_r1)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+/* update: B4 A/B update manager (status / stage / sabotage). */
+static void
+bi_update(void)
+{
+	unsigned info[4];
+
+	if (sh_argc > 2 && sh_streq(sh_argv[1], "stage")) {
+		unsigned v = sh_atou(sh_argv[2]);
+
+		if (sh_bootstate_arg(7u, v) == 0)
+			sh_puts("update: staged (reboot to trial)\n");
+		else
+			sh_puts("update: stage failed (busy?)\n");
+		return;
+	}
+	if (sh_argc > 1 && sh_streq(sh_argv[1], "sabotage")) {
+		if (sh_bootstate(8u, info) == 0)
+			sh_puts("update: sabotage armed (next boot unconfirmed)\n");
+		else
+			sh_puts("update: sabotage failed\n");
+		return;
+	}
+	if (sh_bootstate(6u, info) != 0) {
+		sh_puts("update: state unavailable\n");
+		return;
+	}
+	sh_puts("update: version=");
+	sh_putu(info[0]);
+	sh_puts(" slot=");
+	sh_puts(info[1] ? "B" : "A");
+	sh_puts(" state=");
+	sh_puts(info[2] == 0 ? "idle" : info[2] == 1 ? "staged" : "trial");
+	if (info[2] != 0) {
+		sh_puts(" pending_ver=");
+		sh_putu(info[3]);
+	}
+	sh_puts("\n");
+}
+
 static void
 bi_bootlog(void)
 {
@@ -792,6 +847,8 @@ _start(void)
 			bi_bootlog();
 		else if (sh_streq(sh_argv[0], "setup"))
 			bi_setup();
+		else if (sh_streq(sh_argv[0], "update"))
+			bi_update();
 		else if (sh_streq(sh_argv[0], "run"))
 			bi_run();
 		else {
