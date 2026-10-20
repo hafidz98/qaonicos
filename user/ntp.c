@@ -278,6 +278,7 @@ sntp_sync(unsigned server_ip)
 				if (unix < MIN_UNIX)
 					return -2;	/* tolak jam aneh */
 				sys_time_set(unix);
+				sys_time_sync();
 				return 0;
 			}
 			if (sys_uptime() - t0 >= TIMEOUT_MS)

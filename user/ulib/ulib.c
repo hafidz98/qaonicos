@@ -645,6 +645,24 @@ sys_time_get(void)
 }
 
 int
+sys_time_quality(void)
+{
+	return sys_display_simple(100u, 0u);
+}
+
+int
+sys_time_sync(void)
+{
+	return sys_display_simple(101u, 1u);
+}
+
+int
+sys_time_unsync(void)
+{
+	return sys_display_simple(101u, 0u);
+}
+
+int
 sys_udp_send(unsigned dst_ip, unsigned dst_port,
 	     const void *buf, unsigned len)
 {

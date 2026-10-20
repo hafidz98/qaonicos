@@ -40,6 +40,8 @@ extern void	bootstate_crash_sim(void);
 extern void	bootstate_info(unsigned int *, unsigned int *,
 		    unsigned int *, unsigned int *);
 extern int	bootstate_log_get(unsigned int, void *);
+extern unsigned int bootstate_flags(void);
+extern void	bootstate_set_provisioned(int);
 extern unsigned int bootstate_log_count(void);
 extern unsigned int arm_timer_ticks(void);
 extern void	uart_putc(char c);
@@ -86,6 +88,10 @@ extern unsigned char	ulfs_img[];	/* B1: littlefs test */
 extern unsigned int	ulfs_img_len;
 extern unsigned char	ublogtest_img[];	/* B2: bootlog diagnostic */
 extern unsigned int	ublogtest_img_len;
+extern unsigned char	ufirst_img[];	/* B3: first-boot */
+extern unsigned int	ufirst_img_len;
+extern unsigned char	utimegate_img[];	/* B3: time quality test */
+extern unsigned int	utimegate_img_len;
 extern unsigned char	utcpkeep_img[];	/* F1 SEMENTARA: keep-alive RX test */
 extern unsigned int	utcpkeep_img_len;
 extern unsigned char	utlskeep_img[];	/* F1 SEMENTARA: TLS keep-alive RX test */
@@ -275,6 +281,8 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_LFS_WRITE	97u	/* B1.5: (path, buf, len) -> 0/-1 */
 #define	SYS_BOOTSTATE	98u	/* B2: a0=sub 0=info 1=healthy 2=crash */
 #define	SYS_BOOTLOG	99u	/* B2: a0=idx/0xFFFFFFFF=count, a1=rec */
+#define	SYS_TIME_QUALITY 100u	/* B3: -> 0 unsynced / 1 NTP synced */
+#define	SYS_TIME_SYNC	101u	/* B3: mark clock NTP-synced */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -431,6 +439,7 @@ static int		face_req_pending = 0;
 static unsigned		time_unix_set;
 static unsigned		time_tick_set;
 static int		time_valid = 0;
+static int		time_synced = 0;	/* B3: set only via NTP */
 
 /* Antrean event input untuk pemegang token. */
 #define	EVQ_LEN		16u
@@ -1189,8 +1198,25 @@ user_syscall(struct arm_trap_frame *frame)
 			bootstate_crash_sim();
 			return 0u;
 		}
+		if (a0 == 3u)
+			return bootstate_flags();
+		if (a0 == 4u) {
+			bootstate_set_provisioned(1);
+			return 0u;
+		}
+		if (a0 == 5u) {
+			bootstate_set_provisioned(0);
+			return 0u;
+		}
 		return (unsigned int)-1;
 	}
+	case SYS_TIME_QUALITY:
+		/* B3: 1 only if the NTP daemon marked the clock. */
+		return time_synced ? 1u : 0u;
+	case SYS_TIME_SYNC:
+		/* a0=1: mark synced (NTP daemon). a0=0: clear (tests). */
+		time_synced = a0 ? 1 : 0;
+		return 0;
 	case SYS_BOOTLOG: {
 		if (a0 == 0xffffffffu)
 			return bootstate_log_count();
@@ -1715,6 +1741,8 @@ static struct uprog_image uprogs[] = {
 	{ "upl330", upl330_img, &upl330_img_len, 1u },	/* D2b: PL330 */
 	{ "ulfs", ulfs_img, &ulfs_img_len, 1u },	/* B1: littlefs */
 	{ "ublogtest", ublogtest_img, &ublogtest_img_len, 1u },	/* B2 diag */
+	{ "ufirst", ufirst_img, &ufirst_img_len, 1u },	/* B3: first boot */
+	{ "utimegate", utimegate_img, &utimegate_img_len, 1u },	/* B3 */
 	{ "qabot", qabot_img, &qabot_img_len, 1u },	/* Q1: harness, one-shot */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))

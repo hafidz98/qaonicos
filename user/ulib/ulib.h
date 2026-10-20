@@ -128,6 +128,9 @@ int	sys_display_sleep(int req);
 /* Jam dinding + UDP (App A4): 69-72. */
 int	sys_time_set(unsigned unix_sec);
 unsigned	sys_time_get(void);
+int	sys_time_quality(void);	/* B3: 0 unsynced / 1 NTP synced */
+int	sys_time_sync(void);	/* B3: mark NTP-synced (ntp daemon) */
+int	sys_time_unsync(void);	/* B3: clear synced flag (tests) */
 int	sys_udp_send(unsigned dst_ip, unsigned dst_port,
 		       const void *buf, unsigned len);
 int	sys_udp_recv(void *buf, unsigned maxlen,

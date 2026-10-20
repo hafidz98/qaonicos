@@ -35,6 +35,8 @@ extern unsigned int blk_total_sectors(void);
 #define BLE_HEALTHY	2u
 #define BLE_SAFEMODE	3u
 #define BLE_CRASHMARK	4u
+#define BLE_PROVISIONED	5u
+#define BLE_PROV_RESET	6u
 
 struct bs_state {
 	unsigned int magic;
@@ -42,6 +44,7 @@ struct bs_state {
 	unsigned int fail_count;
 	unsigned int last_reason;
 	unsigned int log_seq;	/* next boot-log sequence number */
+	unsigned int flags;	/* B3: bit0 = provisioned */
 	unsigned int cksum;
 };
 
@@ -70,7 +73,7 @@ bs_cksum(const struct bs_state *s)
 {
 	return s->magic ^ s->boot_count * 2654435761u ^
 	    s->fail_count * 40503u ^ s->last_reason ^ s->log_seq ^
-	    0xa5a5a5a5u;
+	    s->flags * 977u ^ 0xa5a5a5a5u;
 }
 
 static unsigned int
@@ -143,6 +146,7 @@ bootstate_init(void)
 		bs_cur.fail_count = 0;
 		bs_cur.last_reason = BSR_POWER;
 		bs_cur.log_seq = 0;
+		bs_cur.flags = 0;
 	}
 	bs_cur.boot_count++;
 	bs_cur.fail_count++;
@@ -198,6 +202,27 @@ bootstate_panic_note(void)
 		return;
 	bs_cur.last_reason = BSR_CRASH;
 	bs_persist();
+}
+
+/* B3: provisioning flag (bit0 of flags). */
+unsigned int
+bootstate_flags(void)
+{
+	return bs_cur.flags;
+}
+
+void
+bootstate_set_provisioned(int on)
+{
+	if (!bs_ready)
+		return;
+	if (on)
+		bs_cur.flags |= 1u;
+	else
+		bs_cur.flags &= ~1u;
+	bs_persist();
+	bs_log(on ? BLE_PROVISIONED : BLE_PROV_RESET, 0,
+	    on ? "provisioned" : "provisioning reset");
 }
 
 void

@@ -9,9 +9,21 @@
 #define	SH_LINE_MAX	120u
 #define	SH_ARGS_MAX	8u
 
+static int	sh_time_quality(void);
+
 static char	sh_line[SH_LINE_MAX + 1u];
 static char	*sh_argv[SH_ARGS_MAX];
 static unsigned	sh_argc;
+
+static unsigned
+sh_len(const char *s)
+{
+	unsigned n;
+
+	for (n = 0; s[n]; n++)
+		;
+	return n;
+}
 
 static void
 sh_puts(const char *s)
@@ -144,6 +156,7 @@ bi_help(void)
 	sh_puts("  qfetch          system summary (neofetch-style)\n");
 	sh_puts("  bootctl [crash] boot state / arm crash simulation\n");
 	sh_puts("  bootlog         persistent boot history\n");
+	sh_puts("  setup [name <x>|tz <x>|done|reset]  first-boot setup\n");
 	sh_puts("  run <path>      run program (Q9 spawn)\n");
 }
 
@@ -402,8 +415,10 @@ bi_time(void)
 	t = sys_time_get();
 	sh_puts("time=");
 	sh_putu(t);
-	if (t == 0)
-		sh_puts(" (belum sinkron NTP)");
+	if (sh_time_quality() == 1)
+		sh_puts(" (NTP synced)");
+	else
+		sh_puts(" (not NTP synced)");
 	sh_puts("\n");
 }
 
@@ -477,6 +492,81 @@ bi_bootctl(void)
 	sh_puts("  last_reason=");
 	sh_putu(info[3]);
 	sh_puts(" (0=unknown 1=power 2=crash 3=watchdog)\n");
+}
+
+static int
+sh_time_quality(void)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r7, #100\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret) : : "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+/* setup: B3 first-boot provisioning (OS side). */
+static void
+bi_setup(void)
+{
+	unsigned info[4];
+	static char buf[40];
+	int n;
+
+	if (sh_argc > 1 && sh_streq(sh_argv[1], "done")) {
+		if (sh_bootstate(4u, info) == 0)
+			sh_puts("setup: done -- device provisioned\n");
+		else
+			sh_puts("setup: failed\n");
+		return;
+	}
+	if (sh_argc > 1 && sh_streq(sh_argv[1], "reset")) {
+		if (sh_bootstate(5u, info) == 0)
+			sh_puts("setup: provisioning cleared (next boot = first boot)\n");
+		else
+			sh_puts("setup: failed\n");
+		return;
+	}
+	if (sh_argc > 2 && sh_streq(sh_argv[1], "name")) {
+		if (sh_lfs_mount() != 0 ||
+		    sh_lfs_write("cfg-name", sh_argv[2],
+			sh_len(sh_argv[2])) != 0)
+			sh_puts("setup: write failed\n");
+		else
+			sh_puts("setup: name saved\n");
+		return;
+	}
+	if (sh_argc > 2 && sh_streq(sh_argv[1], "tz")) {
+		if (sh_lfs_mount() != 0 ||
+		    sh_lfs_write("cfg-tz", sh_argv[2],
+			sh_len(sh_argv[2])) != 0)
+			sh_puts("setup: write failed\n");
+		else
+			sh_puts("setup: tz saved\n");
+		return;
+	}
+	/* status */
+	n = sh_bootstate(3u, info);
+	sh_puts("setup: ");
+	sh_puts(n >= 0 && (n & 1) ? "provisioned" : "NOT provisioned");
+	sh_puts("\n  name: ");
+	if (sh_lfs_mount() == 0 &&
+	    (n = sh_lfs_read("cfg-name", buf, sizeof(buf) - 1u)) > 0) {
+		buf[n] = 0;
+		sh_puts(buf);
+	} else {
+		sh_puts("(unset)");
+	}
+	sh_puts("\n  tz: ");
+	if (sh_lfs_mount() == 0 &&
+	    (n = sh_lfs_read("cfg-tz", buf, sizeof(buf) - 1u)) > 0) {
+		buf[n] = 0;
+		sh_puts(buf);
+	} else {
+		sh_puts("(unset)");
+	}
+	sh_puts("\n");
 }
 
 static void
@@ -700,6 +790,8 @@ _start(void)
 			bi_bootctl();
 		else if (sh_streq(sh_argv[0], "bootlog"))
 			bi_bootlog();
+		else if (sh_streq(sh_argv[0], "setup"))
+			bi_setup();
 		else if (sh_streq(sh_argv[0], "run"))
 			bi_run();
 		else {
