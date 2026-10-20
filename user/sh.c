@@ -142,6 +142,8 @@ bi_help(void)
 	sh_puts("  face <0-7> [text] set face expression\n");
 	sh_puts("  qabot           Qabot daemon info\n");
 	sh_puts("  qfetch          system summary (neofetch-style)\n");
+	sh_puts("  bootctl [crash] boot state / arm crash simulation\n");
+	sh_puts("  bootlog         persistent boot history\n");
 	sh_puts("  run <path>      run program (Q9 spawn)\n");
 }
 
@@ -418,6 +420,103 @@ bi_uptime(void)
 	sh_puts(" dtk)\n");
 }
 
+/* --- boot state (B2) wrappers + builtins --- */
+
+static int
+sh_bootstate(unsigned sub, unsigned *info)
+{
+	register unsigned _r0 __asm__("r0") = sub;
+	register unsigned _r1 __asm__("r1") = (unsigned)info;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #98\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret) : "r" (_r0), "r" (_r1)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+static int
+sh_bootlog(unsigned idx, char *rec)
+{
+	register unsigned _r0 __asm__("r0") = idx;
+	register unsigned _r1 __asm__("r1") = (unsigned)rec;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #99\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret) : "r" (_r0), "r" (_r1)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+static void
+bi_bootctl(void)
+{
+	unsigned info[4];
+
+	if (sh_argc > 1 && sh_streq(sh_argv[1], "crash")) {
+		if (sh_bootstate(2u, info) == 0)
+			sh_puts("bootctl: crash armed (next boot -> safe mode)\n");
+		else
+			sh_puts("bootctl: crash arm failed\n");
+		return;
+	}
+	if (sh_bootstate(0u, info) != 0) {
+		sh_puts("bootctl: state unavailable\n");
+		return;
+	}
+	sh_puts("boot #");
+	sh_putu(info[0]);
+	sh_puts("  fail_count=");
+	sh_putu(info[1]);
+	sh_puts("  safe_mode=");
+	sh_putu(info[2]);
+	sh_puts("  last_reason=");
+	sh_putu(info[3]);
+	sh_puts(" (0=unknown 1=power 2=crash 3=watchdog)\n");
+}
+
+static void
+bi_bootlog(void)
+{
+	/* Word array, not char[]: fields are read as words, and a
+	 * char buffer is not guaranteed 4-byte aligned (fault 0xdab7
+	 * killed the shell when it landed unaligned). */
+	static unsigned int rec[16];
+	unsigned n, i;
+	int cnt = sh_bootlog(0xffffffffu, (char *)rec);
+
+	if (cnt < 0) {
+		sh_puts("bootlog: unavailable\n");
+		return;
+	}
+	n = (unsigned)cnt;
+	sh_puts("bootlog: ");
+	sh_putu(n);
+	sh_puts(" records\n");
+	for (i = 0; i < n; i++) {
+		if (sh_bootlog(i, (char *)rec) != 0)
+			continue;
+		sh_puts("boot #");
+		sh_putu(rec[2]);
+		sh_puts(" ev=");
+		sh_putu(rec[3]);
+		sh_puts(" fail=");
+		sh_putu(rec[4]);
+		sh_puts(" up=");
+		sh_putu(rec[5]);
+		sh_puts("ms ");
+		((char *)rec)[63] = 0;
+		sh_puts((char *)rec + 24);
+		sh_puts("\n");
+	}
+	if (n == 0)
+		sh_puts("bootlog: (empty)\n");
+}
+
 /* qfetch: neofetch-style system summary, QaonicOS edition. */
 static const char *qf_logo[] = {
 	"   QQQ   A   OOO  N   N I  CCC  OOO   SSS  ",
@@ -597,6 +696,10 @@ _start(void)
 			bi_qabot();
 		else if (sh_streq(sh_argv[0], "qfetch"))
 			bi_qfetch();
+		else if (sh_streq(sh_argv[0], "bootctl"))
+			bi_bootctl();
+		else if (sh_streq(sh_argv[0], "bootlog"))
+			bi_bootlog();
 		else if (sh_streq(sh_argv[0], "run"))
 			bi_run();
 		else {

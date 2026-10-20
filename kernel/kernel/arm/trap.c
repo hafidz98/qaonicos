@@ -139,6 +139,8 @@ arm_trap_handler(struct arm_trap_frame *frame, int trapno)
 		    frame->r[9], frame->r[10], frame->r[11]);
 		printf("  r12=%x svc_lr=%x spsr=%x\n", frame->r[12],
 		    frame->svc_lr, frame->spsr);
+		{ extern void bootstate_panic_note(void);
+		  bootstate_panic_note(); }
 		panic("data abort halted");
 
 	case TRAP_PABT:
@@ -146,6 +148,8 @@ arm_trap_handler(struct arm_trap_frame *frame, int trapno)
 			user_fault(frame, USER_EXIT_PABT);
 			break;
 		}
+		{ extern void bootstate_panic_note(void);
+		  bootstate_panic_note(); }
 		panic("prefetch abort: pc=0x%x ifsr=0x%x",
 		      frame->lr, read_ifsr());
 

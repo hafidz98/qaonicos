@@ -33,6 +33,15 @@ extern int	lfs_port_list(char *, unsigned int);
 extern int	lfs_port_read(const char *, unsigned char *, unsigned int);
 extern int	lfs_port_write(const char *, const unsigned char *,
 		    unsigned int);
+extern int	bootstate_init(void);	/* bootstate.c (B2) */
+extern int	bootstate_safe_mode(void);
+extern void	bootstate_healthy(unsigned int);
+extern void	bootstate_crash_sim(void);
+extern void	bootstate_info(unsigned int *, unsigned int *,
+		    unsigned int *, unsigned int *);
+extern int	bootstate_log_get(unsigned int, void *);
+extern unsigned int bootstate_log_count(void);
+extern unsigned int arm_timer_ticks(void);
 extern void	uart_putc(char c);
 
 /* userasm.s */
@@ -75,6 +84,8 @@ extern unsigned char	upl330_img[];	/* D2b: PL330 microcode */
 extern unsigned int	upl330_img_len;
 extern unsigned char	ulfs_img[];	/* B1: littlefs test */
 extern unsigned int	ulfs_img_len;
+extern unsigned char	ublogtest_img[];	/* B2: bootlog diagnostic */
+extern unsigned int	ublogtest_img_len;
 extern unsigned char	utcpkeep_img[];	/* F1 SEMENTARA: keep-alive RX test */
 extern unsigned int	utcpkeep_img_len;
 extern unsigned char	utlskeep_img[];	/* F1 SEMENTARA: TLS keep-alive RX test */
@@ -262,6 +273,8 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_LFS_LIST	95u	/* B1.5: (buf, max) -> bytes/-1 */
 #define	SYS_LFS_READ	96u	/* B1.5: (path, buf, max) -> len/-1 */
 #define	SYS_LFS_WRITE	97u	/* B1.5: (path, buf, len) -> 0/-1 */
+#define	SYS_BOOTSTATE	98u	/* B2: a0=sub 0=info 1=healthy 2=crash */
+#define	SYS_BOOTLOG	99u	/* B2: a0=idx/0xFFFFFFFF=count, a1=rec */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -1160,6 +1173,31 @@ user_syscall(struct arm_trap_frame *frame)
 		return (unsigned int)lfs_port_read(kpath,
 		    (unsigned char *)a1, a2);
 	}
+	case SYS_BOOTSTATE: {
+		if (a0 == 0u) {
+			unsigned int *u = (unsigned int *)a1;
+			if (!user_range_ok(a1, 16u))
+				return (unsigned int)-1;
+			bootstate_info(&u[0], &u[1], &u[2], &u[3]);
+			return 0u;
+		}
+		if (a0 == 1u) {
+			bootstate_healthy(arm_timer_ticks() * 10u);
+			return 0u;
+		}
+		if (a0 == 2u) {
+			bootstate_crash_sim();
+			return 0u;
+		}
+		return (unsigned int)-1;
+	}
+	case SYS_BOOTLOG: {
+		if (a0 == 0xffffffffu)
+			return bootstate_log_count();
+		if (!user_range_ok(a1, 64u))
+			return (unsigned int)-1;
+		return (unsigned int)bootstate_log_get(a0, (void *)a1);
+	}
 	case SYS_LFS_WRITE: {
 		static char kpath[128];
 		if (copy_path_user(a0, kpath, sizeof(kpath)) != 0 ||
@@ -1676,6 +1714,7 @@ static struct uprog_image uprogs[] = {
 	{ "uvoice", uvoice_img, &uvoice_img_len, 1u },	/* D4: VOICE uplink */
 	{ "upl330", upl330_img, &upl330_img_len, 1u },	/* D2b: PL330 */
 	{ "ulfs", ulfs_img, &ulfs_img_len, 1u },	/* B1: littlefs */
+	{ "ublogtest", ublogtest_img, &ublogtest_img_len, 1u },	/* B2 diag */
 	{ "qabot", qabot_img, &qabot_img_len, 1u },	/* Q1: harness, one-shot */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))
@@ -1726,6 +1765,10 @@ user_launch_init(void)
 
 	ramfs_init();
 
+	/* B2: persistent boot state (increments fail counter; arms
+	 * safe mode at >=3 consecutive unconfirmed boots). */
+	bootstate_init();
+
 	/* The cooperative sched test disables the timer; user programs
 	 * need ticks for SYS_UPTIME.  Enable it here, after all task setup
 	 * (an immediate IRQ during task_create trips MI thread_select). */
@@ -1760,15 +1803,30 @@ user_launch_init(void)
 	else
 		printf("user_launch_init: %u FAILs\n", fails);
 
+	/* B2: a boot whose one-shots all passed is a healthy boot:
+	 * reset the consecutive-failure counter. */
+	if (fails == 0)
+		bootstate_healthy(arm_timer_ticks() * 10u);
+
 	/* Fase D: init network (blocking); pump-nya dari scheduler. */
 	net_init_all();
 
-	/* App A2: daftarkan daemon persisten, lalu jalan. */
-	for (i = 0; i < NDAEMON_IMAGES; i++)
+	/* App A2: daftarkan daemon persisten, lalu jalan.
+	 * B2 safe mode: only the shell daemon is launched. */
+	for (i = 0; i < NDAEMON_IMAGES; i++) {
+		if (bootstate_safe_mode() &&
+		    !(daemon_images[i].name[0] == 's' &&
+		      daemon_images[i].name[1] == 'h' &&
+		      daemon_images[i].name[2] == 0)) {
+			printf("bootstate: skipping daemon '%s' (safe mode)\n",
+			    daemon_images[i].name);
+			continue;
+		}
 		launch_daemon(daemon_images[i].name, daemon_images[i].img,
 			      *daemon_images[i].lenp,
 			      daemon_images[i].stack_pages,
 			      &uprog_udesc[NUPROGS + i], i);
+	}
 	sched_run();
 	/* NOTREACHED */
 }

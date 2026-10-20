@@ -236,15 +236,26 @@ blk_request(struct blkdev *d, unsigned int type, unsigned int sector,
 	/* Poll for completion.  used->idx is written by the device;
 	 * invalidate its line each iteration so we never read a stale
 	 * cached copy (the Fase 12d volatile-hoisting lesson, now with
-	 * D-cache on). */
+	 * D-cache on).
+	 *
+	 * B2 hardening: the old 100M-spin limit took ~100 s to expire
+	 * (a dcache invalidate per iteration), which looked exactly
+	 * like a hang and desynced the queue for every later request.
+	 * Now: re-notify once halfway (lost-notify retry), give up at
+	 * 3M spins, and resync used_idx on timeout so the next request
+	 * starts from a clean state. */
 	uidx = (volatile unsigned short *)&d->used->idx;
 	spin = 0;
-	while (*uidx == (unsigned short)d->used_idx && spin < 100000000u) {
+	while (*uidx == (unsigned short)d->used_idx && spin < 3000000u) {
 		dcache_inval_range((unsigned int)(unsigned long)uidx, 2);
+		if (spin == 1500000u)
+			mmio_w(d, VMM_QNOTIFY, 0);
 		spin++;
 	}
-	if (*uidx == (unsigned short)d->used_idx)
+	if (*uidx == (unsigned short)d->used_idx) {
+		d->used_idx = *uidx;	/* resync: drop the lost request */
 		return -2;		/* timeout */
+	}
 	d->used_idx = *uidx;
 
 	/* Pull device writes into the cache. */
