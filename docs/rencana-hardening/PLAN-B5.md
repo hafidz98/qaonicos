@@ -78,7 +78,32 @@ Package format (prepended to the image payload):
 ## Tasks
 - [x] B5.1 This design doc + threat model.
 - [x] B5.2 Anti-rollback enforced in bootstate_update_stage.
-- [ ] B5.3 Signed update format + stage-time verification
-      (needs the ROM-size question answered; crypto build).
+- [x] B5.3 Signed update format + stage-time verification
+      (DONE 2026-10-20, see below).
 - [ ] B5.4 Secure boot chain (hardware; OTP decision required).
 - [ ] B5.5 Credential store implementation (with C6/B3 portal).
+
+## B5.3 implementation notes (2026-10-20)
+- Algorithm choice changed from the sketch above: RSA-2048
+  PKCS#1 v1.5 + SHA-256 instead of Ed25519 -- the verifier is
+  self-contained (kernel/kernel/arm/updverify.c) and measures
+  4,904 bytes of text, which answers the ROM-size question:
+  it fits the current boot partition headroom (~378 KB) with
+  two orders of magnitude to spare. No partition change and
+  no kernel diet required.
+- Package = QUP1 header (magic, version, payload_len, 256-byte
+  signature) + payload; signed content is header-prefix ||
+  payload. Host tool: scripts/sign-update.py (openssl); dev
+  test key in scripts/update-img/dev-key.pem (committed on
+  purpose; release key never on a build machine).
+- Kernel: syscall 98 sub 9 verifies BEFORE staging (bad sig
+  -> -3; downgrade -> -2 from the B4 check); sub 10 cancels a
+  staged update (also shell `update cancel`).
+- Test one-shot uupdsig: UUPDSIG: PASS -- tampered payload,
+  tampered version, and bad magic rejected; valid-but-old
+  version rejected as downgrade; valid package stages and
+  cancels. The test is state-aware (skips stage/cancel cases
+  when a real update flow owns the state).
+- QEMU scope cap: packages up to 8192 bytes are copied and
+  verified in the kernel. Production verification streams the
+  hash over the inactive NAND slot (no full-image copy).

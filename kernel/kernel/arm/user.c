@@ -47,6 +47,9 @@ extern void	bootstate_update_info(unsigned int *, unsigned int *,
 		    unsigned int *, unsigned int *);
 extern void	bootstate_sabotage_arm(void);
 extern int	bootstate_sabotage_take(void);
+extern int	bootstate_update_cancel(void);
+extern int	upd_verify_package(const unsigned char *,
+		    unsigned int, unsigned int *);
 extern unsigned int bootstate_log_count(void);
 extern unsigned int arm_timer_ticks(void);
 extern void	uart_putc(char c);
@@ -97,6 +100,8 @@ extern unsigned char	ufirst_img[];	/* B3: first-boot */
 extern unsigned int	ufirst_img_len;
 extern unsigned char	utimegate_img[];	/* B3: time quality test */
 extern unsigned int	utimegate_img_len;
+extern unsigned char	uupdsig_img[];	/* B5.3: signed update test */
+extern unsigned int	uupdsig_img_len;
 extern unsigned char	utcpkeep_img[];	/* F1 SEMENTARA: keep-alive RX test */
 extern unsigned int	utcpkeep_img_len;
 extern unsigned char	utlskeep_img[];	/* F1 SEMENTARA: TLS keep-alive RX test */
@@ -1226,6 +1231,31 @@ user_syscall(struct arm_trap_frame *frame)
 			bootstate_sabotage_arm();
 			return 0u;
 		}
+		if (a0 == 9u) {
+			/* B5.3: stage a SIGNED package. a1=buf,
+			 * a2=len -> 0 staged, -1 busy, -2 downgrade,
+			 * -3 bad signature/format. The package is
+			 * copied to a static buffer and verified
+			 * BEFORE anything is staged: a bad package
+			 * never reaches a trial boot. (Production
+			 * streams the hash over the inactive NAND
+			 * slot; the QEMU cap is 8192 bytes.) */
+			static unsigned char pkgbuf[8192];
+			unsigned int version = 0;
+			unsigned int i;
+
+			if (a2 == 0u || a2 > 8192u ||
+			    !user_range_ok(a1, a2))
+				return (unsigned int)-3;
+			for (i = 0; i < a2; i++)
+				pkgbuf[i] = ((const unsigned char *)a1)[i];
+			if (upd_verify_package(pkgbuf, a2, &version) != 0)
+				return (unsigned int)-3;
+			return (unsigned int)
+			    bootstate_update_stage(version);
+		}
+		if (a0 == 10u)
+			return (unsigned int)bootstate_update_cancel();
 		return (unsigned int)-1;
 	}
 	case SYS_TIME_QUALITY:
@@ -1761,6 +1791,7 @@ static struct uprog_image uprogs[] = {
 	{ "ublogtest", ublogtest_img, &ublogtest_img_len, 1u },	/* B2 diag */
 	{ "ufirst", ufirst_img, &ufirst_img_len, 1u },	/* B3: first boot */
 	{ "utimegate", utimegate_img, &utimegate_img_len, 1u },	/* B3 */
+	{ "uupdsig", uupdsig_img, &uupdsig_img_len, 1u },	/* B5.3 */
 	{ "qabot", qabot_img, &qabot_img_len, 1u },	/* Q1: harness, one-shot */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))
@@ -1780,7 +1811,15 @@ static struct uprog_image daemon_images[] = {
 };
 #define	NDAEMON_IMAGES	(sizeof(daemon_images) / sizeof(daemon_images[0]))
 
-static struct user_task	uprog_udesc[UPROG_MAX];
+/* One udesc per one-shot (NUPROGS) + per daemon image. This
+ * array MUST cover both index ranges: it was sized UPROG_MAX=16
+ * while NUPROGS grew past it, so daemon udesc writes (index
+ * NUPROGS+i) silently corrupted neighbouring statics -- latent
+ * until NUPROGS reached 20 (uupdsig), when the write landed on
+ * scheduler state and the shell daemon failed to register
+ * ("daemon table penuh", no qaon> prompt; found by soak-test
+ * regression 2026-10-20). */
+static struct user_task	uprog_udesc[NUPROGS + NDAEMON_IMAGES];
 
 /*
  * user_launch_init -- Fase C/D + App A2.

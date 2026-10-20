@@ -157,7 +157,7 @@ bi_help(void)
 	sh_puts("  bootctl [crash] boot state / arm crash simulation\n");
 	sh_puts("  bootlog         persistent boot history\n");
 	sh_puts("  setup [name <x>|tz <x>|done|reset]  first-boot setup\n");
-	sh_puts("  update [stage <ver>|sabotage]  A/B update manager\n");
+	sh_puts("  update [stage <ver>|cancel|sabotage]  A/B updates\n");
 	sh_puts("  run <path>      run program (Q9 spawn)\n");
 }
 
@@ -604,6 +604,13 @@ bi_update(void)
 			else
 				sh_puts("update: stage failed (busy?)\n");
 		}
+		return;
+	}
+	if (sh_argc > 1 && sh_streq(sh_argv[1], "cancel")) {
+		if (sh_bootstate(10u, info) == 0)
+			sh_puts("update: staged update cancelled\n");
+		else
+			sh_puts("update: nothing staged\n");
 		return;
 	}
 	if (sh_argc > 1 && sh_streq(sh_argv[1], "sabotage")) {

@@ -42,7 +42,7 @@ put_u(unsigned v)
 	}
 }
 
-static char rec[64];
+static unsigned int rec[16];	/* word array: aligned (B2 lesson) */
 
 __attribute__((section(".text.start")))
 void
@@ -51,21 +51,32 @@ _start(void)
 	int cnt, rc;
 
 	u_put("UBLOGTEST: count...");
-	cnt = sys_bootlog(0xffffffffu, rec);
+	cnt = sys_bootlog(0xffffffffu, (char *)rec);
 	u_put("=");
 	put_u((unsigned)cnt);
 	u_put(" getall...");
 	{
 		int i;
+		unsigned prev_seq = 0;
+
 		rc = 0;
 		for (i = 0; i < cnt; i++) {
 			u_put("[");
 			put_u((unsigned)i);
 			u_put("]");
-			if (sys_bootlog((unsigned)i, rec) != 0) {
+			if (sys_bootlog((unsigned)i, (char *)rec) != 0) {
 				rc = -1;
 				break;
 			}
+			/* B2.7 invariant: records come back valid
+			 * and in strictly increasing seq order;
+			 * torn records are skipped by the kernel,
+			 * never surfaced. */
+			if (i > 0 && rec[1] <= prev_seq) {
+				rc = -2;
+				break;
+			}
+			prev_seq = rec[1];
 		}
 	}
 	u_put("get0...");

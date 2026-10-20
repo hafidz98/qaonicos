@@ -61,3 +61,25 @@ every boot leaves a persistent, inspectable record.
    shared sector buffer after the static-buffer refactor -> stale
    note tails ("bootone-shots passed"). Now sizeof(bs_sector_buf).
    (Lesson: sizeof on a pointer is silent; grep after refactors.)
+
+## B2.7 addendum (2026-10-20): torn boot-log records
+Found by the 100-boot / 30-power-cut soak test: cold boots
+100/100 PASS, but the post-cut check failed -- one boot-log
+record was torn by a power cut landing mid-sector-write, and
+with no per-record checksum it failed reads permanently.
+Fix: bs_rec gains a checksum (note shrinks 40 -> 36 bytes);
+readers (bootstate_log_count/get) validate magic + checksum +
+expected seq and SKIP torn records; the ring overwrites them
+within 16 boots (self-healing). UBLOGTEST now also asserts
+strictly increasing seq across returned records.
+The state sector already had this property (checksum + reset
+fallback) and survived all 30 cuts intact (boot #199 history
+continuous).
+
+## Also found by the soak regression (2026-10-20)
+uprog_udesc[] was sized UPROG_MAX=16 but indexed up to
+NUPROGS+NDAEMON_IMAGES; once NUPROGS reached 20 the daemon
+udesc writes corrupted scheduler statics and the shell daemon
+failed to register (no qaon> prompt). Sized structurally now
+(user.c). Latent since the program count passed 16; the soak
+caught it because it boots the CURRENT build 100 times.

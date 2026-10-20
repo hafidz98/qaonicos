@@ -41,6 +41,7 @@ extern unsigned int blk_total_sectors(void);
 #define BLE_UPD_STAGE	8u
 #define BLE_UPD_TRIAL	9u
 #define BLE_UPD_CONFIRM	10u
+#define BLE_UPD_CANCEL	11u
 
 struct bs_state {
 	unsigned int magic;
@@ -65,8 +66,25 @@ struct bs_rec {
 	unsigned int event;
 	unsigned int fail_count;
 	unsigned int uptime_ms;
-	char note[40];
+	char note[36];
+	unsigned int cksum;	/* B2.7: over the first 60 bytes;
+				 * a power cut mid-write tears the
+				 * record and this catches it */
 };
+
+static unsigned int
+bs_rec_cksum(const struct bs_rec *r)
+{
+	const unsigned char *b = (const unsigned char *)r;
+	unsigned int h = 2166136261u;
+	unsigned int i;
+
+	for (i = 0; i < 60u; i++) {
+		h ^= b[i];
+		h *= 16777619u;
+	}
+	return h;
+}
 
 static unsigned char bs_sector_buf[512];	/* shared scratch (static:
 						 * kernel stacks are
@@ -134,6 +152,7 @@ bs_log(unsigned int event, unsigned int uptime_ms, const char *note)
 	r->uptime_ms = uptime_ms;
 	for (i = 0; note && note[i] && i < sizeof(r->note) - 1u; i++)
 		r->note[i] = note[i];
+	r->cksum = bs_rec_cksum(r);
 	slot = bs_cur.log_seq % BLOG_SLOTS;
 	blk_write_sector(bs_log_sector(slot), buf);
 	bs_cur.log_seq++;
@@ -229,6 +248,20 @@ bootstate_update_info(unsigned int *cur_version, unsigned int *slot,
 	*slot = bs_cur.active_slot;
 	*state = bs_cur.upd_state;
 	*pending_version = bs_cur.pending_version;
+}
+
+/* B5.3: cancel a staged (not yet trialled) update. 0 ok, -1 if
+ * nothing was staged. */
+int
+bootstate_update_cancel(void)
+{
+	if (!bs_ready || bs_cur.upd_state != 1u)
+		return -1;
+	bs_cur.upd_state = 0;
+	bs_cur.pending_version = 0;
+	bs_persist();
+	bs_log(BLE_UPD_CANCEL, 0, "update stage cancelled");
+	return 0;
 }
 
 /* B4 test hook: arm a one-shot sabotage (skip one healthy mark). */
@@ -330,41 +363,73 @@ bootstate_info(unsigned int *boot_count, unsigned int *fail_count,
 	*last_reason = bs_cur.last_reason;
 }
 
-/* Copy log record idx (0..count-1, oldest first) into out.
- * Returns 0 ok, -1 if absent. */
+/* A record is valid iff magic + checksum + expected seq match.
+ * B2.7: a record torn by a power cut mid-write fails the
+ * checksum and is skipped by readers (the ring overwrites it
+ * within BLOG_SLOTS boots -- self-healing). Found by the
+ * 100-boot/30-cut soak test (2026-10-20). */
+static int
+bs_rec_valid(const struct bs_rec *r, unsigned int expect_seq)
+{
+	return r->magic == BLOG_MAGIC && r->seq == expect_seq &&
+	    r->cksum == bs_rec_cksum(r);
+}
+
+static unsigned int
+bs_window_start(void)
+{
+	return bs_cur.log_seq >= BLOG_SLOTS ?
+	    bs_cur.log_seq - BLOG_SLOTS : 0;
+}
+
+/* Copy log record idx (0..count-1, oldest first, valid records
+ * only) into out. Returns 0 ok, -1 if absent. */
 int
 bootstate_log_get(unsigned int idx, struct bs_rec *out)
 {
 	unsigned char *buf = bs_sector_buf;
 	struct bs_rec *r = (struct bs_rec *)buf;
-	unsigned int count, target;
+	unsigned int seq, seen = 0;
 
 	if (!bs_ready)
 		return -1;
-	count = bootstate_log_count();
-	if (idx >= count)
-		return -1;
-	target = bs_cur.log_seq - count + idx;
-	if (blk_read_sector(bs_log_sector(target % BLOG_SLOTS), buf) != 0)
-		return -1;
-	if (r->magic != BLOG_MAGIC || r->seq != target)
-		return -1;
-	/* Byte copy: the user destination may be unaligned (a word
-	 * struct copy faults with an alignment abort, seen as a hang
-	 * after panic in the syscall path). */
-	{
-		unsigned char *d = (unsigned char *)out;
-		unsigned char *src = (unsigned char *)r;
-		unsigned int i;
+	for (seq = bs_window_start(); seq < bs_cur.log_seq; seq++) {
+		if (blk_read_sector(bs_log_sector(seq % BLOG_SLOTS),
+		    buf) != 0)
+			continue;
+		if (!bs_rec_valid(r, seq))
+			continue;	/* torn: skip */
+		if (seen == idx) {
+			/* Byte copy: the user destination may be
+			 * unaligned (a word struct copy faults). */
+			unsigned char *d = (unsigned char *)out;
+			unsigned char *src = (unsigned char *)r;
+			unsigned int i;
 
-		for (i = 0; i < 64u; i++)
-			d[i] = src[i];
+			for (i = 0; i < 64u; i++)
+				d[i] = src[i];
+			return 0;
+		}
+		seen++;
 	}
-	return 0;
+	return -1;
 }
 
 unsigned int
 bootstate_log_count(void)
 {
-	return bs_cur.log_seq >= BLOG_SLOTS ? BLOG_SLOTS : bs_cur.log_seq;
+	unsigned char *buf = bs_sector_buf;
+	struct bs_rec *r = (struct bs_rec *)buf;
+	unsigned int seq, n = 0;
+
+	if (!bs_ready)
+		return 0;
+	for (seq = bs_window_start(); seq < bs_cur.log_seq; seq++) {
+		if (blk_read_sector(bs_log_sector(seq % BLOG_SLOTS),
+		    buf) != 0)
+			continue;
+		if (bs_rec_valid(r, seq))
+			n++;
+	}
+	return n;
 }
