@@ -120,9 +120,13 @@ support is ever required.
       rkbin cloned; idbloader built (320 KB). Luckfox SDK sparse
       checkout (841 MB): partition layout extracted from
       BoardConfig-SPI_NAND-Buildroot-RV1103_Luckfox_Pico_Mini-IPC.mk.
-      parameter.txt generated. Still needed: U-Boot binary (must be
-      built from sysdrv/source/uboot/u-boot — requires ARM toolchain
-      + SDK build system).
+      parameter.txt generated. **U-Boot BUILT 2026-10-20**: plain make
+      with arm-none-eabi (defconfig luckfox_rv1106_uboot_defconfig,
+      KCFLAGS -Wno-error -fcommon, bc from apt download) ->
+      u-boot.bin 397 KB -> loaderimage pack at 0x00200000 (matches
+      CONFIG_SYS_TEXT_BASE) -> `uboot.img` 2 MB.
+      All artifacts in `~/workspace/b0-sdk/`: idbloader.img,
+      uboot.img, qaonic_kernel.bin, parameter.txt.
 - [x] B0.2 Build `qaonic_kernel.bin` — DONE 2026-10-20:
       `llvm-objcopy -O binary mach3.elf` -> 3.7 MB (fits 4M boot
       partition with ~450 KB spare). At `~/workspace/b0-sdk/`.
