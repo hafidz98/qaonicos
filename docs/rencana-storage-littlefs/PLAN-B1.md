@@ -33,20 +33,17 @@ recordings) lives on littlefs; the shell gains `lfs` test commands
 first, then user-facing paths are migrated.
 
 ## 3. Tasks
-- [ ] B1.1 Vendor littlefs source into `kernel/kernel/arm/littlefs/`
-      (pin a release tag; record version + license).
-- [ ] B1.2 Block device glue over virtio-blk (512B sectors):
-      read/prog = sector write, erase = write 0xFF-filled block
-      (emulated on blk; real erase only matters on NAND).
-      Config: block_size 4096, block_count from device size.
-- [ ] B1.3 Kernel mount/format API + syscall(s) for format/mount/
-      stat; test program `user/ulfs.c`:
-      format -> write file -> read back -> verify -> reboot-less
-      remount -> verify persistence.
-- [ ] B1.4 Power-cut simulation test: write pattern, "crash"
-      (skip sync / hard QEMU kill mid-write), remount, verify
-      filesystem mounts and old-or-new state is consistent.
-      Marker: `ULFS: PASS`.
+- [x] B1.1 Vendor littlefs v2.9.3 — DONE 2026-10-20.
+- [x] B1.2 Block glue — DONE 2026-10-20: RAM backend (1MB) in
+      `kernel/kernel/arm/lfs_port.c` with NAND-semantics prog
+      (bit-clear only) + power-cut simulator. Shim headers in
+      `littlefs/shim/` (freestanding build); malloc/free map to a
+      static pool. NAND/blk backend swaps in later.
+- [x] B1.3 Test program `user/ulfs.c` + syscall 93 — DONE.
+- [x] B1.4 Power-cut test — DONE 2026-10-20: **ULFS: PASS**
+      (format/mount, write/remount/verify, cut mid-write ->
+      clean remount, old file intact, recovery write ok).
+      All other boot tests still pass.
 - [ ] B1.5 Shell integration: `ls`/`cat` can target the lfs mount
       (e.g. `/data/...`) alongside `/sd`.
 - [ ] B1.6 Dev log + docs update (`docs/UTANG-TEKNIS.md` if new

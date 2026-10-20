@@ -27,6 +27,7 @@
 
 extern void	panic(const char *, ...);
 extern int	printf(const char *, ...);
+extern int	lfs_run_test(void);	/* lfs_port.c (B1) */
 extern void	uart_putc(char c);
 
 /* userasm.s */
@@ -67,6 +68,8 @@ extern unsigned char	uvoice_img[];	/* D4: VOICE.START + AUD uplink */
 extern unsigned int	uvoice_img_len;
 extern unsigned char	upl330_img[];	/* D2b: PL330 microcode */
 extern unsigned int	upl330_img_len;
+extern unsigned char	ulfs_img[];	/* B1: littlefs test */
+extern unsigned int	ulfs_img_len;
 extern unsigned char	utcpkeep_img[];	/* F1 SEMENTARA: keep-alive RX test */
 extern unsigned int	utcpkeep_img_len;
 extern unsigned char	utlskeep_img[];	/* F1 SEMENTARA: TLS keep-alive RX test */
@@ -249,6 +252,7 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_PL330_RX	90u	/* D2b: pl330_audio_rx(dst,n) -> 0/-1 */
 #define	SYS_PL330_UCLEN	91u	/* D2b: pl330_ucode_len() -> n */
 #define	SYS_PL330_UCBYTE 92u	/* D2b: pl330_ucode_byte(i) -> b */
+#define	SYS_LFS_RUNTEST	93u	/* B1: lfs_run_test() -> stage bitmask */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -1129,6 +1133,9 @@ user_syscall(struct arm_trap_frame *frame)
 		}
 		return pl330_ucode_byte(a0);
 	}
+	case SYS_LFS_RUNTEST:
+		/* B1: -> bitmask tahap uji littlefs (0x1f = semua lulus). */
+		return (unsigned int)lfs_run_test();
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
 	}
@@ -1636,6 +1643,7 @@ static struct uprog_image uprogs[] = {
 	{ "uaudiogain", uaudiogain_img, &uaudiogain_img_len, 1u },	/* D3: gain */
 	{ "uvoice", uvoice_img, &uvoice_img_len, 1u },	/* D4: VOICE uplink */
 	{ "upl330", upl330_img, &upl330_img_len, 1u },	/* D2b: PL330 */
+	{ "ulfs", ulfs_img, &ulfs_img_len, 1u },	/* B1: littlefs */
 	{ "qabot", qabot_img, &qabot_img_len, 1u },	/* Q1: harness, one-shot */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))

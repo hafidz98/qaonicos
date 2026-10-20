@@ -65,7 +65,7 @@ clang $UCFLAGS -c "$USR/udiv.c" -o "$BUILD/udiv.o" >>"$LOG" 2>&1 || \
 # shellcheck disable=SC2086
 clang $UCFLAGS -c "$USR/hello.c" -o "$BUILD/hello.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/hello.c (see $LOG)"; exit 1; }
-for prog in init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest uaudiocap uaudiogain upl330; do
+for prog in init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest uaudiocap uaudiogain upl330 ulfs; do
     # shellcheck disable=SC2086
     clang $UCFLAGS -c "$USR/$prog.c" -o "$BUILD/$prog.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/$prog.c (see $LOG)"; exit 1; }
@@ -432,6 +432,7 @@ mkdir -p "$OBJMD"
 CFLAGS="--target=arm-none-eabi -march=armv7-a -DKERNEL -O1 -fno-builtin -fcommon"
 OVR="$MACH3_DIR/mi-overrides"
 CFLAGS="$CFLAGS -I$OVR -I$GEN -I$INC -I$SRC"
+CFLAGS="$CFLAGS -I$MACH3_DIR/kernel/arm/littlefs -I$MACH3_DIR/kernel/arm/littlefs/shim"
 CFLAGS="$CFLAGS -Wno-implicit-function-declaration -Wno-implicit-int"
 CFLAGS="$CFLAGS -Wno-int-conversion -Wno-deprecated-non-prototype"
 CFLAGS="$CFLAGS -Wno-extra-tokens -include $GEN/md_globals.h"
@@ -445,6 +446,18 @@ for src in "$MACH3_DIR/kernel/arm/"*.c; do
         pass=$((pass+1))
     else
         echo "FAIL md/$base.c (see $LOG)"
+        fail=$((fail+1))
+    fi
+done
+# B1: littlefs sources (subdir, own config header).
+for src in "$MACH3_DIR/kernel/arm/littlefs/"*.c; do
+    base=$(basename "$src" .c)
+    echo "CC md/littlefs/$base.c" >> "$LOG"
+    # shellcheck disable=SC2086
+    if clang $CFLAGS -DLFS_NO_DEBUG -DLFS_NO_WARN -DLFS_NO_ERROR -c "$src" -o "$OBJMD/lfs_$base.o" >> "$LOG" 2>&1; then
+        pass=$((pass+1))
+    else
+        echo "FAIL md/littlefs/$base.c (see $LOG)"
         fail=$((fail+1))
     fi
 done
@@ -463,7 +476,7 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice upl330; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice upl330 ulfs; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }
