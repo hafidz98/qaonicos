@@ -83,3 +83,15 @@ udesc writes corrupted scheduler statics and the shell daemon
 failed to register (no qaon> prompt). Sized structurally now
 (user.c). Latent since the program count passed 16; the soak
 caught it because it boots the CURRENT build 100 times.
+
+## B2.8 addendum (2026-10-20): transient blk timeouts
+Soak run 2: 98/100 cold boots PASS, final integrity check PASS
+(B2.7 holds), but boots 23 and 35 lost UBLOGTEST: count came
+back 0. Reproduced and captured: bootstate_init's first state
+read hit a transient blk timeout (host CPU contention makes
+the spin-based completion wait expire early), which silently
+disabled bootstate for that whole boot. Fix: all bootstate
+I/O goes through bs_read/bs_write with 3 attempts, and an
+unreadable state sector now prints a WARN instead of failing
+silently. Validation: 40/40 boots PASS under the same load;
+full soak re-run follows.

@@ -17,6 +17,33 @@ extern int printf(const char *, ...);
 extern int blk_read_sector(unsigned int sector, unsigned char *data);
 extern int blk_write_sector(unsigned int sector,
     const unsigned char *data);
+
+/* B2.8: blk requests can time out transiently (observed under
+ * host CPU contention: the first state read of a boot failed,
+ * silently disabling bootstate for that whole boot -- caught by
+ * soak run 2 as an intermittent UBLOGTEST count=0). All
+ * bootstate I/O goes through these 3-attempt wrappers. */
+static int
+bs_read(unsigned int sector, unsigned char *buf)
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+		if (blk_read_sector(sector, buf) == 0)
+			return 0;
+	return -1;
+}
+
+static int
+bs_write(unsigned int sector, const unsigned char *buf)
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+		if (blk_write_sector(sector, buf) == 0)
+			return 0;
+	return -1;
+}
 extern unsigned int blk_total_sectors(void);
 
 #define BS_MAGIC	0x424f4f54u	/* "BOOT" */
@@ -130,7 +157,7 @@ bs_persist(void)
 	bs_cur.magic = BS_MAGIC;
 	bs_cur.cksum = bs_cksum(&bs_cur);
 	*s = bs_cur;
-	blk_write_sector(bs_state_sector(), buf);
+	bs_write(bs_state_sector(), buf);
 }
 
 static void
@@ -154,7 +181,7 @@ bs_log(unsigned int event, unsigned int uptime_ms, const char *note)
 		r->note[i] = note[i];
 	r->cksum = bs_rec_cksum(r);
 	slot = bs_cur.log_seq % BLOG_SLOTS;
-	blk_write_sector(bs_log_sector(slot), buf);
+	bs_write(bs_log_sector(slot), buf);
 	bs_cur.log_seq++;
 	bs_persist();
 }
@@ -167,8 +194,11 @@ bootstate_init(void)
 
 	bs_ready = 0;
 	bs_safe_mode = 0;
-	if (blk_read_sector(bs_state_sector(), buf) != 0)
+	if (bs_read(bs_state_sector(), buf) != 0) {
+		printf("bootstate: WARN state sector unreadable "
+		    "(bootstate off this boot)\n");
 		return -1;
+	}
 	bs_cur = *s;
 	if (bs_cur.magic != BS_MAGIC ||
 	    bs_cur.cksum != bs_cksum(&bs_cur)) {
@@ -394,7 +424,7 @@ bootstate_log_get(unsigned int idx, struct bs_rec *out)
 	if (!bs_ready)
 		return -1;
 	for (seq = bs_window_start(); seq < bs_cur.log_seq; seq++) {
-		if (blk_read_sector(bs_log_sector(seq % BLOG_SLOTS),
+		if (bs_read(bs_log_sector(seq % BLOG_SLOTS),
 		    buf) != 0)
 			continue;
 		if (!bs_rec_valid(r, seq))
@@ -425,7 +455,7 @@ bootstate_log_count(void)
 	if (!bs_ready)
 		return 0;
 	for (seq = bs_window_start(); seq < bs_cur.log_seq; seq++) {
-		if (blk_read_sector(bs_log_sector(seq % BLOG_SLOTS),
+		if (bs_read(bs_log_sector(seq % BLOG_SLOTS),
 		    buf) != 0)
 			continue;
 		if (bs_rec_valid(r, seq))
