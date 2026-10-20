@@ -130,7 +130,8 @@ support is ever required.
 - [x] B0.2 Build `qaonic_kernel.bin` — DONE 2026-10-20:
       `llvm-objcopy -O binary mach3.elf` -> 3.7 MB (fits 4M boot
       partition with ~450 KB spare). At `~/workspace/b0-sdk/`.
-- [x] B0.3 Package `update.img` — DONE 2026-10-20:
+- [x] B0.3 Package `update.img` — DONE 2026-10-20: (see also the reproducible
+      build script below)
       afptool pack (after fixing parameter.txt sector offsets) +
       rkImageMaker wrap -> `update-final.img` (7.5 MB) in
       `~/workspace/b0-sdk/`. Contents: download.bin (idbloader),
@@ -155,3 +156,12 @@ support is ever required.
 - Watchdog/boot counter (B2).
 - Provisioning (B3).
 - A/B updates (B4).
+
+## Reproducible build (2026-10-20)
+- `scripts/build-update-img.sh` runs the whole pipeline in one
+  command: kernel build -> raw binary -> idbloader (boot_merger)
+  -> package tree -> afptool -> rkImageMaker -> update-final.img.
+  Canonical partition layout: `scripts/update-img/parameter.txt`.
+  Verified end-to-end: update-final.img = 7,624,842 bytes with
+  the current kernel (raw 3,815,852 B, fits the 4M boot slot).
+  U-Boot image is reused from the one-time SDK build.
