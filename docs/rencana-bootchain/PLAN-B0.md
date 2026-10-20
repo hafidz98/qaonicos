@@ -116,11 +116,13 @@ support is ever required.
 
 ## 5. B0 tasks
 
-- [x] B0.1 Obtain SDK files — PARTIAL 2026-10-20:
-      rkbin cloned (`~/workspace/b0-sdk/rkbin`). idbloader built
-      with `boot_merger` + `RV1103BMINIALL_SPI_NAND_CONT_TB.ini`
-      -> `rv1103b_idblock_v1.07.101.img` (320 KB). Still needed:
-      U-Boot image + parameter.txt (from Luckfox SDK).
+- [x] B0.1 Obtain SDK files — DONE 2026-10-20:
+      rkbin cloned; idbloader built (320 KB). Luckfox SDK sparse
+      checkout (841 MB): partition layout extracted from
+      BoardConfig-SPI_NAND-Buildroot-RV1103_Luckfox_Pico_Mini-IPC.mk.
+      parameter.txt generated. Still needed: U-Boot binary (must be
+      built from sysdrv/source/uboot/u-boot — requires ARM toolchain
+      + SDK build system).
 - [x] B0.2 Build `qaonic_kernel.bin` — DONE 2026-10-20:
       `llvm-objcopy -O binary mach3.elf` -> 3.7 MB (fits 4M boot
       partition with ~450 KB spare). At `~/workspace/b0-sdk/`.
