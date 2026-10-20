@@ -594,10 +594,16 @@ bi_update(void)
 	if (sh_argc > 2 && sh_streq(sh_argv[1], "stage")) {
 		unsigned v = sh_atou(sh_argv[2]);
 
-		if (sh_bootstate_arg(7u, v) == 0)
-			sh_puts("update: staged (reboot to trial)\n");
-		else
-			sh_puts("update: stage failed (busy?)\n");
+		{
+			int r = sh_bootstate_arg(7u, v);
+
+			if (r == 0)
+				sh_puts("update: staged (reboot to trial)\n");
+			else if (r == -2)
+				sh_puts("update: rejected (downgrade)\n");
+			else
+				sh_puts("update: stage failed (busy?)\n");
+		}
 		return;
 	}
 	if (sh_argc > 1 && sh_streq(sh_argv[1], "sabotage")) {

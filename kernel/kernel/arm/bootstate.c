@@ -203,12 +203,16 @@ bootstate_init(void)
 	return bs_safe_mode;
 }
 
-/* B4: stage an update for trial on the next boot. 0 ok, -1 busy. */
+/* B4: stage an update for trial on the next boot.
+ * 0 ok, -1 busy, -2 downgrade rejected (B5 anti-rollback:
+ * a staged update may never move the device backwards). */
 int
 bootstate_update_stage(unsigned int version)
 {
 	if (!bs_ready || bs_cur.upd_state != 0u)
 		return -1;
+	if (version <= bs_cur.cur_version)
+		return -2;
 	bs_cur.pending_slot = bs_cur.active_slot ^ 1u;
 	bs_cur.pending_version = version;
 	bs_cur.upd_state = 1u;

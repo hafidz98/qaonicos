@@ -85,15 +85,23 @@ def run_boot(tag):
 def end_boot(p, s):
     s.close(); p.kill(); p.wait()
 
-# --- Boot 1: baseline + stage v2 ---
+# --- Boot 1: baseline + stage the next version ---
+# (State-agnostic: the dev image keeps its version across runs.)
+import re
 p, s, sess = run_boot("boot1")
 out = sess.cmd("update")
-print("boot1:", (out or b"").decode("utf-8", "replace").strip().splitlines()[-2:])
-if b"version=1" not in (out or b"") or b"slot=A" not in (out or b""):
-    fails.append("boot1: expected version=1 slot=A")
-out = sess.cmd("update stage 2")
+txt = (out or b"").decode("utf-8", "replace")
+print("boot1:", txt.strip().splitlines()[-2:])
+m = re.search(r"version=(\d+) slot=([AB])", txt)
+if not m:
+    print("FAIL: boot1 cannot parse update status"); sys.exit(1)
+V0, SLOT0 = int(m.group(1)), m.group(2)
+V1 = V0 + 1
+V2 = V0 + 2
+SLOT1 = "B" if SLOT0 == "A" else "A"
+out = sess.cmd(f"update stage {V1}")
 if b"staged" not in (out or b""):
-    fails.append("boot1: stage 2 failed")
+    fails.append(f"boot1: stage {V1} failed")
 end_boot(p, s)
 
 # --- Boot 2: trial + confirm of v2 ---
@@ -104,15 +112,15 @@ if b"update CONFIRMED" not in sess.all:
     fails.append("boot2: CONFIRMED banner missing")
 out = sess.cmd("update")
 print("boot2:", (out or b"").decode("utf-8", "replace").strip().splitlines()[-2:])
-if b"version=2" not in (out or b"") or b"slot=B" not in (out or b""):
-    fails.append("boot2: expected version=2 slot=B after confirm")
+if f"version={V1}".encode() not in (out or b"") or f"slot={SLOT1}".encode() not in (out or b""):
+    fails.append(f"boot2: expected version={V1} slot={SLOT1} after confirm")
 end_boot(p, s)
 
 # --- Boot 3: stage v3 + sabotage ---
 p, s, sess = run_boot("boot3")
-out = sess.cmd("update stage 3")
+out = sess.cmd(f"update stage {V2}")
 if b"staged" not in (out or b""):
-    fails.append("boot3: stage 3 failed")
+    fails.append(f"boot3: stage {V2} failed")
 out = sess.cmd("update sabotage")
 if b"sabotage armed" not in (out or b""):
     fails.append("boot3: sabotage arm failed")
@@ -125,7 +133,7 @@ if b"update TRIAL" not in sess.all:
 if b"sabotage armed" not in sess.all:
     fails.append("boot4: sabotage did not trigger")
 if b"update CONFIRMED" in sess.all:
-    fails.append("boot4: v3 must NOT be confirmed")
+    fails.append("boot4: staged version must NOT be confirmed")
 out = sess.cmd("update")
 print("boot4:", (out or b"").decode("utf-8", "replace").strip().splitlines()[-2:])
 if b"state=trial" not in (out or b""):
@@ -138,8 +146,11 @@ if b"update ROLLBACK" not in sess.all:
     fails.append("boot5: ROLLBACK banner missing")
 out = sess.cmd("update")
 print("boot5:", (out or b"").decode("utf-8", "replace").strip().splitlines()[-2:])
-if b"version=2" not in (out or b"") or b"slot=B" not in (out or b""):
-    fails.append("boot5: expected rollback to version=2 slot=B")
+if f"version={V1}".encode() not in (out or b"") or f"slot={SLOT1}".encode() not in (out or b""):
+    fails.append(f"boot5: expected rollback to version={V1} slot={SLOT1}")
+out = sess.cmd(f"update stage {V0}")
+if b"rejected (downgrade)" not in (out or b""):
+    fails.append(f"boot5: downgrade to v{V0} was not rejected (B5)")
 out = sess.cmd("bootlog")
 if b"ev=7" not in (out or b""):
     fails.append("boot5: bootlog lacks ROLLBACK event (ev=7)")
