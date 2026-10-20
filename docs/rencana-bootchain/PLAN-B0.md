@@ -116,10 +116,14 @@ support is ever required.
 
 ## 5. B0 tasks
 
-- [ ] B0.1 Obtain SDK files: MiniLoaderAll.bin, uboot.img,
-      parameter.txt, boot_merger, upgrade_tool/SocToolKit.
-      (Shortcut: `afptool -unpack` a stock firmware image.)
-- [ ] B0.2 Build `qaonic_kernel.bin` from mach3.elf (objcopy -O binary).
+- [x] B0.1 Obtain SDK files — PARTIAL 2026-10-20:
+      rkbin cloned (`~/workspace/b0-sdk/rkbin`). idbloader built
+      with `boot_merger` + `RV1103BMINIALL_SPI_NAND_CONT_TB.ini`
+      -> `rv1103b_idblock_v1.07.101.img` (320 KB). Still needed:
+      U-Boot image + parameter.txt (from Luckfox SDK).
+- [x] B0.2 Build `qaonic_kernel.bin` — DONE 2026-10-20:
+      `llvm-objcopy -O binary mach3.elf` -> 3.7 MB (fits 4M boot
+      partition with ~450 KB spare). At `~/workspace/b0-sdk/`.
 - [ ] B0.3 Package `update.img` (afptool) for NAND flashing.
 - [ ] B0.4 Flash via maskrom; verify U-Boot loads kernel.
 - [ ] B0.5 Resolve open questions (U-Boot `go` availability, load
