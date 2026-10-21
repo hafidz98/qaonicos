@@ -36,6 +36,20 @@ pre-network transport (BLE or the device's own SoftAP).
   confirmation); settings, Wi-Fi and API key survive. Tier 2
   (last resort): full factory reset — PIN, credentials, config
   and the provisioned flag are wiped and onboarding runs again.
+- **D-ONB-5 (Hafidz, 2026-10-21): the web shell is OFF by
+  default.** It is enabled from Settings after PIN login (a
+  USB-debugging-style toggle, per the Boot UX direction) and
+  turns itself off again after an idle timeout (design detail:
+  15 min). The serial shell stays the dev path.
+- **D-ONB-6 (Hafidz, 2026-10-21): no prebuilt API.** If the API
+  key is skipped, Qabot runs **offline** — local functions only
+  — until the user adds a key. There is no anonymous/shared
+  provider fallback in the product (the AI Horde anonymous proxy
+  remains a dev-harness arrangement, not a shipped feature).
+- D-ONB-7 (DEFERRED by Hafidz, 2026-10-21): multi-user /
+  per-family-member accounts. Not yet thought through; the plan
+  proceeds with the single owner PIN (D-ONB-3) and adds no
+  multi-user hooks for now.
 
 ## Flow
 
