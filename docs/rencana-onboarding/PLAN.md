@@ -22,6 +22,9 @@ pre-network transport (BLE or the device's own SoftAP).
   SKIPPABLE.** "If it is too gated, users who just want to try
   the device get stuck in onboarding." Skipping leaves Qabot in
   a limited mode; the key can be added later in Settings.
+  Refinement (same day): there is **no explicit skip button** —
+  the field is simply optional. Empty field = no key = offline
+  mode; the wizard does not make a ceremony of it.
 - **D-ONB-3 (Hafidz, 2026-10-21): one device PIN, mandatory.**
   The same PIN gates the web settings pages, the web shell,
   and sensitive-op confirmations — "an exposed shell would be
