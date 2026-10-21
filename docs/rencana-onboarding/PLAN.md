@@ -18,12 +18,17 @@ pre-network transport (BLE or the device's own SoftAP).
 - **D-ONB-1 (Hafidz, 2026-10-21): HYBRID bootstrap.** One QR code
   on the device screen, two completion paths: the Android app over
   BLE, or a plain browser over the C6 SoftAP captive portal.
-- D-ONB-2 (OPEN, default = recommended): the LLM API key step in
-  onboarding is **skippable**; skipping leaves Qabot in a limited
-  mode and the key can be added later in Settings.
-- D-ONB-3 (OPEN, assumed yes): one **device PIN** gates the web
-  settings pages, the web shell, and sensitive-op confirmations.
-  No separate shell password.
+- **D-ONB-2 (Hafidz, 2026-10-21): the API key step is
+  SKIPPABLE.** "If it is too gated, users who just want to try
+  the device get stuck in onboarding." Skipping leaves Qabot in
+  a limited mode; the key can be added later in Settings.
+- **D-ONB-3 (Hafidz, 2026-10-21): one device PIN, mandatory.**
+  The same PIN gates the web settings pages, the web shell,
+  and sensitive-op confirmations — "an exposed shell would be
+  dangerous". No separate shell password. Until a PIN exists
+  (i.e. during onboarding) the settings/shell surfaces stay
+  closed; the setup session is the only unauthenticated window
+  and it ends at Stage 4.
 
 ## Flow
 
