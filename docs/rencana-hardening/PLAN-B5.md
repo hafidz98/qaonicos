@@ -81,6 +81,10 @@ Package format (prepended to the image payload):
 - [x] B5.3 Signed update format + stage-time verification
       (DONE 2026-10-20, see below).
 - [ ] B5.4 Secure boot chain (hardware; OTP decision required).
+  STATUS 2026-10-21: DEFERRED by Hafidz — he does not yet feel
+  he understands secure boot well enough to decide, and asked
+  for caution first. No OTP burning, no chain enforcement work
+  until he revisits this with a full explanation on the table.
 - [ ] B5.5 Credential store implementation (with C6/B3 portal).
 
 ## B5.3 implementation notes (2026-10-20)
