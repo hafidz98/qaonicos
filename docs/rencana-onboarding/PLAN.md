@@ -29,6 +29,13 @@ pre-network transport (BLE or the device's own SoftAP).
   (i.e. during onboarding) the settings/shell surfaces stay
   closed; the setup session is the only unauthenticated window
   and it ends at Stage 4.
+- **D-ONB-4 (Hafidz, 2026-10-21): forgotten-PIN recovery has two
+  tiers.** Tier 1: PIN reset without data loss — started from
+  the app/portal, authorised by a **physical button press on
+  the device** (proof of presence, same pattern as sensitive-op
+  confirmation); settings, Wi-Fi and API key survive. Tier 2
+  (last resort): full factory reset — PIN, credentials, config
+  and the provisioned flag are wiped and onboarding runs again.
 
 ## Flow
 
