@@ -125,3 +125,26 @@ shows "Setup complete — qaon.local / <IP>".
 
 Ordering note: ONB-1/ONB-2 are board-less and can proceed now;
 ONB-3/ONB-4 wait for the C6 firmware track and hardware.
+
+## Addendum 2026-10-21 — home model & menu entry (D-GUI)
+
+Decided with Hafidz after the Boot UX phase:
+
+- **D-GUI-1: Qabot (the face) is the home screen.** The menu is
+  a place the user visits; idle 30 s in the menu auto-returns
+  to the face (already implemented, `UI_IDLE_RETURN_S`), then
+  display off, then sleep.
+- **D-GUI-2: Qabot also has an icon inside the menu** (the
+  agent/LLM screen), so the agent is reachable from both
+  directions: it is the home, and it is also a menu entry.
+- **D-GUI-3: onboarding ends with a hands-on moment.** After
+  Stage 4 the face invites the user to open the menu
+  themselves (press the button) and explore freely, then
+  return — learned by doing once, not by reading instructions.
+  A small persistent menu hint stays on the face afterwards.
+- **D-GUI-4: physical buttons for now.** The menu action is an
+  event mapping (`EV_MENU`), not a button that must carry an
+  "M" symbol — any physical button may be assigned.
+  **Touchscreen stays in the long-term plan** (touch panel
+  variant + driver); when it lands, a swipe on the face is the
+  same menu action as the button.
