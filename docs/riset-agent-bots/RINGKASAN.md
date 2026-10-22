@@ -452,6 +452,43 @@ QaonicOS work to evaluate:
    releases — promising reference and possible Mode B target,
    not a foundation to depend on yet.
 
+## 7. Reference catalog: josephzhou.me/ai (added 2026-10-22)
+
+Owner-supplied reference: **https://josephzhou.me/ai/** — a
+browsable catalog of AI hardware (EN/中文), filterable by
+features and brand, sortable by price. 129 products across
+54 brands at the time of reading. Where §1 covers *consumer*
+companion products, this catalog covers the **maker/dev
+hardware layer** Qabot is actually built from — ESP32-S3/C6
+terminals, M5Stack/LilyGO/Seeed modules, e-ink displays,
+voice pucks, desktop robots. Its 22 feature filters are a
+useful capability taxonomy in their own right: On-device
+STT, Local server STT, On-device replies, Local server
+replies, Cloud replies, Offline commands, On-device voice
+chat, Offline recording, Server required, E-Ink, LoRa,
+Wearable, etc.
+
+Closest Qabot analogues in the catalog (prices as listed):
+
+| Product | Why it matters |
+|---|---|
+| Waveshare Touch LCD 1.54 ($14) | ESP32-S3 + **240x240 LCD (same panel geometry as QaonicOS)**, dual mic, speaker, IMU — the nearest single-board analogue |
+| StackChan AI Desktop Robot, M5Stack ($99) | ESP32-S3 desktop robot with a face — the maker-market version of Qabot's home screen |
+| JARVIS Desk Bot (community, ESP32-S3) | Open-source talking desk robot; proof the form factor has a DIY audience |
+| ESP32-S3-BOX-3, Espressif ($45) | Voice terminal with **offline speech recognition** — the System-1 pattern, shipping |
+| Atom Echo ($12) / HA Voice Preview ($59) | Voice-puck satellites: mic+speaker only, brain elsewhere — Mode B endpoints |
+| M5Stack AtomS3R AI Chatbot Kit / Atom VoiceS3R | Tiny voice-chat devices with local wake word |
+| Cardputer ADV ($35) | Pocket QWERTY ESP32-S3 — the keyboard-first counterpoint to Qabot's button-only input |
+| Brilliant Halo ($399) | Also in §1; the catalog lists it among dev hardware — open-source glasses with on-device AI |
+| Bee Frontier/Eclipse ($75/$100), Memoket Gem ($169), BOYA Notra Neo ($80) | The recorder/wearable-memory cluster from §1 (Plaud/Omi pattern), listed here too |
+
+Takeaway: at the maker layer, the voice terminal is a
+**commodity** ($8–$60 modules with mic, speaker, screen and
+offline wake word). Hardware alone is not a moat at any
+layer; Qabot's differentiation stays where §4 put it — the
+OS underneath, the procedural face, physical-confirm UX,
+and harness modes A/B/C.
+
 ## Sources
 
 Primary sources are listed per product above; SDK figures from
