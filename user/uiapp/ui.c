@@ -1,9 +1,10 @@
 /*
  * ui.c - screen manager + status bar + render frame uiapp.
  *
- * Status bar permanen (§2.4): jam kiri (jam dinding WIB via NTP bila
- * tersedia, fallback uptime HH:MM:SS),
- * baterai kanan (outline saja; tanpa ADC/Fuel gauge = jujur kosong).
+ * Status bar permanen (§2.4): jam kiri HH:MM (jam dinding WIB
+ * via NTP bila tersedia, fallback uptime), kanan ikon Wi-Fi +
+ * Bluetooth (redup = belum ada link) dan baterai (outline saja;
+ * tanpa ADC/Fuel gauge = jujur kosong).
  * Digambar di setiap frame di atas semua layar.
  */
 #include "ulib/ulib.h"
@@ -80,37 +81,76 @@ ui_clear_release(void)
 	want_release = 0;
 }
 
-/* HH:MM:SS. Bila jam dinding (NTP) tersedia pakai waktu WIB
- * (UTC+7) dari detik Unix; bila belum, fallback ke uptime. */
+/* HH:MM (owner feedback 2026-10-22: no seconds). Wall clock
+ * (NTP, WIB = UTC+7) when available, else uptime. */
 static void
 fmt_clock(char *out, unsigned ms)
 {
 	unsigned t = sys_time_get();
-	unsigned s, hh, mm, ss;
+	unsigned s, hh, mm;
 	if (t != 0u)
 		s = t + 7u * 3600u;	/* WIB */
 	else
 		s = ms / 1000u;
 	hh = (s / 3600u) % 24u;
 	mm = (s / 60u) % 60u;
-	ss = s % 60u;
 	out[0] = (char)('0' + hh / 10u); out[1] = (char)('0' + hh % 10u);
 	out[2] = ':';
 	out[3] = (char)('0' + mm / 10u); out[4] = (char)('0' + mm % 10u);
-	out[5] = ':';
-	out[6] = (char)('0' + ss / 10u); out[7] = (char)('0' + ss % 10u);
-	out[8] = 0;
+	out[5] = 0;
 }
 
-/* Status bar: y 0..15. */
+/* Wi-Fi fan glyph (~15x11) at (x, y): three arcs + dot,
+ * hand-tabled pixel offsets from the dot centre. */
+static void
+icon_wifi(int x, int y, uint16_t c)
+{
+	static const signed char a1[] = {0,-3, -2,-2, 2,-2, -3,-1, 3,-1};
+	static const signed char a2[] = {0,-5, -4,-4, 4,-4, -5,-2, 5,-2};
+	static const signed char a3[] = {0,-7, -5,-5, 5,-5, -7,-2, 7,-2};
+	int i;
+	for (i = 0; i < 10; i++) {
+		ui_px(x + 7 + a1[i * 2], y + 9 + a1[i * 2 + 1], c);
+		ui_px(x + 7 + a2[i * 2], y + 9 + a2[i * 2 + 1], c);
+	}
+	for (i = 0; i < 8; i++)
+		ui_px(x + 7 + a3[i * 2], y + 9 + a3[i * 2 + 1], c);
+	ui_rect(x + 6, y + 8, 2, 2, c);
+}
+
+/* Bluetooth rune glyph (~8x11) at (x, y). */
+static void
+icon_bt(int x, int y, uint16_t c)
+{
+	int i;
+	for (i = 0; i <= 10; i++)
+		ui_px(x + 3, y + i, c);		/* spine */
+	/* upper triangle edges */
+	ui_px(x + 4, y + 0, c); ui_px(x + 5, y + 1, c);
+	ui_px(x + 6, y + 1, c); ui_px(x + 7, y + 2, c);
+	ui_px(x + 6, y + 3, c); ui_px(x + 5, y + 3, c);
+	ui_px(x + 4, y + 4, c);
+	/* lower triangle edges */
+	ui_px(x + 4, y + 6, c); ui_px(x + 5, y + 6, c);
+	ui_px(x + 6, y + 7, c); ui_px(x + 7, y + 8, c);
+	ui_px(x + 6, y + 9, c); ui_px(x + 5, y + 9, c);
+	ui_px(x + 4, y + 10, c);
+}
+
+/* Status bar: y 0..15. Right side: Wi-Fi + Bluetooth +
+ * battery. The radio icons are drawn DIM: no radio link
+ * state exists under QEMU (the C6 will drive them on
+ * hardware) -- same honesty rule as the empty battery. */
 static void
 status_bar(void)
 {
-	char clk[9];
+	char clk[6];
 	ui_rect(0, 0, UI_W, SB_H, 0x08A5);
 	ui_rect(0, SB_H - 1, UI_W, 1, C_SEL);
 	fmt_clock(clk, sys_uptime());
 	ui_text(6, 4, clk, C_FG);
+	icon_wifi(UI_W - 66, 3, C_DIM);
+	icon_bt(UI_W - 46, 3, C_DIM);
 	/* Baterai: outline saja (tanpa ADC = jujur tak ada isi). */
 	ui_border(UI_W - 30, 4, 20, 8, C_DIM);
 	ui_rect(UI_W - 8, 6, 2, 4, C_DIM);	/* kepala baterai */

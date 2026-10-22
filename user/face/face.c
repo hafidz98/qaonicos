@@ -206,21 +206,25 @@ static void draw_setup(void) {
     int cell = n >= 33 ? 3 : 4;
     int span = cell * (n + 8);		/* incl. quiet zone */
     int card = span + 16;
+    /* Whole block (title / card / caption) centered on the
+     * 240x240 screen, horizontally and vertically. */
+    int block = 8 + 10 + card + 10 + 8;
+    int top = (FACE_H - block) / 2;
     int cx = (FACE_W - card) / 2;
-    int cy = 16;
+    int cy = top + 8 + 10;
     int x, y, w;
 
     fb_clear_view(COL_BG);
+    w = fb_text_width("QAONICOS");
+    fb_text(120 - w / 2, top, "QAONICOS", COL_TEXT);
     fb_round_rect(cx, cy, card, card, 10, COL_CARD);
     for (y = 0; y < n; y++)
         for (x = 0; x < n; x++)
             if (qr_module(x, y))
                 fb_fill_rect(cx + 8 + (x + 4) * cell,
                     cy + 8 + (y + 4) * cell, cell, cell, COL_QR);
-    w = fb_text_width("SCAN UNTUK SETUP");
-    fb_text(120 - w / 2, cy + card + 12, "SCAN UNTUK SETUP", COL_TEXT);
-    w = fb_text_width("QAONIC OS");
-    fb_text(120 - w / 2, cy + card + 24, "QAONIC OS", COL_TEXT);
+    w = fb_text_width("SCAN TO SETUP");
+    fb_text(120 - w / 2, cy + card + 10, "SCAN TO SETUP", COL_TEXT);
 }
 
 void face_render(void) {
@@ -255,8 +259,11 @@ void face_render(void) {
         fb_ring(120, 108, pr < 40 ? 40 : pr, 3, dim565(COL_SPHERE, k));
     }
 
-    /* status text, pulsating */
-    if (cur.show_text && cur.status_text[0]) {
+    /* Status text (e.g. the finale prompt): centered, with a
+     * gentle pulse. During the finale the menu hint joins it
+     * as one centered group at the bottom (see below), so the
+     * text sits a little higher here only when no hint is on. */
+    if (cur.show_text && cur.status_text[0] && !hint_on) {
         int w = fb_text_width(cur.status_text);
         /* pulse brightness 140..255, triangle wave on pulse_phase */
         uint8_t ph = cur.pulse_phase;
@@ -265,12 +272,29 @@ void face_render(void) {
         fb_text(120 - w / 2, 196, cur.status_text, dim565(COL_TEXT, k));
     }
 
-    /* D-GUI-3: persistent menu hint (three bars, bottom left). */
+    /* D-GUI-3 menu hint: thin, centered at the bottom --
+     * three 1px bars; when the finale text is up, bars + text
+     * form one centered group. (Moved from the bottom-left
+     * corner per owner feedback 2026-10-22: the corner symbol
+     * read as visual noise.) */
     if (hint_on && cur.mode == FACE_EYES) {
-        uint16_t hc = dim565(COL_TEXT, 150);
-        fb_fill_rect(10, 220, 16, 2, hc);
-        fb_fill_rect(10, 225, 16, 2, hc);
-        fb_fill_rect(10, 230, 16, 2, hc);
+        uint16_t hc = dim565(COL_TEXT, 120);
+        int has_text = cur.show_text && cur.status_text[0];
+        int tw = has_text ? fb_text_width(cur.status_text) : 0;
+        int gw = 14 + (has_text ? 6 + tw : 0);
+        int gx = 120 - gw / 2;
+        int gy = has_text ? 219 : 224;
+        int i;
+        for (i = 0; i < 3; i++)
+            fb_fill_rect(gx, gy + i * 3, 14, 1, hc);
+        if (has_text) {
+            uint8_t ph = cur.pulse_phase;
+            uint8_t tri = ph < 128 ? (uint8_t)(ph * 2) :
+                (uint8_t)((255 - ph) * 2);
+            uint8_t k = (uint8_t)(110 + (65 * (int)tri) / 255);
+            fb_text(gx + 20, gy, cur.status_text,
+                dim565(COL_TEXT, k));
+        }
     }
 }
 

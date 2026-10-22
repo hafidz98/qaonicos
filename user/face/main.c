@@ -195,7 +195,7 @@ _start(void)
 				face_set_setup((const char *)0);
 				face_set_expr(EXPR_IDLE);
 				face_set_status_text(
-				    "TEKAN TOMBOL UNTUK MENU");
+				    "PRESS BUTTON FOR MENU");
 				face_set_hint(1);
 				fstate = FACE_FINALE;
 				puts("face: provisioned -> finale\n");

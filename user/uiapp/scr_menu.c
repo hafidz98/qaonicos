@@ -71,29 +71,64 @@ menu_event(int ev)
 	(void)col; (void)row;
 }
 
-/* Glyph sederhana per item (kotak + simbol). */
+/* Midpoint circle outline (integer math only). */
 static void
-draw_icon(int x, int y, int idx, uint16_t c)
+draw_circle(int cx, int cy, int r, uint16_t c)
 {
-	int cx = x + 34, cy = y + 22;
-	ui_border(x + 22, y + 8, 56, 40, c);
+	int x = r, y = 0, err = 0;
+	while (x >= y) {
+		ui_px(cx + x, cy + y, c); ui_px(cx + y, cy + x, c);
+		ui_px(cx - y, cy + x, c); ui_px(cx - x, cy + y, c);
+		ui_px(cx - x, cy - y, c); ui_px(cx - y, cy - x, c);
+		ui_px(cx + y, cy - x, c); ui_px(cx + x, cy - y, c);
+		y++;
+		err += 1 + 2 * y;
+		if (2 * (err - x) + 1 > 0) {
+			x--;
+			err += 1 - 2 * x;
+		}
+	}
+}
+
+/* Rounded eye (Qabot tile): filled rect with cut corners. */
+static void
+draw_eye_glyph(int x, int y, int w, int h, uint16_t c)
+{
+	ui_rect(x + 1, y, w - 2, h, c);
+	ui_rect(x, y + 1, w, h - 2, c);
+}
+
+/* Per-item glyphs, free-standing (no box frame -- the framed
+ * look read as raw wireframe; owner feedback 2026-10-22).
+ * Canvas: tile centre (cx, cy), glyphs ~36px. */
+static void
+draw_icon(int x, int y, int idx, uint16_t c, uint16_t bg)
+{
+	int cx = x + 48, cy = y + 26;
 	switch (idx) {
-	case 0:	/* Qabot: dua mata */
-		ui_rect(cx - 14, cy - 4, 12, 14, c);
-		ui_rect(cx + 2, cy - 4, 12, 14, c);
+	case 0:	/* Qabot: the face eyes */
+		draw_eye_glyph(cx - 19, cy - 10, 13, 20, c);
+		draw_eye_glyph(cx + 6, cy - 10, 13, 20, c);
 		break;
-	case 1:	/* Monitor: bar */
-		ui_rect(cx - 12, cy + 6, 6, 8, c);
-		ui_rect(cx - 4, cy, 6, 14, c);
-		ui_rect(cx + 4, cy - 6, 6, 20, c);
+	case 1:	/* Monitor: ascending bars + axis */
+		ui_rect(cx - 16, cy - 2, 7, 12, c);
+		ui_rect(cx - 5, cy - 8, 7, 18, c);
+		ui_rect(cx + 6, cy - 14, 7, 24, c);
+		ui_rect(cx - 18, cy + 11, 38, 2, c);
 		break;
-	case 2:	/* Settings: gear ~ kotak + lubang */
-		ui_rect(cx - 10, cy - 10, 20, 20, c);
-		ui_rect(cx - 5, cy - 5, 10, 10, C_BG);
+	case 2:	/* Settings: gear (ring + 4 teeth + hub hole) */
+		draw_circle(cx, cy, 10, c);
+		draw_circle(cx, cy, 9, c);
+		ui_rect(cx - 2, cy - 14, 5, 5, c);
+		ui_rect(cx - 2, cy + 9, 5, 5, c);
+		ui_rect(cx - 14, cy - 2, 5, 5, c);
+		ui_rect(cx + 9, cy - 2, 5, 5, c);
+		ui_rect(cx - 3, cy - 3, 7, 7, bg);
 		break;
-	case 3:	/* Power: lingkaran + garis */
-		ui_border(cx - 9, cy - 7, 18, 18, c);
-		ui_rect(cx - 1, cy - 12, 3, 10, c);
+	case 3:	/* Power: ring with top gap + stem */
+		draw_circle(cx, cy + 1, 11, c);
+		ui_rect(cx - 3, cy - 12, 7, 4, bg);
+		ui_rect(cx - 1, cy - 13, 3, 11, c);
 		break;
 	default:
 		break;
@@ -117,9 +152,14 @@ menu_render(void)
 		} else {
 			ui_border(x, y, CELL_W - 4, CELL_H - 4, C_DIM);
 		}
-		draw_icon(x, y, i, is_sel ? C_ACCENT : C_FG);
-		ui_text_center(y + CELL_H - 22, labels[i],
-			       is_sel ? C_ACCENT : C_DIM);
+		draw_icon(x, y, i, is_sel ? C_ACCENT : C_FG,
+		    is_sel ? C_SEL : C_BG);
+		/* Label centered WITHIN the tile (ui_text_center
+		 * centers on the whole screen -- with two tiles
+		 * per row the labels overlapped into mush). */
+		ui_text(x + (CELL_W - 4 - ui_text_w(labels[i])) / 2,
+		    y + CELL_H - 22, labels[i],
+		    is_sel ? C_ACCENT : C_DIM);
 	}
 }
 

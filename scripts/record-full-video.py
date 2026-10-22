@@ -213,17 +213,21 @@ first = Image.open(pngs[0])
 W, H = first.size
 card = Image.new("RGB", (W, H), (12, 14, 20))
 dr = ImageDraw.Draw(card)
-font = None
-for cand in ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",):
-    if os.path.exists(cand):
-        font = ImageFont.truetype(cand, max(13, H // 46))
-        break
-if font is None:
-    font = ImageFont.load_default()
-dr.text((36, 30), "qaon> qfetch", fill=(120, 220, 140), font=font)
+FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+def mono(sz):
+    if os.path.exists(FONT):
+        return ImageFont.truetype(FONT, sz)
+    return ImageFont.load_default()
+# Layout measured to fit 240x240 with no overflow (owner
+# feedback 2026-10-22: the old card truncated the ASCII art
+# mid-glyph and its info list spilled off the bottom right).
+# Header, then the 5 art lines intact (the art block is 42
+# chars; at 9px mono a char is ~5.4px -> 227px wide), then
+# the info fields as a clean list.
+dr.text((8, 60), "qaon> qfetch", fill=(120, 220, 140), font=mono(12))
 raw_lines = qfetch_txt.strip().splitlines()
-art = [ln[:40].rstrip() for ln in raw_lines[:5]]
-labels = ("qaon@", "OS:", "SoC:", "CPU:", "Uptime:", "Memory:",
+art = [ln[:43].rstrip() for ln in raw_lines[:5]]
+labels = ("OS:", "SoC:", "CPU:", "Uptime:", "Memory:",
           "Threads:", "Net:", "Shell:", "Agent:", "Display:")
 info = []
 for ln in raw_lines:
@@ -232,22 +236,15 @@ for ln in raw_lines:
         if i >= 0:
             info.append(ln[i:].strip())
             break
-small = None
-for cand in ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",):
-    if os.path.exists(cand):
-        small = ImageFont.truetype(cand, 9)
-        break
-if small is None:
-    small = font
-y = 30 + (H // 46) * 2
+y = 82
 for ln in art:
     if ln:
-        dr.text((36, y), ln, fill=(225, 230, 240), font=small)
-    y += 12
-y += 4
+        dr.text((8, y), ln, fill=(225, 230, 240), font=mono(9))
+    y += 11
+y += 8
 for ln in info:
-    dr.text((36, y), ln, fill=(140, 200, 220), font=small)
-    y += 12
+    dr.text((8, y), ln, fill=(140, 200, 220), font=mono(10))
+    y += 13
 cardpos_file = os.path.join(WORK, "cardpos.txt")
 cardpos = None
 if os.path.exists(cardpos_file):
