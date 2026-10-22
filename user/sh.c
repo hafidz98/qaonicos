@@ -207,6 +207,7 @@ bi_help(void)
 	sh_puts("  bootlog         persistent boot history\n");
 	sh_puts("  setup [name <x>|tz <x>|pin <x>|done|reset]  first-boot setup\n");
 	sh_puts("  gui                   start the GUI dashboard\n");
+	sh_puts("  key <up|down|left|right|ok|back|menu>  inject a button event (dev/test)\n");
 	sh_puts("  update [stage <ver>|cancel|sabotage]  A/B updates\n");
 	sh_puts("  run <path>      run program (Q9 spawn)\n");
 }
@@ -678,6 +679,34 @@ bi_gui(void)
 		sh_puts("gui: unavailable (safe mode)\n");
 }
 
+/* key: inject a button event into the kernel event queue
+ * (dev/test -- in QEMU the shell owns the console, so GUI
+ * buttons are driven with this; on hardware GPIO feeds the
+ * same queue). */
+static void
+bi_key(void)
+{
+	static const char *names[] = {
+		"up", "down", "left", "right", "ok", "back", "menu",
+	};
+	int i;
+
+	if (sh_argc < 2) {
+		sh_puts("usage: key <up|down|left|right|ok|back|menu>\n");
+		return;
+	}
+	for (i = 0; i < 7; i++) {
+		if (sh_streq(sh_argv[1], names[i])) {
+			if (sys_event_inject(i) == 0)
+				sh_puts("key: injected\n");
+			else
+				sh_puts("key: inject failed\n");
+			return;
+		}
+	}
+	sh_puts("key: unknown button\n");
+}
+
 static void
 bi_update(void)
 {
@@ -961,6 +990,8 @@ _start(void)
 			bi_setup();
 		else if (sh_streq(sh_argv[0], "gui"))
 			bi_gui();
+		else if (sh_streq(sh_argv[0], "key"))
+			bi_key();
 		else if (sh_streq(sh_argv[0], "update"))
 			bi_update();
 		else if (sh_streq(sh_argv[0], "run"))

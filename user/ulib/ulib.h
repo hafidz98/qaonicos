@@ -166,6 +166,7 @@ int	sys_face_expr(unsigned expr, const char *text);
 int	sys_spawn(const char *path);	/* Q9 */
 int	sys_spawn_wait(void);		/* Q9 */
 int	sys_console_takeover(void);	/* Q9 */
+int	sys_event_inject(int ev);	/* dev/test: push EV_* into the event queue */
 int	sys_face_poll(unsigned *expr_out, char *text_out);
 
 /* Helper kecil. */

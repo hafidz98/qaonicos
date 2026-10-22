@@ -313,6 +313,7 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_GUI_START	102u	/* Boot UX: launch GUI daemons on demand */
 #define	SYS_WEBUI	103u	/* ONB-1: web UI bridge (shell queue + PIN) */
 #define	SYS_CRED	104u	/* B5.5: credential store */
+#define	SYS_EVENT_INJECT 105u	/* Dev/test: inject a button event into evq */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -1321,6 +1322,17 @@ user_syscall(struct arm_trap_frame *frame)
 		if (a0 == 3u)
 			return (unsigned int)credstore_clear(kname);
 		return (unsigned int)-1;
+	}
+	case SYS_EVENT_INJECT: {
+		/* Dev/test button injection: the same queue the
+		 * GPIO buttons will feed on hardware. Needed in
+		 * QEMU because sh owns the console exclusively
+		 * (Q9), so translated console keys never reach
+		 * the display holder's event poll. a0 = EV_*. */
+		if (a0 > 6u)
+			return (unsigned int)-1;
+		evq_push((int)a0);
+		return 0;
 	}
 	case SYS_BOOTSTATE: {
 		if (a0 == 0u) {

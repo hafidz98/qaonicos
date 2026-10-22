@@ -858,6 +858,23 @@ sys_console_takeover(void)
 	return ret;
 }
 
+/* Dev/test: inject a button event (EV_*) into the kernel
+ * event queue -- the same queue hardware GPIO buttons feed. */
+int
+sys_event_inject(int ev)
+{
+	register unsigned _r0 __asm__("r0") = (unsigned)ev;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #105\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
 /* D1: ACODEC init + register readback. */
 int
 sys_audio_init(void)

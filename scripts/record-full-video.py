@@ -4,9 +4,12 @@
 Sequence: power on -> kernel splash -> shell -> qfetch card ->
 `setup reset` + `gui` -> face QR SETUP screen (ONB-2) ->
 `setup done` -> D-GUI-3 finale (eyes + TEKAN TOMBOL UNTUK
-MENU + hint). Frames via QEMU monitor screendump; serial is
-drained continuously by a reader thread (an undrained serial
-socket stalls the guest -- see verify-onb1.py).
+MENU + hint) -> serial key 'm' (= EV_MENU, the QEMU stand-in
+for the physical button) -> menu grid -> navigate + open the
+Monitor screen -> ESC back. Frames via QEMU monitor
+screendump; serial is drained continuously by a reader thread
+(an undrained serial socket stalls the guest -- see
+verify-onb1.py).
 
 Usage: record-full-video.py [out.mp4]
 """
@@ -161,6 +164,25 @@ print(f"phase3 QR screen: frames={fi} ok={ok}")
 ser.sendall(b"setup done\n")
 ok = hold(8, needle="face: provisioned -> finale", timeout=30)
 print(f"phase4 finale: frames={fi} ok={ok}")
+
+# Phase 5: menu via the `key` shell builtin (syscall 105
+# event injection -- sh owns the console in QEMU, so raw
+# serial keys never reach the GUI; on hardware GPIO feeds
+# the same queue). First `key menu` dismisses the finale,
+# the second grants the display to uiapp -> menu grid.
+ser.sendall(b"key menu\n")
+time.sleep(1.5)
+ser.sendall(b"key menu\n")
+ok = hold(6)
+print(f"phase5 menu grid: frames={fi}")
+ser.sendall(b"key right\n")
+ok = hold(1.5)
+ser.sendall(b"key ok\n")
+ok = hold(5)
+print(f"phase5 screen opened: frames={fi}")
+ser.sendall(b"key back\n")
+ok = hold(4)
+print(f"phase5 back to grid: frames={fi}")
 
 qemu.kill()
 qemu.wait()
