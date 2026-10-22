@@ -21,6 +21,77 @@
 #include "ulib/ulib.h"
 #include "face/face.h"
 
+#define FACE_SETUP	1	/* ONB-2 states */
+#define FACE_FINALE	2
+#define FACE_NORMAL	0
+
+/* Local syscall wrappers (98 bootstate / 94+96+97 littlefs),
+ * same pattern as sh.c's -- ulib does not wrap these yet. */
+static int
+face_bs(int sub, unsigned *buf)
+{
+	register int r7 __asm__("r7") = 98;
+	register int r0 __asm__("r0") = sub;
+	register unsigned *r1 __asm__("r1") = buf;
+	__asm__ volatile("svc #0" : "+r"(r0)
+	    : "r"(r7), "r"(r1) : "memory");
+	return r0;
+}
+
+static int
+face_lfs(int num, const char *path, void *buf, int len)
+{
+	register int r7 __asm__("r7") = num;
+	register const char *r0 __asm__("r0") = path;
+	register void *r1 __asm__("r1") = buf;
+	register int r2 __asm__("r2") = len;
+	__asm__ volatile("svc #0" : "+r"(r0)
+	    : "r"(r7), "r"(r1), "r"(r2) : "memory");
+	return (int)r0;
+}
+
+/* Build the ONB-2 setup payload "QAON1:<secret>:QaonicOS-Setup".
+ * The secret is a 32-hex per-device value kept in cfg-secret
+ * (created on first need). In QEMU littlefs is RAM-backed, so
+ * it is per-boot there; on hardware it persists. The production
+ * session secret is minted by the C6 companion (ONB-3) -- this
+ * one only has to be stable for one setup session. */
+static void
+build_payload(char *out)
+{
+	static const char hx[] = "0123456789abcdef";
+	char sec[33];
+	int n = face_lfs(96, "cfg-secret", sec, 32), i;
+	unsigned s;
+	unsigned info[4];
+
+	if (n != 32) {
+		face_bs(0, info);
+		s = sys_uptime() ^ (info[0] << 16) ^ 0x9E3779B9u;
+		if (s == 0)
+			s = 0x51ED5EEDu;
+		for (i = 0; i < 32; i++) {
+			s ^= s << 13;
+			s ^= s >> 17;
+			s ^= s << 5;
+			sec[i] = hx[s & 15u];
+		}
+		face_lfs(97, "cfg-secret", sec, 32);
+	}
+	sec[32] = 0;
+	{
+		const char *pre = "QAON1:", *post = ":QaonicOS-Setup";
+		int k = 0;
+		while (*pre)
+			out[k++] = *pre++;
+		for (i = 0; i < 32; i++)
+			out[k++] = sec[i];
+		while (*post)
+			out[k++] = *post++;
+		out[k] = 0;
+	}
+}
+
 #define STRIP_H		24
 #define NSTRIP		(FACE_H / STRIP_H)	/* 10 */
 #define FRAME_MS	33			/* target ~30 fps */
@@ -73,6 +144,8 @@ _start(void)
 {
 	struct qaon_display di;
 	unsigned last_frame, now, last_input, idle_ms;
+	unsigned last_poll;
+	int fstate = FACE_NORMAL;
 	int ev, st;
 	int display_on = 1;
 
@@ -92,8 +165,42 @@ _start(void)
 	face_set_expr(EXPR_IDLE);
 	last_frame = sys_uptime();
 	last_input = last_frame;
+	last_poll = last_frame;
+
+	/* ONB-2: unprovisioned -> setup screen until the flag flips. */
+	{
+		char payload[64];
+
+		if (face_bs(3, (unsigned *)0) & 1) {
+			face_set_hint(1);
+		} else {
+			face_lfs(94, (const char *)0, (void *)0, 0);
+			build_payload(payload);
+			face_set_setup(payload);
+			fstate = FACE_SETUP;
+			puts("face: setup mode, payload ");
+			puts(payload);
+			puts("\n");
+		}
+	}
 
 	for (;;) {
+		/* ONB-2: poll the provisioned flag ~1 Hz. */
+		now = sys_uptime();
+		if (fstate != FACE_NORMAL &&
+		    (unsigned)(now - last_poll) >= 1000u) {
+			last_poll = now;
+			if (fstate == FACE_SETUP &&
+			    (face_bs(3, (unsigned *)0) & 1)) {
+				face_set_setup((const char *)0);
+				face_set_expr(EXPR_IDLE);
+				face_set_status_text(
+				    "TEKAN TOMBOL UNTUK MENU");
+				face_set_hint(1);
+				fstate = FACE_FINALE;
+				puts("face: provisioned -> finale\n");
+			}
+		}
 		/* uiapp pegang token: jangan render, jangan baca event. */
 		st = sys_display_status();
 		if (st != 0) {
@@ -130,13 +237,20 @@ _start(void)
 				display_on = 1;	/* wake: input apa pun */
 				puts("face: wake\n");
 			}
+			if (fstate == FACE_FINALE && ev == EV_MENU) {
+				/* D-GUI-3: first menu press ends the
+				 * hands-on finale (back to plain idle). */
+				face_set_expr(EXPR_IDLE);
+				fstate = FACE_NORMAL;
+			}
 			if (ev == EV_MENU && display_on)
 				sys_display_grant();	/* -> uiapp */
 		}
 		idle_ms = now - last_input;
 
-		/* Power state machine (§11). */
-		if (display_on &&
+		/* Power state machine (§11). The setup screen never
+		 * blanks: setup is an active task (ONB-2). */
+		if (display_on && fstate != FACE_SETUP &&
 		    idle_ms >= (unsigned)(UI_IDLE_DISPLAY_OFF_S * 1000u)) {
 			puts("face: idle -> display off\n");
 			flush_black();

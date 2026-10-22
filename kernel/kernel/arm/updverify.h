@@ -11,4 +11,9 @@
 int	upd_verify_package(const unsigned char *pkg, unsigned int len,
 	    unsigned int *version_out);
 
+/* One-shot SHA-256 (exposes the file-local implementation for
+ * other kernel modules, e.g. webui PIN hashing, ONB-1). */
+void	upd_sha256(const unsigned char *p, unsigned int n,
+	    unsigned char out[32]);
+
 #endif

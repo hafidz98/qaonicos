@@ -15,6 +15,40 @@ static char	sh_line[SH_LINE_MAX + 1u];
 static char	*sh_argv[SH_ARGS_MAX];
 static unsigned	sh_argc;
 
+/* ONB-1: web shell capture. While cap_on, everything the shell
+ * prints is also copied to cap_buf and posted to the kernel web
+ * bridge after the command finishes (see the main loop). */
+static char	cap_buf[4096];
+static unsigned	cap_len;
+static int	cap_on;
+
+static void
+cap_puts(const char *s, unsigned n)
+{
+	unsigned i;
+	if (!cap_on)
+		return;
+	for (i = 0; i < n && cap_len < sizeof(cap_buf) - 1u; i++)
+		cap_buf[cap_len++] = s[i];
+	cap_buf[cap_len] = 0;
+}
+
+static int
+sh_webui(unsigned sub, char *buf, unsigned len)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, %1\n\t"
+		"mov r1, %2\n\t"
+		"mov r2, %3\n\t"
+		"mov r7, #103\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret) : "r" (sub), "r" (buf), "r" (len)
+		: "r0", "r1", "r2", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
 static unsigned
 sh_len(const char *s)
 {
@@ -33,6 +67,7 @@ sh_puts(const char *s)
 	for (n = 0; s[n]; n++)
 		;
 	sys_write(1, s, n);
+	cap_puts(s, n);
 }
 
 static void
@@ -52,8 +87,10 @@ sh_putu(unsigned v)
 		buf[i++] = (char)('0' + t % 10u);
 		t /= 10u;
 	}
-	for (j = i - 1; j >= 0; j--)
+	for (j = i - 1; j >= 0; j--) {
 		sys_write(1, &buf[j], 1u);
+		cap_puts(&buf[j], 1u);
+	}
 }
 
 /* Line editor: echo, backspace, Enter. */
@@ -67,6 +104,18 @@ sh_readline(void)
 	for (;;) {
 		c = sys_read_console();
 		if (c < 0) {
+			/* ONB-1: a queued web-shell command becomes
+			 * the input line when the console is idle. */
+			if (n == 0u && !cap_on) {
+				int w = sh_webui(0u, sh_line,
+				    SH_LINE_MAX);
+				if (w > 0) {
+					cap_on = 1;
+					cap_len = 0;
+					sh_line[w] = 0;
+					return (unsigned)w;
+				}
+			}
 			sys_yield();
 			continue;
 		}
@@ -156,7 +205,7 @@ bi_help(void)
 	sh_puts("  qfetch          system summary (neofetch-style)\n");
 	sh_puts("  bootctl [crash] boot state / arm crash simulation\n");
 	sh_puts("  bootlog         persistent boot history\n");
-	sh_puts("  setup [name <x>|tz <x>|done|reset]  first-boot setup\n");
+	sh_puts("  setup [name <x>|tz <x>|pin <x>|done|reset]  first-boot setup\n");
 	sh_puts("  gui                   start the GUI dashboard\n");
 	sh_puts("  update [stage <ver>|cancel|sabotage]  A/B updates\n");
 	sh_puts("  run <path>      run program (Q9 spawn)\n");
@@ -548,6 +597,13 @@ bi_setup(void)
 			sh_puts("setup: tz saved\n");
 		return;
 	}
+	if (sh_argc > 2 && sh_streq(sh_argv[1], "pin")) {
+		if (sh_webui(2u, sh_argv[2], sh_len(sh_argv[2])) == 0)
+			sh_puts("setup: PIN saved\n");
+		else
+			sh_puts("setup: PIN invalid (4-16 chars)\n");
+		return;
+	}
 	if (sh_argc > 1 && sh_streq(sh_argv[1], "mode")) {
 		n = sh_bootstate(3u, info);
 		if (sh_argc > 2 && sh_streq(sh_argv[2], "user")) {
@@ -584,6 +640,8 @@ bi_setup(void)
 	} else {
 		sh_puts("(unset)");
 	}
+	sh_puts("\n  pin: ");
+	sh_puts(sh_webui(3u, (char *)0, 0u) > 0 ? "set" : "(unset)");
 	sh_puts("\n");
 }
 
@@ -862,6 +920,13 @@ _start(void)
 		}
 	}
 	for (;;) {
+		/* ONB-1: post the captured output of a web-shell
+		 * command before the next prompt is printed. */
+		if (cap_on) {
+			(void)sh_webui(1u, cap_buf, cap_len);
+			cap_on = 0;
+			cap_len = 0;
+		}
 		sh_puts("qaon> ");
 		if (sh_readline() == 0u)
 			continue;

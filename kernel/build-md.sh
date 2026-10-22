@@ -88,7 +88,11 @@ for prog in init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest uaudio
     python3 "$USR/pad-bss.py" "$BUILD/$prog.bin" "$BUILD/$prog.elf" \
         >>"$LOG" 2>&1 || \
         { echo "FAIL pad-bss user/$prog.bin"; exit 1; }
-    python3 "$USR/embed.py" "$BUILD/$prog.bin" "$GEN/${prog}_img.c" "${prog}_img" 32768 >>"$LOG" 2>&1 || \
+    # sh outgrew the 32 KB default (B2-B4 + Boot UX + ONB-1
+    # builtins); it gets the uiapp-class cap.
+    cap=32768
+    [ "$prog" = "sh" ] && cap=65536
+    python3 "$USR/embed.py" "$BUILD/$prog.bin" "$GEN/${prog}_img.c" "${prog}_img" $cap >>"$LOG" 2>&1 || \
         { echo "FAIL embed ${prog}_img"; exit 1; }
     echo "USER: $prog.elf entry=$ENTRY ok"
 done
@@ -99,10 +103,11 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/hello.ld" \
 echo "USER: hello.elf link OK"
 
 # --- 1c. user program face/Qabot (App A1): multi-file (main.c + face.c +
-# face_draw.c), pola sama: link di 0x100000, objcopy, pad-bss, embed. ---
+# face_draw.c + qr.c), pola sama: link di 0x100000, objcopy, pad-bss,
+# embed. ---
 echo "BUILD user program face (Qabot)"
 FCFLAGS="$UCFLAGS -I$USR/face -Wno-unused-function"
-for f in main face face_draw; do
+for f in main face face_draw qr; do
     # shellcheck disable=SC2086
     clang $FCFLAGS -c "$USR/face/$f.c" -o "$BUILD/face_$f.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/face/$f.c (see $LOG)"; exit 1; }
@@ -110,7 +115,8 @@ done
 # shellcheck disable=SC2086
 clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     -o "$BUILD/face.elf" "$BUILD/face_main.o" "$BUILD/face_face.o" \
-    "$BUILD/face_face_draw.o" "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    "$BUILD/face_face_draw.o" "$BUILD/face_qr.o" "$BUILD/ulib.o" \
+    "$BUILD/udiv.o" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL link user/face.elf (see $LOG)"; exit 1; }
 ENTRY=$("$LLVM_READELF" -h "$BUILD/face.elf" | sed -n 's/.*Entry point address: *//p')
@@ -121,7 +127,7 @@ ENTRY=$("$LLVM_READELF" -h "$BUILD/face.elf" | sed -n 's/.*Entry point address: 
 python3 "$USR/pad-bss.py" "$BUILD/face.bin" "$BUILD/face.elf" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL pad-bss user/face.bin"; exit 1; }
-python3 "$USR/embed.py" "$BUILD/face.bin" "$GEN/face_img.c" "face_img" 32768 >>"$LOG" 2>&1 || \
+python3 "$USR/embed.py" "$BUILD/face.bin" "$GEN/face_img.c" "face_img" 65536 >>"$LOG" 2>&1 || \
     { echo "FAIL embed face_img"; exit 1; }
 echo "USER: face.elf entry=$ENTRY ok"
 
@@ -374,7 +380,7 @@ ENTRY=$("$LLVM_READELF" -h "$BUILD/sh.elf" | sed -n 's/.*Entry point address: */
 python3 "$USR/pad-bss.py" "$BUILD/sh.bin" "$BUILD/sh.elf" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL pad-bss user/sh.bin"; exit 1; }
-python3 "$USR/embed.py" "$BUILD/sh.bin" "$GEN/sh_img.c" "sh_img" 32768 >>"$LOG" 2>&1 || \
+python3 "$USR/embed.py" "$BUILD/sh.bin" "$GEN/sh_img.c" "sh_img" 65536 >>"$LOG" 2>&1 || \
     { echo "FAIL embed sh_img"; exit 1; }
 echo "USER: sh.elf entry=$ENTRY ok"
 

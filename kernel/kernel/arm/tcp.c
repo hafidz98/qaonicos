@@ -101,8 +101,8 @@ static struct {
     unsigned char  last_flags;          /* flags segmen terakhir */
     unsigned int last_tx_ms;          /* kapan terakhir dikirim */
     unsigned char  last_valid;
-    /* Buffer request HTTP: */
-    unsigned char  req[1024];
+    /* Buffer request HTTP (ONB-1: muat form POST; dulu 1024). */
+    unsigned char  req[3072];
     unsigned reqlen;
     unsigned char  responded;
     /* Respons HTTP yang sedang dikirim (untuk retransmit per-segmen): */
@@ -211,14 +211,54 @@ static void tcp_respond(void)
 
 static int req_complete(void)
 {
-    unsigned i;
+    unsigned i, hdr_end = 0;
     if (tc.reqlen < 4)
         return 0;
     for (i = 0; i + 3 < tc.reqlen; i++)
         if (tc.req[i] == '\r' && tc.req[i + 1] == '\n' &&
-            tc.req[i + 2] == '\r' && tc.req[i + 3] == '\n')
+            tc.req[i + 2] == '\r' && tc.req[i + 3] == '\n') {
+            hdr_end = i + 4;
+            break;
+        }
+    if (hdr_end == 0)
+        return 0;
+    /* ONB-1: POST bodies follow the headers. If a Content-Length
+     * header is present, the request is complete only once the
+     * whole body has arrived (or the buffer is full). */
+    {
+        static const char *cl = "Content-Length:";
+        unsigned j, clen = 0;
+        int have_cl = 0;
+        for (i = 0; i + 15u < hdr_end; i++) {
+            if (tc.req[i] == '\n' || i == 0) {
+                unsigned k = (tc.req[i] == '\n') ? i + 1u : i;
+                int match = 1;
+                for (j = 0; j < 15u; j++)
+                    if (tc.req[k + j] != (unsigned char)cl[j])
+                        match = 0;
+                if (match) {
+                    k += 15u;
+                    while (k < hdr_end && tc.req[k] == ' ')
+                        k++;
+                    while (k < hdr_end && tc.req[k] >= '0' &&
+                           tc.req[k] <= '9') {
+                        clen = clen * 10u +
+                            (unsigned)(tc.req[k] - '0');
+                        k++;
+                    }
+                    have_cl = 1;
+                    break;
+                }
+            }
+        }
+        if (!have_cl)
             return 1;
-    return 0;
+        if (tc.reqlen >= hdr_end + clen)
+            return 1;
+        if (tc.reqlen >= sizeof(tc.req))
+            return 1;   /* buffer full: answer with what we have */
+        return 0;
+    }
 }
 
 /* Proses payload data yang valid (seq == rcv_nxt). */
@@ -571,6 +611,21 @@ void tcp_on_ip(const unsigned char *ip, unsigned iplen,
         return;
     }
 
+    /* ONB-1 robustness: a SYN takes over a lingering connection.
+     * Clients that close abruptly (browser tab killed, HTTP
+     * client that stops reading after Content-Length) otherwise
+     * wedge this single-connection server in FIN_SENT until the
+     * 120 s inactivity timeout. Two cases:
+     * - different (src,port): a plainly new connection;
+     * - same tuple in FIN_SENT: slirp/port reuse -- the old
+     *   incarnation is gone (we already sent our FIN), and
+     *   ignoring the SYN would refresh last_act forever without
+     *   ever answering it: a permanent wedge. */
+    if ((flags & TF_SYN) && tc.state != TS_LISTEN &&
+        (tc.state == TS_FIN_SENT ||
+         src != tc.rip || sport != tc.rport))
+        tcp_reset_conn();
+
     switch (tc.state) {
     case TS_LISTEN:
         if (flags & TF_SYN) {
@@ -651,8 +706,12 @@ void tcp_on_ip(const unsigned char *ip, unsigned iplen,
             printf("[tcp] FIN di-ack -> LISTEN\r\n");
             tcp_reset_conn();
         } else if (flags & TF_FIN) {
+            /* Simultaneous close: the peer is done too; ACK
+             * its FIN and return to LISTEN instead of waiting
+             * for an ACK that may never come (ONB-1). */
             tc.rcv_nxt++;
             tcp_ack();
+            tcp_reset_conn();
         }
         break;
     }

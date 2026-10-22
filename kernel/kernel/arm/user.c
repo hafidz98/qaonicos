@@ -33,6 +33,11 @@ extern int	lfs_port_list(char *, unsigned int);
 extern int	lfs_port_read(const char *, unsigned char *, unsigned int);
 extern int	lfs_port_write(const char *, const unsigned char *,
 		    unsigned int);
+/* ONB-1 (webui.c): web shell bridge + device PIN. */
+extern int	webui_shell_take(char *, unsigned int);
+extern int	webui_shell_post(const char *, unsigned int);
+extern int	webui_pin_set(const char *, unsigned int);
+extern int	webui_pin_present(void);
 extern int	bootstate_init(void);	/* bootstate.c (B2) */
 extern int	bootstate_safe_mode(void);
 extern void	bootstate_healthy(unsigned int);
@@ -297,6 +302,7 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_TIME_QUALITY 100u	/* B3: -> 0 unsynced / 1 NTP synced */
 #define	SYS_TIME_SYNC	101u	/* B3: mark clock NTP-synced */
 #define	SYS_GUI_START	102u	/* Boot UX: launch GUI daemons on demand */
+#define	SYS_WEBUI	103u	/* ONB-1: web UI bridge (shell queue + PIN) */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -1212,6 +1218,49 @@ user_syscall(struct arm_trap_frame *frame)
 			return 1u;
 		gui_pending = 1;
 		return 0u;
+	}
+	case SYS_WEBUI: {
+		/* ONB-1 web UI bridge. a0 sub:
+		 * 0 take web-shell command (a1 buf, a2 max) -> len/-1
+		 * 1 post web-shell result (a1 buf, a2 len) -> 0/-1
+		 * 2 set device PIN (a1 buf, a2 len) -> 0/-1
+		 * 3 PIN present -> 1/0 */
+		if (a0 == 0u) {
+			static char kcmd[192];
+			int n;
+			if (!user_range_ok(a1, a2))
+				return (unsigned int)-1;
+			n = webui_shell_take(kcmd, sizeof(kcmd));
+			if (n < 0)
+				return (unsigned int)-1;
+			{
+				unsigned int i;
+				char *u = (char *)a1;
+				for (i = 0; i <= (unsigned int)n; i++)
+					u[i] = kcmd[i];
+			}
+			return (unsigned int)n;
+		}
+		if (a0 == 1u) {
+			if (!user_range_ok(a1, a2) || a2 > 8192u)
+				return (unsigned int)-1;
+			return (unsigned int)webui_shell_post(
+			    (const char *)a1, a2);
+		}
+		if (a0 == 2u) {
+			static char kpin[20];
+			unsigned int i;
+			if (a2 < 4u || a2 > 16u ||
+			    !user_range_ok(a1, a2))
+				return (unsigned int)-1;
+			for (i = 0; i < a2; i++)
+				kpin[i] = ((const char *)a1)[i];
+			kpin[a2] = 0;
+			return (unsigned int)webui_pin_set(kpin, a2);
+		}
+		if (a0 == 3u)
+			return (unsigned int)webui_pin_present();
+		return (unsigned int)-1;
 	}
 	case SYS_BOOTSTATE: {
 		if (a0 == 0u) {

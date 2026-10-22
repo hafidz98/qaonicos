@@ -317,45 +317,521 @@ build_dashboard(unsigned char *b)
 	return off;
 }
 
+/* --- ONB-1: web settings UI (login/settings/shell) --- */
+#include "webui.h"
+
+extern unsigned int	bootstate_gui_mode(void);
+extern void	bootstate_set_gui_mode(unsigned int on);
+
+static int
+pseq(const char *a, const char *b, unsigned int n)
+{
+	unsigned int i;
+	for (i = 0; i < n; i++)
+		if (a[i] != b[i])
+			return 0;
+	return 1;
+}
+
+static int
+req_has(const unsigned char *req, unsigned reqlen, const char *needle)
+{
+	unsigned i, nl = 0;
+	while (needle[nl])
+		nl++;
+	if (reqlen < nl)
+		return 0;
+	for (i = 0; i + nl <= reqlen; i++) {
+		unsigned j;
+		int ok = 1;
+		for (j = 0; j < nl; j++)
+			if (req[i + j] != (unsigned char)needle[j])
+				ok = 0;
+		if (ok)
+			return (int)i;
+	}
+	return -1;
+}
+
+static const unsigned char *
+body_of(const unsigned char *req, unsigned reqlen, unsigned *blen)
+{
+	unsigned i;
+	for (i = 0; i + 3u < reqlen; i++)
+		if (req[i] == '\r' && req[i + 1] == '\n' &&
+		    req[i + 2] == '\r' && req[i + 3] == '\n') {
+			*blen = reqlen - (i + 4u);
+			return req + i + 4u;
+		}
+	*blen = 0;
+	return req + reqlen;
+}
+
+static int
+hexv(unsigned char c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+/* urlencoded form field -> decoded out. 1 found, 0 absent. */
+static int
+form_get(const unsigned char *body, unsigned blen, const char *key,
+    char *out, unsigned max)
+{
+	unsigned i = 0, kl = 0, o = 0;
+	while (key[kl])
+		kl++;
+	while (i < blen) {
+		unsigned j = 0;
+		while (i + j < blen && body[i + j] != '=' &&
+		       body[i + j] != '&')
+			j++;
+		if (j == kl) {
+			unsigned m;
+			int ok = 1;
+			for (m = 0; m < kl; m++)
+				if (body[i + m] != (unsigned char)key[m])
+					ok = 0;
+			if (ok) {
+				i += j + 1u;
+				while (i < blen && body[i] != '&') {
+					unsigned char c = body[i];
+					if (c == '+') {
+						c = ' ';
+						i++;
+					} else if (c == '%' &&
+					    i + 2u < blen &&
+					    hexv(body[i + 1u]) >= 0 &&
+					    hexv(body[i + 2u]) >= 0) {
+						c = (unsigned char)(
+						    hexv(body[i + 1u]) * 16 +
+						    hexv(body[i + 2u]));
+						i += 3u;
+					} else {
+						i++;
+					}
+					if (o + 1u < max)
+						out[o++] = (char)c;
+				}
+				out[o] = 0;
+				return 1;
+			}
+		}
+		while (i < blen && body[i] != '&')
+			i++;
+		if (i < blen)
+			i++;
+	}
+	return 0;
+}
+
+static int
+cookie_get(const unsigned char *req, unsigned reqlen, const char *name,
+    char *out, unsigned max)
+{
+	int at = req_has(req, reqlen, name);
+	unsigned i, o = 0;
+	if (at < 0)
+		return 0;
+	i = (unsigned)at;
+	while (name[o])
+		i++, o++;
+	o = 0;
+	while (i < reqlen && req[i] != ';' && req[i] != '\r' &&
+	       req[i] != '\n' && req[i] != ' ') {
+		if (o + 1u < max)
+			out[o++] = (char)req[i];
+		i++;
+	}
+	out[o] = 0;
+	return o > 0u;
+}
+
+static int
+sess_ok(const unsigned char *req, unsigned reqlen)
+{
+	char tok[40];
+	if (!cookie_get(req, reqlen, "qaon_sess=", tok, sizeof(tok)))
+		return 0;
+	return webui_session_check(tok, 32u);
+}
+
+static unsigned
+escapp(unsigned char *d, unsigned off, const char *s)
+{
+	while (*s) {
+		if (*s == '&')
+			off = strapp(d, off, "&amp;");
+		else if (*s == '<')
+			off = strapp(d, off, "&lt;");
+		else if (*s == '>')
+			off = strapp(d, off, "&gt;");
+		else if (*s == '"')
+			off = strapp(d, off, "&quot;");
+		else
+			d[off++] = (unsigned char)*s;
+		s++;
+	}
+	return off;
+}
+
+#define UI_STYLE \
+	"<style>body{background:#0b0e14;color:#c9d4e3;" \
+	"font-family:monospace;margin:0;padding:16px}" \
+	"h1{color:#6ea8fe;font-size:20px}label{display:block;" \
+	"margin:10px 0 4px;color:#8fa3c0}" \
+	"input,select{background:#131926;color:#fff;border:1px solid #263049;" \
+	"border-radius:6px;padding:8px;width:280px;max-width:90%}" \
+	"input[type=checkbox]{width:auto}" \
+	"button{background:#1f6feb;color:#fff;border:0;border-radius:6px;" \
+	"padding:9px 18px;margin-top:14px;cursor:pointer}" \
+	".err{color:#f47067}.ok{color:#3fb950}pre{background:#131926;" \
+	"padding:10px;border-radius:6px;white-space:pre-wrap}</style>"
+
+static unsigned
+build_login(unsigned char *b, const char *err)
+{
+	unsigned off = 0;
+	int has_pin = webui_pin_present();
+
+	off = strapp(b, off,
+	    "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+	    "<meta name=\"viewport\" content=\"width=device-width,"
+	    "initial-scale=1\"><title>QaonicOS Login</title>"
+	    UI_STYLE "</head><body>");
+	off = strapp(b, off, has_pin ? "<h1>QaonicOS &mdash; Login</h1>"
+	    : "<h1>QaonicOS &mdash; Buat PIN</h1>");
+	if (err) {
+		off = strapp(b, off, "<p class=\"err\">");
+		off = strapp(b, off, err);
+		off = strapp(b, off, "</p>");
+	}
+	if (!has_pin)
+		off = strapp(b, off,
+		    "<p>Device ini belum punya PIN. Buat PIN (4-16 "
+		    "karakter) untuk mengunci Settings dan shell.</p>");
+	off = strapp(b, off,
+	    "<form method=\"POST\" action=\"/login\">"
+	    "<label>PIN</label>"
+	    "<input type=\"password\" name=\"pin\" inputmode=\"numeric\" "
+	    "autocomplete=\"off\" autofocus>"
+	    "<br><button type=\"submit\">");
+	off = strapp(b, off, has_pin ? "Masuk" : "Buat PIN &amp; masuk");
+	off = strapp(b, off, "</button></form></body></html>");
+	return off;
+}
+
+static unsigned
+build_settings(unsigned char *b, const char *msg)
+{
+	unsigned off = 0;
+	char name[48], tz[24], key[8];
+	int has_key, shell_on;
+	unsigned int gui;
+
+	name[0] = 0;
+	tz[0] = 0;
+	(void)webui_cfg_read("cfg-name", name, sizeof(name));
+	(void)webui_cfg_read("cfg-tz", tz, sizeof(tz));
+	has_key = webui_cfg_read("cfg-apikey", key, sizeof(key)) > 0;
+	shell_on = webui_shell_enabled();
+	gui = bootstate_gui_mode();
+
+	off = strapp(b, off,
+	    "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+	    "<meta name=\"viewport\" content=\"width=device-width,"
+	    "initial-scale=1\"><title>QaonicOS Settings</title>"
+	    UI_STYLE "</head><body><h1>QaonicOS Settings</h1>");
+	if (msg) {
+		off = strapp(b, off, "<p class=\"ok\">");
+		off = strapp(b, off, msg);
+		off = strapp(b, off, "</p>");
+	}
+	off = strapp(b, off,
+	    "<form method=\"POST\" action=\"/settings\">"
+	    "<label>Nama device</label><input name=\"name\" value=\"");
+	off = escapp(b, off, name);
+	off = strapp(b, off,
+	    "\"><label>Zona waktu</label><input name=\"tz\" value=\"");
+	off = escapp(b, off, tz);
+	off = strapp(b, off, "\"><label>API key LLM ");
+	off = strapp(b, off, has_key ? "(sudah terisi)" : "(kosong &mdash; bot offline)");
+	off = strapp(b, off,
+	    "</label><input type=\"password\" name=\"apikey\" "
+	    "autocomplete=\"off\" placeholder=\"isi untuk mengganti\">"
+	    "<label><input type=\"checkbox\" name=\"clear_apikey\"> "
+	    "Hapus API key</label>"
+	    "<label>Mode boot</label><select name=\"mode\">"
+	    "<option value=\"dev\"");
+	off = strapp(b, off, gui ? "" : " selected");
+	off = strapp(b, off, ">dev (shell dulu)</option>"
+	    "<option value=\"user\"");
+	off = strapp(b, off, gui ? " selected" : "");
+	off = strapp(b, off,
+	    ">user (GUI langsung)</option></select>"
+	    "<label><input type=\"checkbox\" name=\"shell_on\"");
+	off = strapp(b, off, shell_on ? " checked" : "");
+	off = strapp(b, off,
+	    "> Web shell aktif (default mati; mati sendiri setelah "
+	    "15 menit nganggur)</label>"
+	    "<br><button type=\"submit\">Simpan</button></form>"
+	    "<p><a href=\"/shell\">Web shell</a> &middot; "
+	    "<a href=\"/\">Monitor</a></p></body></html>");
+	return off;
+}
+
+static char	ws_last_out[4096];
+static int	ws_pending;
+
+static unsigned
+build_shell(unsigned char *b, const char *msg)
+{
+	unsigned off = 0;
+	char tmp[4096];
+
+	if (ws_pending &&
+	    webui_shell_result(tmp, sizeof(tmp)) >= 0) {
+		unsigned i;
+		for (i = 0; i < sizeof(ws_last_out); i++)
+			ws_last_out[i] = tmp[i];
+		ws_pending = 0;
+	}
+	off = strapp(b, off,
+	    "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+	    "<meta name=\"viewport\" content=\"width=device-width,"
+	    "initial-scale=1\"><title>QaonicOS Shell</title>");
+	if (ws_pending)
+		off = strapp(b, off,
+		    "<meta http-equiv=\"refresh\" content=\"2\">");
+	off = strapp(b, off, UI_STYLE
+	    "</head><body><h1>QaonicOS Web Shell</h1>");
+	if (msg) {
+		off = strapp(b, off, "<p>");
+		off = strapp(b, off, msg);
+		off = strapp(b, off, "</p>");
+	}
+	off = strapp(b, off,
+	    "<form method=\"POST\" action=\"/shell\">"
+	    "<input name=\"cmd\" placeholder=\"perintah shell\" "
+	    "autocomplete=\"off\" autofocus>"
+	    "<br><button type=\"submit\">Jalankan</button></form>");
+	if (ws_pending)
+		off = strapp(b, off,
+		    "<p>Perintah sedang dijalankan&hellip;</p>");
+	else if (ws_last_out[0]) {
+		off = strapp(b, off, "<pre>");
+		off = escapp(b, off, ws_last_out);
+		off = strapp(b, off, "</pre>");
+	}
+	off = strapp(b, off,
+	    "<p><a href=\"/settings\">Settings</a></p></body></html>");
+	return off;
+}
+
+static unsigned
+build_note(unsigned char *b, const char *title, const char *text)
+{
+	unsigned off = 0;
+	off = strapp(b, off,
+	    "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+	    "<meta name=\"viewport\" content=\"width=device-width,"
+	    "initial-scale=1\"><title>QaonicOS</title>"
+	    UI_STYLE "</head><body><h1>");
+	off = strapp(b, off, title);
+	off = strapp(b, off, "</h1><p>");
+	off = strapp(b, off, text);
+	off = strapp(b, off, "</p></body></html>");
+	return off;
+}
+
 /* --- HTTP/1.0 request handler --- */
 unsigned
 http_handle(const unsigned char *req, unsigned reqlen, unsigned char *resp)
 {
 	unsigned off = 0;
-	unsigned body_len;
-	unsigned char body[8192];
-	const char *ctype;
-	unsigned int code;
-	const char *codestr;
+	unsigned body_len = 0;
+	static unsigned char body[8192];
+	const char *ctype = "text/html";
+	unsigned int code = 200u;
+	const char *codestr = "OK";
+	char extra[192];
+	char path[24];
+	unsigned pi = 0, pstart;
+	int is_post = 0;
+	const unsigned char *fbody;
+	unsigned flen;
 
-	/* Parse request line: "GET /path HTTP/1.x". */
-	if (reqlen < 5u || req[0] != 'G' || req[1] != 'E' ||
-	    req[2] != 'T' || req[3] != ' ') {
+	extra[0] = 0;
+	fbody = body_of(req, reqlen, &flen);
+
+	/* Method + path. */
+	if (reqlen >= 4u && req[0] == 'G' && req[1] == 'E' &&
+	    req[2] == 'T' && req[3] == ' ') {
+		pstart = 4u;
+	} else if (reqlen >= 5u && req[0] == 'P' && req[1] == 'O' &&
+	    req[2] == 'S' && req[3] == 'T' && req[4] == ' ') {
+		is_post = 1;
+		pstart = 5u;
+	} else {
 		code = 400u;
 		codestr = "Bad Request";
-		body_len = 0;
 		ctype = "text/plain";
 		goto respond;
 	}
+	while (pstart + pi < reqlen && req[pstart + pi] != ' ' &&
+	       req[pstart + pi] != '?') {
+		if (pi + 1u < sizeof(path))
+			path[pi] = (char)req[pstart + pi];
+		pi++;
+	}
+	path[pi < sizeof(path) ? pi : sizeof(path) - 1u] = 0;
 
-	if (req[4] == '/' &&
-	    (reqlen == 5u || req[5] == ' ' || req[5] == '\r' ||
-	     req[5] == '\n')) {
-		/* GET / */
-		code = 200u;
-		codestr = "OK";
-		ctype = "text/html";
+#define PATH_IS(s) (pi == sizeof(s) - 1u && \
+    pseq(path, s, sizeof(s) - 1u))
+
+	if (!is_post && PATH_IS("/")) {
 		body_len = build_dashboard(body);
-	} else if (reqlen >= 12u && req[4] == '/' && req[5] == 'm' &&
-	           req[6] == 'e' && req[7] == 't' && req[8] == 'r' &&
-	           req[9] == 'i' && req[10] == 'c' && req[11] == 's' &&
-	           (reqlen == 12u || req[12] == ' ' || req[12] == '\r' ||
-	            req[12] == '\n')) {
-		/* GET /metrics */
-		code = 200u;
-		codestr = "OK";
+	} else if (!is_post && PATH_IS("/metrics")) {
 		ctype = "text/plain";
 		body_len = build_metrics(body);
+	} else if (!is_post && PATH_IS("/login")) {
+		body_len = build_login(body, 0);
+	} else if (is_post && PATH_IS("/login")) {
+		char pin[24];
+		int ok = 0;
+		if (form_get(fbody, flen, "pin", pin, sizeof(pin))) {
+			unsigned pl = 0;
+			while (pin[pl])
+				pl++;
+			if (!webui_pin_present())
+				ok = webui_pin_set(pin, pl) == 0 &&
+				    webui_pin_verify(pin, pl);
+			else
+				ok = webui_pin_verify(pin, pl);
+		}
+		if (ok) {
+			char tok[40];
+			if (webui_session_login(tok) == 0) {
+				code = 303u;
+				codestr = "See Other";
+				{
+					unsigned e = 0;
+					e = strapp((unsigned char *)extra,
+					    e, "Location: /settings\r\n"
+					    "Set-Cookie: qaon_sess=");
+					e = strapp((unsigned char *)extra,
+					    e, tok);
+					e = strapp((unsigned char *)extra,
+					    e, "; HttpOnly; Path=/\r\n");
+					(void)e;
+				}
+				body_len = 0;
+			} else {
+				body_len = build_login(body,
+				    "Gagal membuat sesi.");
+			}
+		} else {
+			body_len = build_login(body,
+			    "PIN salah atau tidak valid (4-16 karakter).");
+		}
+	} else if (!is_post && PATH_IS("/settings")) {
+		if (!sess_ok(req, reqlen)) {
+			code = 303u;
+			codestr = "See Other";
+			(void)strapp((unsigned char *)extra, 0,
+			    "Location: /login\r\n");
+			body_len = 0;
+		} else {
+			body_len = build_settings(body, 0);
+		}
+	} else if (is_post && PATH_IS("/settings")) {
+		if (!sess_ok(req, reqlen)) {
+			code = 303u;
+			codestr = "See Other";
+			(void)strapp((unsigned char *)extra, 0,
+			    "Location: /login\r\n");
+			body_len = 0;
+		} else {
+			char v[64], dummy[8];
+			if (form_get(fbody, flen, "name", v, 40u)) {
+				unsigned n = 0;
+				while (v[n])
+					n++;
+				(void)webui_cfg_write("cfg-name", v, n);
+			}
+			if (form_get(fbody, flen, "tz", v, 16u)) {
+				unsigned n = 0;
+				while (v[n])
+					n++;
+				(void)webui_cfg_write("cfg-tz", v, n);
+			}
+			if (form_get(fbody, flen, "clear_apikey",
+			    dummy, sizeof(dummy))) {
+				(void)webui_cfg_clear("cfg-apikey");
+			} else if (form_get(fbody, flen, "apikey",
+			    v, sizeof(v)) && v[0]) {
+				unsigned n = 0;
+				while (v[n])
+					n++;
+				(void)webui_cfg_write("cfg-apikey", v, n);
+			}
+			if (form_get(fbody, flen, "mode", v, sizeof(v)))
+				bootstate_set_gui_mode(
+				    v[0] == 'u' ? 1u : 0u);
+			webui_shell_set_enabled(form_get(fbody, flen,
+			    "shell_on", dummy, sizeof(dummy)));
+			body_len = build_settings(body, "Tersimpan.");
+		}
+	} else if (!is_post && PATH_IS("/shell")) {
+		if (!sess_ok(req, reqlen)) {
+			code = 303u;
+			codestr = "See Other";
+			(void)strapp((unsigned char *)extra, 0,
+			    "Location: /login\r\n");
+			body_len = 0;
+		} else if (!webui_shell_enabled()) {
+			body_len = build_note(body, "Web shell mati",
+			    "Web shell nonaktif (default). Aktifkan dari "
+			    "<a href=\"/settings\">Settings</a> setelah "
+			    "login.");
+		} else {
+			body_len = build_shell(body, 0);
+		}
+	} else if (is_post && PATH_IS("/shell")) {
+		if (!sess_ok(req, reqlen)) {
+			code = 303u;
+			codestr = "See Other";
+			(void)strapp((unsigned char *)extra, 0,
+			    "Location: /login\r\n");
+			body_len = 0;
+		} else if (!webui_shell_enabled()) {
+			body_len = build_note(body, "Web shell mati",
+			    "Web shell nonaktif. Aktifkan dari Settings.");
+		} else {
+			char cmd[176];
+			if (form_get(fbody, flen, "cmd", cmd,
+			    sizeof(cmd)) && cmd[0]) {
+				unsigned n = 0;
+				while (cmd[n])
+					n++;
+				if (webui_shell_submit(cmd, n) == 0) {
+					ws_pending = 1;
+					ws_last_out[0] = 0;
+					body_len = build_shell(body, 0);
+				} else {
+					body_len = build_shell(body,
+					    "Shell sibuk — coba lagi.");
+				}
+			} else {
+				body_len = build_shell(body, 0);
+			}
+		}
 	} else {
 		code = 404u;
 		codestr = "Not Found";
@@ -370,7 +846,10 @@ respond:
 	off = strapp(resp, off, codestr);
 	off = strapp(resp, off, "\r\nContent-Type: ");
 	off = strapp(resp, off, ctype);
-	off = strapp(resp, off, "\r\nContent-Length: ");
+	off = strapp(resp, off, "\r\n");
+	if (extra[0])
+		off = strapp(resp, off, extra);
+	off = strapp(resp, off, "Content-Length: ");
 	off = u32app(resp, off, body_len);
 	off = strapp(resp, off, "\r\nConnection: close\r\n\r\n");
 	{

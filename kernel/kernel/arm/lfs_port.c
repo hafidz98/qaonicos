@@ -118,27 +118,98 @@ strcspn(const char *s, const char *set)
 	return n;
 }
 
-/* --- tiny static pool behind malloc/free for littlefs --- */
-static unsigned char lfs_pool[4096];
-static unsigned int lfs_pool_off;
+/* --- tiny free-list allocator behind malloc/free for littlefs ---
+ *
+ * Was a 4 KB bump pool with a no-op free(): every lfs_file_open
+ * leaked its 256 B cache forever, so after ~16 file operations
+ * (across the whole boot) all config reads/writes failed --
+ * found by ONB-1, where the device PIN "disappeared" after a
+ * few web requests. This is a first-fit allocator with real
+ * free + coalescing over an 8 KB static pool; peak concurrent
+ * use is a handful of cache blocks. */
+#define LFS_POOL_SIZE	32768u
+#define BLK_HDR	8u	/* size word + tag word */
+
+/* aligned(8) is load-bearing: a plain char array can land on an
+ * odd BSS address (it did -- 0x...aa1) and the header accesses
+ * below fault on unaligned strd. */
+static unsigned char lfs_pool[LFS_POOL_SIZE]
+    __attribute__((aligned(8)));
+static int lfs_pool_ready;
+
+static unsigned int *
+blk_word(unsigned int off, unsigned int w)
+{
+	return (unsigned int *)(void *)(lfs_pool + off + w * 4u);
+}
 
 void *
 malloc(unsigned int size)
 {
-	void *p;
+	unsigned int off = 0, want;
 
-	size = (size + 7u) & ~7u;
-	if (lfs_pool_off + size > sizeof(lfs_pool))
-		return 0;
-	p = &lfs_pool[lfs_pool_off];
-	lfs_pool_off += size;
-	return p;
+	if (!lfs_pool_ready) {
+		*blk_word(0, 0) = LFS_POOL_SIZE;	/* free */
+		*blk_word(0, 1) = 0;
+		lfs_pool_ready = 1;
+	}
+	want = ((size + BLK_HDR) + 7u) & ~7u;
+	if (want < 16u)
+		want = 16u;
+	while (off + BLK_HDR <= LFS_POOL_SIZE) {
+		unsigned int raw = *blk_word(off, 0);
+		unsigned int bsz = raw & ~1u;
+		if (bsz < 16u)
+			break;
+		if (!(raw & 1u) && bsz >= want) {
+			if (bsz - want >= 16u) {
+				*blk_word(off + want, 0) = bsz - want;
+				*blk_word(off + want, 1) = 0;
+				*blk_word(off, 0) = want | 1u;
+			} else {
+				*blk_word(off, 0) = bsz | 1u;
+			}
+			*blk_word(off, 1) = 0xA110CA7Eu;
+			return (void *)(lfs_pool + off + BLK_HDR);
+		}
+		off += bsz;
+	}
+	return 0;
 }
 
 void
 free(void *p)
 {
-	(void)p;	/* pool is bump-only; buffers are static anyway */
+	unsigned int off, cur;
+
+	if (!p || !lfs_pool_ready)
+		return;
+	off = (unsigned int)((unsigned char *)p - lfs_pool) - BLK_HDR;
+	if (off >= LFS_POOL_SIZE || *blk_word(off, 1) != 0xA110CA7Eu)
+		return;	/* not one of ours */
+	*blk_word(off, 0) &= ~1u;
+	*blk_word(off, 1) = 0;
+	/* Coalesce: merge adjacent free blocks in one pass. */
+	cur = 0;
+	while (cur + BLK_HDR <= LFS_POOL_SIZE) {
+		unsigned int raw = *blk_word(cur, 0);
+		unsigned int bsz = raw & ~1u;
+		if (bsz < 16u)
+			break;
+		if (!(raw & 1u)) {
+			unsigned int nxt = cur + bsz;
+			while (nxt + BLK_HDR <= LFS_POOL_SIZE) {
+				unsigned int nraw = *blk_word(nxt, 0);
+				unsigned int nbsz = nraw & ~1u;
+				if (nbsz < 16u || (nraw & 1u))
+					break;
+				bsz += nbsz;
+				*blk_word(cur, 0) = bsz;
+				nxt = cur + bsz;
+			}
+		}
+		cur += bsz;
+	}
 }
 
 /* --- RAM block device --- */
@@ -405,7 +476,7 @@ lfs_port_list(char *dst, unsigned int max)
 	unsigned int pos = 0;
 	int err;
 
-	if (!lfs_mounted)
+	if (!lfs_mounted && lfs_port_mount() != 0)
 		return -1;
 	err = lfs_dir_open(&lfs_vfs, &d, "/");
 	if (err)
@@ -440,7 +511,7 @@ lfs_port_read(const char *path, unsigned char *dst, unsigned int max)
 	lfs_ssize_t r;
 	int err;
 
-	if (!lfs_mounted)
+	if (!lfs_mounted && lfs_port_mount() != 0)
 		return -1;
 	err = lfs_file_open(&lfs_vfs, &f, path, LFS_O_RDONLY);
 	if (err)
@@ -460,7 +531,13 @@ lfs_port_write(const char *path, const unsigned char *src,
 	lfs_file_t f;
 	int err;
 
-	if (!lfs_mounted)
+	/* Mount on demand: the boot self-test leaves the FS
+	 * unmounted by design, and kernel-side consumers (web UI
+	 * config) must not depend on some other client having
+	 * mounted it first. (ONB-1 regression hunt, 2026-10-22:
+	 * PIN writes silently failed on boots where nothing else
+	 * had mounted the filesystem.) */
+	if (!lfs_mounted && lfs_port_mount() != 0)
 		return -1;
 	err = lfs_file_open(&lfs_vfs, &f, path,
 	    LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC);

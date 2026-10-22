@@ -1,5 +1,6 @@
 #include "face.h"
 #include "face_draw.h"
+#include "qr.h"
 
 uint16_t *face_fb = 0;
 
@@ -181,7 +182,52 @@ static void draw_eye(const eye_t *e, int16_t gx, int16_t gy, uint16_t color) {
         fb_round_rect(cx - e->w / 2, cy - h / 2, e->w, h, e->r, color);
 }
 
+/* --- ONB-2: setup screen (QR) + persistent menu hint --- */
+static int	setup_on;
+static int	setup_n;	/* QR module count */
+static int	hint_on;
+
+void face_set_setup(const char *payload) {
+    if (!payload) {
+        setup_on = 0;
+        return;
+    }
+    setup_n = qr_encode(payload);
+    setup_on = setup_n > 0;
+}
+
+void face_set_hint(int on) { hint_on = on; }
+
+#define COL_CARD rgb565(245, 247, 250)
+#define COL_QR   rgb565(13, 17, 28)
+
+static void draw_setup(void) {
+    int n = setup_n;
+    int cell = n >= 33 ? 3 : 4;
+    int span = cell * (n + 8);		/* incl. quiet zone */
+    int card = span + 16;
+    int cx = (FACE_W - card) / 2;
+    int cy = 16;
+    int x, y, w;
+
+    fb_clear_view(COL_BG);
+    fb_round_rect(cx, cy, card, card, 10, COL_CARD);
+    for (y = 0; y < n; y++)
+        for (x = 0; x < n; x++)
+            if (qr_module(x, y))
+                fb_fill_rect(cx + 8 + (x + 4) * cell,
+                    cy + 8 + (y + 4) * cell, cell, cell, COL_QR);
+    w = fb_text_width("SCAN UNTUK SETUP");
+    fb_text(120 - w / 2, cy + card + 12, "SCAN UNTUK SETUP", COL_TEXT);
+    w = fb_text_width("QAONIC OS");
+    fb_text(120 - w / 2, cy + card + 24, "QAONIC OS", COL_TEXT);
+}
+
 void face_render(void) {
+    if (setup_on) {
+        draw_setup();
+        return;
+    }
     fb_clear_view(COL_BG);
 
     uint16_t eye_col = (cur.mood == MOOD_TIRED) ? COL_EYE_DIM : COL_EYE;
@@ -217,6 +263,14 @@ void face_render(void) {
         uint8_t tri = ph < 128 ? (uint8_t)(ph * 2) : (uint8_t)((255 - ph) * 2);
         uint8_t k = (uint8_t)(140 + (115 * (int)tri) / 255);
         fb_text(120 - w / 2, 196, cur.status_text, dim565(COL_TEXT, k));
+    }
+
+    /* D-GUI-3: persistent menu hint (three bars, bottom left). */
+    if (hint_on && cur.mode == FACE_EYES) {
+        uint16_t hc = dim565(COL_TEXT, 150);
+        fb_fill_rect(10, 220, 16, 2, hc);
+        fb_fill_rect(10, 225, 16, 2, hc);
+        fb_fill_rect(10, 230, 16, 2, hc);
     }
 }
 

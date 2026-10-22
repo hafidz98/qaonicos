@@ -51,6 +51,10 @@ typedef struct {
 
 void face_init(void);
 void face_set_expr(face_expr_t e);
+/* ONB-2: setup screen with a QR of payload (NULL = off), and the
+ * persistent menu hint (D-GUI-3). */
+void face_set_setup(const char *payload);
+void face_set_hint(int on);
 /* Q4: timpa teks status (maks 23 char + NUL); "" = biarkan default expr. */
 void face_set_status_text(const char *s);
 void face_update(uint32_t dt_ms); /* interpolate + timers, call per frame */

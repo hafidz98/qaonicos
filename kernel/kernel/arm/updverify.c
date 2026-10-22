@@ -329,3 +329,14 @@ upd_verify_package(const unsigned char *pkg, unsigned int len,
 			return -1;
 	return 0;
 }
+
+/* One-shot SHA-256 for other kernel modules (ONB-1 webui). */
+void
+upd_sha256(const unsigned char *p, unsigned int n, unsigned char out[32])
+{
+	struct sha256 s;
+
+	sha256_init(&s);
+	sha256_update(&s, p, n);
+	sha256_final(&s, out);
+}
