@@ -161,8 +161,25 @@ ok = hold(7, needle="face: setup mode, payload", timeout=60)
 print(f"phase3 QR screen: frames={fi} ok={ok}")
 
 # Phase 4: provision -> finale (eyes + prompt text + hint).
-ser.sendall(b"setup done\n")
-ok = hold(8, needle="face: provisioned -> finale", timeout=30)
+# Retry the command: the dev console is shared with the
+# qabotd prompt reader, which occasionally swallows a typed
+# line before sh sees it (observed 2026-10-22: `setup done`
+# lost, face stuck on the QR screen for the whole phase).
+# Resend until sh's acknowledgement appears.
+ok = False
+for attempt in range(4):
+    ser.sendall(b"setup done\n")
+    t1 = time.time()
+    while time.time() - t1 < 8:
+        frame()
+        if "provisioned -> finale" in txt():
+            ok = True
+            break
+        time.sleep(0.1)
+    if ok:
+        break
+    print(f"phase4: setup done attempt {attempt + 1} unacked, resending")
+hold(6)
 print(f"phase4 finale: frames={fi} ok={ok}")
 
 # Phase 5: menu via the `key` shell builtin (syscall 105
@@ -203,14 +220,23 @@ from PIL import Image, ImageDraw, ImageFont
 import glob
 
 for ppm in sorted(glob.glob(os.path.join(FRAMES, "*.ppm"))):
-    Image.open(ppm).save(ppm.replace(".ppm", ".png"))
+    im = Image.open(ppm)
+    # Normalize: early screendumps can come back at the QEMU
+    # default surface (640x480) before the guest sets the
+    # 240x240 mode; ffmpeg's image2 demuxer locks the canvas
+    # to the FIRST frame's size, so one such frame makes the
+    # whole video render on a 640x480 canvas with the real
+    # content squished into a corner (v3 defect, owner
+    # feedback 2026-10-22). Resample everything to 240x240.
+    if im.size != (240, 240):
+        im = im.resize((240, 240), Image.NEAREST)
+    im.save(ppm.replace(".ppm", ".png"))
     os.unlink(ppm)
 
 pngs = sorted(glob.glob(os.path.join(FRAMES, "*.png")))
 if not pngs:
     raise SystemExit("no frames captured")
-first = Image.open(pngs[0])
-W, H = first.size
+W, H = 240, 240
 card = Image.new("RGB", (W, H), (12, 14, 20))
 dr = ImageDraw.Draw(card)
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
@@ -221,12 +247,16 @@ def mono(sz):
 # Layout measured to fit 240x240 with no overflow (owner
 # feedback 2026-10-22: the old card truncated the ASCII art
 # mid-glyph and its info list spilled off the bottom right).
-# Header, then the 5 art lines intact (the art block is 42
-# chars; at 9px mono a char is ~5.4px -> 227px wide), then
+# Header, then the 5 art lines intact (the art block is 39
+# chars; at 9px mono a char is ~5.4px -> 211px wide), then
 # the info fields as a clean list.
 dr.text((8, 60), "qaon> qfetch", fill=(120, 220, 140), font=mono(12))
 raw_lines = qfetch_txt.strip().splitlines()
-art = [ln[:43].rstrip() for ln in raw_lines[:5]]
+# Art only: exactly the 39-char glyph block. Slicing wider
+# pulls the first chars of the info column (info starts at
+# col 41) into every art line -- row 1 read "...SSS  qa"
+# (owner feedback 2026-10-22: first line still messy).
+art = [ln[:39].rstrip() for ln in raw_lines[:5]]
 labels = ("OS:", "SoC:", "CPU:", "Uptime:", "Memory:",
           "Threads:", "Net:", "Shell:", "Agent:", "Display:")
 info = []

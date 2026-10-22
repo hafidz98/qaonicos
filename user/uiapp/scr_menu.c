@@ -17,9 +17,9 @@ static const char *labels[NITEM] = { "QABOT", "MONITOR", "SETTINGS", "POWER" };
 static int	sel = 0;
 
 #define GRID_X0		20
-#define GRID_Y0		44
+#define GRID_Y0		40
 #define CELL_W		100
-#define CELL_H		76
+#define CELL_H		82
 #define GAP		0
 
 static void
@@ -71,16 +71,29 @@ menu_event(int ev)
 	(void)col; (void)row;
 }
 
-/* Midpoint circle outline (integer math only). */
+/* Midpoint circle outline (integer math only). With
+ * top_gap > 0, points within top_gap px of the top centre
+ * are skipped (power symbol opening). */
 static void
-draw_circle(int cx, int cy, int r, uint16_t c)
+draw_circle_g(int cx, int cy, int r, uint16_t c, int top_gap)
 {
 	int x = r, y = 0, err = 0;
 	while (x >= y) {
-		ui_px(cx + x, cy + y, c); ui_px(cx + y, cy + x, c);
-		ui_px(cx - y, cy + x, c); ui_px(cx - x, cy + y, c);
-		ui_px(cx - x, cy - y, c); ui_px(cx - y, cy - x, c);
-		ui_px(cx + y, cy - x, c); ui_px(cx + x, cy - y, c);
+		int pts[8][2], i;
+		pts[0][0] = x;  pts[0][1] = y;
+		pts[1][0] = x;  pts[1][1] = -y;
+		pts[2][0] = -x; pts[2][1] = y;
+		pts[3][0] = -x; pts[3][1] = -y;
+		pts[4][0] = y;  pts[4][1] = x;
+		pts[5][0] = y;  pts[5][1] = -x;
+		pts[6][0] = -y; pts[6][1] = x;
+		pts[7][0] = -y; pts[7][1] = -x;
+		for (i = 0; i < 8; i++) {
+			if (top_gap > 0 && pts[i][1] <= -r + 3 &&
+			    pts[i][0] >= -top_gap && pts[i][0] <= top_gap)
+				continue;
+			ui_px(cx + pts[i][0], cy + pts[i][1], c);
+		}
 		y++;
 		err += 1 + 2 * y;
 		if (2 * (err - x) + 1 > 0) {
@@ -90,44 +103,52 @@ draw_circle(int cx, int cy, int r, uint16_t c)
 	}
 }
 
-/* Rounded eye (Qabot tile): filled rect with cut corners. */
 static void
-draw_eye_glyph(int x, int y, int w, int h, uint16_t c)
+draw_circle(int cx, int cy, int r, uint16_t c)
 {
-	ui_rect(x + 1, y, w - 2, h, c);
-	ui_rect(x, y + 1, w, h - 2, c);
+	draw_circle_g(cx, cy, r, c, 0);
 }
 
-/* Per-item glyphs, free-standing (no box frame -- the framed
- * look read as raw wireframe; owner feedback 2026-10-22).
- * Canvas: tile centre (cx, cy), glyphs ~36px. */
+/* Line icons in ONE consistent family (mock review
+ * 2026-10-22): thin outline glyphs, ~2px stroke, no fills
+ * except the Qabot eyes. Canvas: tile centre (cx, cy). */
 static void
 draw_icon(int x, int y, int idx, uint16_t c, uint16_t bg)
 {
-	int cx = x + 48, cy = y + 26;
+	int cx = x + 48, cy = y + 27;
+	(void)bg;
 	switch (idx) {
-	case 0:	/* Qabot: the face eyes */
-		draw_eye_glyph(cx - 19, cy - 10, 13, 20, c);
-		draw_eye_glyph(cx + 6, cy - 10, 13, 20, c);
+	case 0:	/* Qabot: squircle outline + eyes */
+		ui_round_border(cx - 14, cy - 14, 28, 28, 9, c);
+		ui_round_border(cx - 13, cy - 13, 26, 26, 8, c);
+		ui_rect(cx - 8, cy - 4, 4, 9, c);
+		ui_rect(cx + 4, cy - 4, 4, 9, c);
 		break;
-	case 1:	/* Monitor: ascending bars + axis */
-		ui_rect(cx - 16, cy - 2, 7, 12, c);
-		ui_rect(cx - 5, cy - 8, 7, 18, c);
-		ui_rect(cx + 6, cy - 14, 7, 24, c);
-		ui_rect(cx - 18, cy + 11, 38, 2, c);
+	case 1:	/* Monitor: screen outline + chart line */
+		ui_round_border(cx - 16, cy - 13, 32, 23, 3, c);
+		ui_round_border(cx - 15, cy - 12, 30, 21, 3, c);
+		ui_line(cx - 11, cy + 4, cx - 4, cy - 3, c);
+		ui_line(cx - 4, cy - 3, cx + 2, cy + 0, c);
+		ui_line(cx + 2, cy + 0, cx + 10, cy - 7, c);
+		ui_line(cx, cy + 10, cx, cy + 13, c);
+		ui_line(cx - 6, cy + 13, cx + 6, cy + 13, c);
 		break;
-	case 2:	/* Settings: gear (ring + 4 teeth + hub hole) */
+	case 2:	/* Settings: gear ring + teeth + hub */
 		draw_circle(cx, cy, 10, c);
-		draw_circle(cx, cy, 9, c);
-		ui_rect(cx - 2, cy - 14, 5, 5, c);
-		ui_rect(cx - 2, cy + 9, 5, 5, c);
-		ui_rect(cx - 14, cy - 2, 5, 5, c);
-		ui_rect(cx + 9, cy - 2, 5, 5, c);
-		ui_rect(cx - 3, cy - 3, 7, 7, bg);
+		draw_circle(cx, cy, 11, c);
+		ui_rect(cx - 1, cy - 16, 3, 5, c);
+		ui_rect(cx - 1, cy + 11, 3, 5, c);
+		ui_rect(cx - 16, cy - 1, 5, 3, c);
+		ui_rect(cx + 11, cy - 1, 5, 3, c);
+		ui_line(cx + 8, cy - 11, cx + 11, cy - 14, c);
+		ui_line(cx - 11, cy + 11, cx - 8, cy + 8, c);
+		ui_line(cx - 11, cy - 14, cx - 8, cy - 11, c);
+		ui_line(cx + 8, cy + 8, cx + 11, cy + 11, c);
+		draw_circle(cx, cy, 3, c);
 		break;
 	case 3:	/* Power: ring with top gap + stem */
-		draw_circle(cx, cy + 1, 11, c);
-		ui_rect(cx - 3, cy - 12, 7, 4, bg);
+		draw_circle_g(cx, cy + 1, 11, c, 3);
+		draw_circle_g(cx, cy + 1, 10, c, 3);
 		ui_rect(cx - 1, cy - 13, 3, 11, c);
 		break;
 	default:
@@ -136,21 +157,28 @@ draw_icon(int x, int y, int idx, uint16_t c, uint16_t bg)
 	(void)GAP;
 }
 
+/* Mock-style tiles (owner review 2026-10-22): rounded
+ * cards, line icons, labels underneath, no "MENU" title
+ * text -- the status bar already frames the screen. */
 static void
 menu_render(void)
 {
 	int i;
-	ui_text_center(22, "MENU", C_DIM);
 	for (i = 0; i < NITEM; i++) {
 		int col = i % 2, row = i / 2;
 		int x = GRID_X0 + col * CELL_W;
 		int y = GRID_Y0 + row * CELL_H;
 		int is_sel = (i == sel);
 		if (is_sel) {
-			ui_rect(x, y, CELL_W - 4, CELL_H - 4, C_SEL);
-			ui_border(x, y, CELL_W - 4, CELL_H - 4, C_ACCENT);
+			ui_round_rect(x, y, CELL_W - 4, CELL_H - 6, 10,
+			    C_SEL);
+			ui_round_border(x, y, CELL_W - 4, CELL_H - 6,
+			    10, C_ACCENT);
+			ui_round_border(x + 1, y + 1, CELL_W - 6,
+			    CELL_H - 8, 9, C_ACCENT);
 		} else {
-			ui_border(x, y, CELL_W - 4, CELL_H - 4, C_DIM);
+			ui_round_border(x, y, CELL_W - 4, CELL_H - 6,
+			    10, C_DIM);
 		}
 		draw_icon(x, y, i, is_sel ? C_ACCENT : C_FG,
 		    is_sel ? C_SEL : C_BG);

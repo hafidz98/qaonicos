@@ -113,3 +113,73 @@ ui_toupper(char *s)
 		s++;
 	}
 }
+
+/* Bresenham line. */
+void
+ui_line(int x0, int y0, int x1, int y1, uint16_t c)
+{
+	int dx = x1 > x0 ? x1 - x0 : x0 - x1;
+	int sx = x0 < x1 ? 1 : -1;
+	int dy = y1 > y0 ? y0 - y1 : y1 - y0;	/* -|dy| */
+	int sy = y0 < y1 ? 1 : -1;
+	int err = dx + dy;
+	for (;;) {
+		int e2;
+		ui_px(x0, y0, c);
+		if (x0 == x1 && y0 == y1)
+			break;
+		e2 = 2 * err;
+		if (e2 >= dy) {
+			err += dy;
+			x0 += sx;
+		}
+		if (e2 <= dx) {
+			err += dx;
+			y0 += sy;
+		}
+	}
+}
+
+static void
+round_row(int x, int y, int w, int inset, uint16_t c)
+{
+	ui_rect(x + inset, y, w - 2 * inset, 1, c);
+}
+
+/* Filled rounded rect (corner radius r <= min(w,h)/2). */
+void
+ui_round_rect(int x, int y, int w, int h, int r, uint16_t c)
+{
+	int j;
+	for (j = 0; j < h; j++) {
+		int inset = 0;
+		if (j < r)
+			inset = r - j;
+		else if (j >= h - r)
+			inset = j - (h - r - 1);
+		/* soften the corner curve a step */
+		if (inset > 0)
+			inset = inset * 2 / 3;
+		round_row(x, y + j, w, inset, c);
+	}
+}
+
+/* Rounded rect outline, 1px. */
+void
+ui_round_border(int x, int y, int w, int h, int r, uint16_t c)
+{
+	int i;
+	/* top/bottom edges with corner arcs (quarter circles
+	 * approximated by stepping insets) */
+	for (i = 0; i < r; i++) {
+		int inset = (r - i) * 2 / 3;
+		ui_px(x + inset, y + i, c);
+		ui_px(x + w - 1 - inset, y + i, c);
+		ui_px(x + inset, y + h - 1 - i, c);
+		ui_px(x + w - 1 - inset, y + h - 1 - i, c);
+	}
+	ui_rect(x + r, y, w - 2 * r, 1, c);
+	ui_rect(x + r, y + h - 1, w - 2 * r, 1, c);
+	ui_rect(x, y + r, 1, h - 2 * r, c);
+	ui_rect(x + w - 1, y + r, 1, h - 2 * r, c);
+}

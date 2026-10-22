@@ -797,19 +797,24 @@ bi_bootlog(void)
 }
 
 /* qfetch: neofetch-style system summary, QaonicOS edition. */
+/* Logo: uniform 4x5 block glyphs, each letter drawn with
+ * itself, one space between letters (39 chars + 2 pad = the
+ * info column at 41). The previous hand-typed art mixed
+ * 3/4/5-wide letters with uneven rows -- row 1 especially
+ * read as noise (owner feedback 2026-10-22). */
 static const char *qf_logo[] = {
-	"   QQQ   A   OOO  N   N I  CCC  OOO   SSS  ",
-	"  Q   Q A A O   O NN  N I C    O   O S     ",
-	"  Q   QAAAAAO   O N N N I C    O   O  SSS  ",
-	"  Q  QQ A A O   O N  NN I C    O   O     S ",
-	"   QQQQ A A  OOO  N   N I  CCC  OOO  SSSS  ",
-	"                                           ",
-	"                                           ",
-	"                                           ",
-	"                                           ",
-	"                                           ",
-	"                                           ",
-	"                                           ",
+	".QQ. .AA. .OO. N..N IIII .CCC .OO. .SSS  ",
+	"Q..Q A..A O..O NN.N .II. C    O..O S     ",
+	"Q..Q AAAA O..O N.NN .II. C    O..O .SS.  ",
+	"Q.Q. A..A O..O N..N .II. C    O..O    S  ",
+	".QQQ A..A .OO. N..N IIII .CCC .OO. SSS.  ",
+	"                                         ",
+	"                                         ",
+	"                                         ",
+	"                                         ",
+	"                                         ",
+	"                                         ",
+	"                                         ",
 };
 
 static void
