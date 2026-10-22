@@ -319,6 +319,7 @@ build_dashboard(unsigned char *b)
 
 /* --- ONB-1: web settings UI (login/settings/shell) --- */
 #include "webui.h"
+#include "credstore.h"
 
 extern unsigned int	bootstate_gui_mode(void);
 extern void	bootstate_set_gui_mode(unsigned int on);
@@ -531,7 +532,7 @@ static unsigned
 build_settings(unsigned char *b, const char *msg)
 {
 	unsigned off = 0;
-	char name[48], tz[24], key[8];
+	char name[48], tz[24];
 	int has_key, shell_on;
 	unsigned int gui;
 
@@ -539,7 +540,7 @@ build_settings(unsigned char *b, const char *msg)
 	tz[0] = 0;
 	(void)webui_cfg_read("cfg-name", name, sizeof(name));
 	(void)webui_cfg_read("cfg-tz", tz, sizeof(tz));
-	has_key = webui_cfg_read("cfg-apikey", key, sizeof(key)) > 0;
+	has_key = credstore_present("apikey");	/* B5.5: no plaintext read */
 	shell_on = webui_shell_enabled();
 	gui = bootstate_gui_mode();
 
@@ -704,18 +705,18 @@ http_handle(const unsigned char *req, unsigned reqlen, unsigned char *resp)
 		body_len = build_login(body, 0);
 	} else if (is_post && PATH_IS("/login")) {
 		char pin[24];
-		int ok = 0;
+		int vr = 0;	/* B5.5: verify tri-state */
 		if (form_get(fbody, flen, "pin", pin, sizeof(pin))) {
 			unsigned pl = 0;
 			while (pin[pl])
 				pl++;
 			if (!webui_pin_present())
-				ok = webui_pin_set(pin, pl) == 0 &&
-				    webui_pin_verify(pin, pl);
+				vr = webui_pin_set(pin, pl) == 0 &&
+				    webui_pin_verify(pin, pl) == 1;
 			else
-				ok = webui_pin_verify(pin, pl);
+				vr = webui_pin_verify(pin, pl);
 		}
-		if (ok) {
+		if (vr == 1) {
 			char tok[40];
 			if (webui_session_login(tok) == 0) {
 				code = 303u;
@@ -736,6 +737,26 @@ http_handle(const unsigned char *req, unsigned reqlen, unsigned char *resp)
 				body_len = build_login(body,
 				    "Gagal membuat sesi.");
 			}
+		} else if (vr == -1) {
+			/* B5.5: locked out -- say for how long. */
+			static char lmsg[96];
+			unsigned r = webui_pin_lock_remaining_s();
+			unsigned e = 0, d = 1, t = r;
+			const char *p =
+			    "Terlalu banyak percobaan. Terkunci ";
+			while (*p)
+				lmsg[e++] = *p++;
+			while (t / 10u >= d && d <= 100u)
+				d *= 10u;
+			while (d) {
+				lmsg[e++] = (char)('0' + (r / d) % 10u);
+				d /= 10u;
+			}
+			p = " detik.";
+			while (*p)
+				lmsg[e++] = *p++;
+			lmsg[e] = 0;
+			body_len = build_login(body, lmsg);
 		} else {
 			body_len = build_login(body,
 			    "PIN salah atau tidak valid (4-16 karakter).");
@@ -759,6 +780,7 @@ http_handle(const unsigned char *req, unsigned reqlen, unsigned char *resp)
 			body_len = 0;
 		} else {
 			char v[64], dummy[8];
+			static char kv[520];	/* B5.5: API keys can be long */
 			if (form_get(fbody, flen, "name", v, 40u)) {
 				unsigned n = 0;
 				while (v[n])
@@ -773,13 +795,14 @@ http_handle(const unsigned char *req, unsigned reqlen, unsigned char *resp)
 			}
 			if (form_get(fbody, flen, "clear_apikey",
 			    dummy, sizeof(dummy))) {
-				(void)webui_cfg_clear("cfg-apikey");
+				(void)credstore_clear("apikey");
 			} else if (form_get(fbody, flen, "apikey",
-			    v, sizeof(v)) && v[0]) {
+			    kv, sizeof(kv)) && kv[0]) {
 				unsigned n = 0;
-				while (v[n])
+				while (kv[n])
 					n++;
-				(void)webui_cfg_write("cfg-apikey", v, n);
+				(void)credstore_set("apikey",
+				    (const unsigned char *)kv, n);
 			}
 			if (form_get(fbody, flen, "mode", v, sizeof(v)))
 				bootstate_set_gui_mode(

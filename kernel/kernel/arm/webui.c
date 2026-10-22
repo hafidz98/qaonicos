@@ -4,9 +4,11 @@
  * docs/rencana-onboarding/PLAN-ONB1-ONB2.md.
  *
  * PIN storage is a salted SHA-256 hash in the littlefs file
- * cfg-pin -- the ONB-1 baseline; B5.5 (credential store)
- * hardens it later. Session tokens are timer-grade entropy
- * until the RV1103 TRNG lands (known debt, same as TLS).
+ * cfg-pin. B5.5 added constant-time compares and an online
+ * throttle with lockout; secret VALUES (API key) live in the
+ * encrypted credential store (credstore.c). Session tokens
+ * are timer-grade entropy until the RV1103 TRNG lands (known
+ * debt, same as TLS).
  */
 
 #include "webui.h"
@@ -36,13 +38,13 @@ slen(const char *s)
 }
 
 static int
-seq(const char *a, const char *b, unsigned int n)
+ct_eq(const unsigned char *a, const unsigned char *b, unsigned int n)
 {
+	unsigned char diff = 0;
 	unsigned int i;
 	for (i = 0; i < n; i++)
-		if (a[i] != b[i])
-			return 0;
-	return 1;
+		diff |= (unsigned char)(a[i] ^ b[i]);
+	return diff == 0;
 }
 
 /* --- config files --- */
@@ -105,6 +107,12 @@ webui_pin_present(void)
 	return webui_cfg_read(PIN_FILE, buf, sizeof(buf)) >= 64;
 }
 
+/* PIN throttle state (B5.5; defined above webui_pin_set,
+ * which resets it). */
+static unsigned int	pin_fails;
+static unsigned int	pin_lock_until;
+static unsigned int	pin_lock_level;
+
 int
 webui_pin_set(const char *pin, unsigned int len)
 {
@@ -113,19 +121,58 @@ webui_pin_set(const char *pin, unsigned int len)
 	if (len < 4u || len > 16u)
 		return -1;
 	pin_hash_hex(pin, len, hex);
-	return webui_cfg_write(PIN_FILE, hex, 64u);
+	if (webui_cfg_write(PIN_FILE, hex, 64u) != 0)
+		return -1;
+	pin_fails = 0;		/* a fresh PIN clears the throttle */
+	pin_lock_until = 0;
+	pin_lock_level = 0;
+	return 0;
 }
 
+/* PIN throttle (B5.5): 5 consecutive failures lock login;
+ * each lockout doubles (30 s .. 900 s). RAM-only state --
+ * in QEMU all config is RAM-backed anyway; persisting the
+ * counters is a hardware follow-up (PLAN-B55). */
+unsigned int
+webui_pin_lock_remaining_s(void)
+{
+	unsigned int now = now_ms();
+	if (pin_lock_until && (int)(pin_lock_until - now) > 0)
+		return (pin_lock_until - now + 999u) / 1000u;
+	return 0;
+}
+
+/* 1 = ok, 0 = wrong PIN, -1 = locked out (B5.5). */
 int
 webui_pin_verify(const char *pin, unsigned int len)
 {
 	char stored[80], hex[65];
-	int n = webui_cfg_read(PIN_FILE, stored, sizeof(stored));
+	int n;
 
+	if (webui_pin_lock_remaining_s() > 0u)
+		return -1;
+	n = webui_cfg_read(PIN_FILE, stored, sizeof(stored));
 	if (n < 64 || len < 4u || len > 16u)
 		return 0;
 	pin_hash_hex(pin, len, hex);
-	return seq(stored, hex, 64u);
+	if (ct_eq((const unsigned char *)stored,
+	    (const unsigned char *)hex, 64u)) {
+		pin_fails = 0;
+		pin_lock_level = 0;
+		return 1;
+	}
+	pin_fails++;
+	if (pin_fails >= 5u) {
+		unsigned int secs = 30u << pin_lock_level;
+		if (secs > 900u)
+			secs = 900u;
+		pin_lock_until = now_ms() + secs * 1000u;
+		if (pin_lock_level < 5u)
+			pin_lock_level++;
+		pin_fails = 0;
+		return -1;
+	}
+	return 0;
 }
 
 /* --- session --- */
@@ -183,7 +230,8 @@ webui_session_check(const char *tok, unsigned int len)
 		sess_valid = 0;
 		return 0;
 	}
-	if (!seq(tok, sess_tok, 32u))
+	if (!ct_eq((const unsigned char *)tok,
+	    (const unsigned char *)sess_tok, 32u))
 		return 0;
 	sess_last_ms = now_ms();
 	return 1;

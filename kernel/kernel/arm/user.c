@@ -38,6 +38,13 @@ extern int	webui_shell_take(char *, unsigned int);
 extern int	webui_shell_post(const char *, unsigned int);
 extern int	webui_pin_set(const char *, unsigned int);
 extern int	webui_pin_present(void);
+extern int	credstore_set(const char *, const unsigned char *,
+		    unsigned int);
+extern int	credstore_get(const char *, unsigned char *,
+		    unsigned int);
+extern int	credstore_present(const char *);
+extern int	credstore_clear(const char *);
+extern int	credstore_selftest(void);
 extern int	bootstate_init(void);	/* bootstate.c (B2) */
 extern int	bootstate_safe_mode(void);
 extern void	bootstate_healthy(unsigned int);
@@ -109,6 +116,8 @@ extern unsigned char	utimegate_img[];	/* B3: time quality test */
 extern unsigned int	utimegate_img_len;
 extern unsigned char	uupdsig_img[];	/* B5.3: signed update test */
 extern unsigned int	uupdsig_img_len;
+extern unsigned char	ucred_img[];	/* B5.5: credential store test */
+extern unsigned int	ucred_img_len;
 extern unsigned char	utcpkeep_img[];	/* F1 SEMENTARA: keep-alive RX test */
 extern unsigned int	utcpkeep_img_len;
 extern unsigned char	utlskeep_img[];	/* F1 SEMENTARA: TLS keep-alive RX test */
@@ -303,6 +312,7 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_TIME_SYNC	101u	/* B3: mark clock NTP-synced */
 #define	SYS_GUI_START	102u	/* Boot UX: launch GUI daemons on demand */
 #define	SYS_WEBUI	103u	/* ONB-1: web UI bridge (shell queue + PIN) */
+#define	SYS_CRED	104u	/* B5.5: credential store */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -1262,6 +1272,56 @@ user_syscall(struct arm_trap_frame *frame)
 			return (unsigned int)webui_pin_present();
 		return (unsigned int)-1;
 	}
+	case SYS_CRED: {
+		/* B5.5 credential store. a1 = name (NUL-term string),
+		 * a2 = value buf, a3 = len (set) / max (get):
+		 * 0 set -> 0/-1; 1 get -> len/-1; 2 present -> 1/0;
+		 * 3 clear -> 0/-1; 9 self-test -> pass bitmask. */
+		static char kname[20];
+		static unsigned char kval[512];
+		unsigned int i;
+
+		if (a0 == 9u)
+			return (unsigned int)credstore_selftest();
+		if (!user_range_ok(a1, 1u))
+			return (unsigned int)-1;
+		for (i = 0; i < sizeof(kname) - 1u; i++) {
+			kname[i] = ((const char *)a1)[i];
+			if (!kname[i])
+				break;
+		}
+		kname[sizeof(kname) - 1u] = 0;
+		/* credstore validates the name charset/length. */
+		if (a0 == 0u) {
+			if (a3 > 512u || !user_range_ok(a2, a3))
+				return (unsigned int)-1;
+			for (i = 0; i < a3; i++)
+				kval[i] = ((const unsigned char *)a2)[i];
+			return (unsigned int)credstore_set(kname, kval, a3);
+		}
+		if (a0 == 1u) {
+			int n;
+			/* a3 is the USER buffer size; the value
+			 * itself is capped by kval (512). */
+			if (a3 == 0u || a3 > 8192u ||
+			    !user_range_ok(a2, a3))
+				return (unsigned int)-1;
+			n = credstore_get(kname, kval, sizeof(kval));
+			if (n < 0 || (unsigned int)n > a3)
+				return (unsigned int)-1;
+			{
+				char *u = (char *)a2;
+				for (i = 0; i < (unsigned int)n; i++)
+					u[i] = (char)kval[i];
+			}
+			return (unsigned int)n;
+		}
+		if (a0 == 2u)
+			return (unsigned int)credstore_present(kname);
+		if (a0 == 3u)
+			return (unsigned int)credstore_clear(kname);
+		return (unsigned int)-1;
+	}
 	case SYS_BOOTSTATE: {
 		if (a0 == 0u) {
 			unsigned int *u = (unsigned int *)a1;
@@ -1870,6 +1930,7 @@ static struct uprog_image uprogs[] = {
 	{ "ufirst", ufirst_img, &ufirst_img_len, 1u },	/* B3: first boot */
 	{ "utimegate", utimegate_img, &utimegate_img_len, 1u },	/* B3 */
 	{ "uupdsig", uupdsig_img, &uupdsig_img_len, 1u },	/* B5.3 */
+	{ "ucred", ucred_img, &ucred_img_len, 1u },	/* B5.5 */
 	{ "qabot", qabot_img, &qabot_img_len, 1u },	/* Q1: harness, one-shot */
 };
 #define	NUPROGS	(sizeof(uprogs) / sizeof(uprogs[0]))

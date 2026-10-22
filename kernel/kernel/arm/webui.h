@@ -13,10 +13,13 @@ int	webui_cfg_write(const char *name, const char *val,
 	    unsigned int len);
 int	webui_cfg_clear(const char *name);
 
-/* Device PIN: stored as a salted SHA-256 hash in cfg-pin. */
+/* Device PIN: stored as a salted SHA-256 hash in cfg-pin.
+ * Verify is tri-state since B5.5 (1 ok, 0 wrong, -1 locked
+ * out by the online-guess throttle). */
 int	webui_pin_present(void);
 int	webui_pin_set(const char *pin, unsigned int len);
 int	webui_pin_verify(const char *pin, unsigned int len);
+unsigned int	webui_pin_lock_remaining_s(void);
 
 /* Single admin session (cookie token, 30 min idle expiry). */
 int	webui_session_login(char *tok_out /* >=33 bytes */);

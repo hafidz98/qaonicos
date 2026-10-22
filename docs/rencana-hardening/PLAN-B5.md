@@ -85,7 +85,10 @@ Package format (prepended to the image payload):
   he understands secure boot well enough to decide, and asked
   for caution first. No OTP burning, no chain enforcement work
   until he revisits this with a full explanation on the table.
-- [ ] B5.5 Credential store implementation (with C6/B3 portal).
+- [x] B5.5 Credential store implementation (QEMU scope DONE
+      2026-10-22, see DEVLOG-B55.md + PLAN-B55.md: AES-256-GCM
+      QSEC files, syscall 104, PIN throttle; OTP-wrapped
+      device key + wifi.psk wait for hardware/C6).
 
 ## B5.3 implementation notes (2026-10-20)
 - Algorithm choice changed from the sketch above: RSA-2048

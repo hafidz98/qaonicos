@@ -174,6 +174,22 @@ if got:
     i = body.find("<pre>")
     print("  output sample:", body[i:i + 160].replace("\n", " | "))
 
+# --- B5.5: API key is encrypted at rest (credstore) ---
+st, hd, body = req("POST", "/settings",
+                    body=urllib.parse.urlencode(
+                        {"name": "qaon-test", "tz": "+0700",
+                         "mode": "dev", "shell_on": "on",
+                         "apikey": "sk-test-1234567890abcdef"}),
+                    cookie=cookie)
+check("POST /settings with apikey saved",
+      st == 200 and "Tersimpan" in body)
+serial = b""
+ser.sendall(b"cat /data/cfg-apikey\n")
+ok = wait_serial("QSEC", 15)
+check("cfg-apikey at rest is a QSEC blob", ok)
+check("cfg-apikey has no plaintext key",
+      b"sk-test-1234567890abcdef" not in serial)
+
 st, hd, body = req("POST", "/login",
                     body=urllib.parse.urlencode({"pin": "999999"}))
 check("POST /login wrong PIN rejected",
@@ -188,6 +204,21 @@ serial = b""
 ser.sendall(b"uptime\n")
 check("serial shell still responsive", wait_serial("uptime", 10) or
       wait_serial("qaon>", 10))
+
+# --- B5.5: PIN throttle -- 5 consecutive failures lock login ---
+for i in range(4):
+    st, hd, body = req("POST", "/login",
+                       body=urllib.parse.urlencode({"pin": "111111"}))
+check("throttle: 4 more wrong PINs still just rejected",
+      st == 200 and "PIN salah" in body)
+st, hd, body = req("POST", "/login",
+                    body=urllib.parse.urlencode({"pin": "111111"}))
+check("throttle: 5th failure -> Terkunci (locked)",
+      st == 200 and "Terkunci" in body)
+st, hd, body = req("POST", "/login",
+                    body=urllib.parse.urlencode({"pin": "246810"}))
+check("throttle: correct PIN refused while locked",
+      st == 200 and "Terkunci" in body)
 
 ser.close()
 p.kill()
