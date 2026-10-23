@@ -1,0 +1,87 @@
+# QaonicOS Wiki — MkDocs configuration.
+# The wiki is the readable layer over docs/ in this repo: pages
+# synthesize the deep research/plan documents and cite them.
+# Source citations link outside docs_dir on purpose (they resolve
+# in the GitHub repo browser); validation.links.not_found is set
+# to ignore so `mkdocs build --strict` stays green despite them.
+# Wiki-internal links are still written as plain page links and
+# are checked by the build's nav/anchor validation.
+
+site_name: QaonicOS Wiki
+site_description: >-
+  Architecture, hardware, flows and development tracks of
+  QaonicOS — the Mach 3 based appliance OS for the Luckfox
+  Pico Mini B (RV1103) + ESP32-C6.
+repo_url: https://github.com/hafidz98/qaonicos
+repo_name: hafidz98/qaonicos
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.integrate
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+
+validation:
+  links:
+    not_found: ignore
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Kernel / Userspace Boundary: kernel-userspace-boundary.md
+  - Hardware & SoC: hardware-soc.md
+  - Boot & Resilience: boot-resilience.md
+  - Storage: storage.md
+  - Networking & the C6 Link: networking-c6.md
+  - Display, UI & Face: display-ui-face.md
+  - Qabot Agent Runtime: qabot-agent.md
+  - Onboarding & Security: onboarding-security.md
+  - Power & Battery: power-battery.md
+  - Updates: updates.md
+  - Syscall ABI: syscall-abi.md
+  - Development: development.md
+  - Tracks & Roadmap: tracks-roadmap.md
+  - Glossary: glossary.md
+  - AI Agent Index: ai-index.md

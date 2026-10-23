@@ -7,3 +7,6 @@ __pycache__/
 
 # boot video recording intermediates
 logs/boot-video/
+
+# MkDocs build output (wiki sources live in wiki/docs/)
+wiki/site/
