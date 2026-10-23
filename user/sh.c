@@ -209,6 +209,8 @@ bi_help(void)
 	sh_puts("  gui                   start the GUI dashboard\n");
 	sh_puts("  key <up|down|left|right|ok|back|menu>  inject a button event (dev/test)\n");
 	sh_puts("  update [stage <ver>|cancel|sabotage]  A/B updates\n");
+	sh_puts("  reboot          software reset (bootstate reason 4)\n");
+	sh_puts("  poweroff        power off (bootstate reason 4)\n");
 	sh_puts("  run <path>      run program (Q9 spawn)\n");
 }
 
@@ -543,7 +545,7 @@ bi_bootctl(void)
 	sh_putu(info[2]);
 	sh_puts("  last_reason=");
 	sh_putu(info[3]);
-	sh_puts(" (0=unknown 1=power 2=crash 3=watchdog)\n");
+	sh_puts(" (0=unknown 1=power 2=crash 3=watchdog 4=software)\n");
 }
 
 static int
@@ -705,6 +707,26 @@ bi_key(void)
 		}
 	}
 	sh_puts("key: unknown button\n");
+}
+
+/* reboot / poweroff: FND-1 (SYS_RESET / SYS_POWEROFF). The
+ * kernel records bootstate reason 4 (software request)
+ * before acting, so the next boot's bootlog tells the
+ * truth. On success these never return. */
+static void
+bi_reboot(void)
+{
+	sh_puts("reboot: software reset requested\n");
+	if (sys_reset() != 0)
+		sh_puts("reboot: failed (platform refused)\n");
+}
+
+static void
+bi_poweroff(void)
+{
+	sh_puts("poweroff: software poweroff requested\n");
+	if (sys_poweroff() != 0)
+		sh_puts("poweroff: failed (platform refused)\n");
 }
 
 static void
@@ -999,6 +1021,10 @@ _start(void)
 			bi_key();
 		else if (sh_streq(sh_argv[0], "update"))
 			bi_update();
+		else if (sh_streq(sh_argv[0], "reboot"))
+			bi_reboot();
+		else if (sh_streq(sh_argv[0], "poweroff"))
+			bi_poweroff();
 		else if (sh_streq(sh_argv[0], "run"))
 			bi_run();
 		else {

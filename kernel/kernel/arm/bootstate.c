@@ -56,6 +56,7 @@ extern unsigned int blk_total_sectors(void);
 #define BSR_POWER	1u
 #define BSR_CRASH	2u
 #define BSR_WATCHDOG	3u
+#define BSR_SOFTWARE	4u	/* FND-1: SYS_RESET / SYS_POWEROFF */
 
 /* boot log events */
 #define BLE_BOOT	1u
@@ -69,6 +70,7 @@ extern unsigned int blk_total_sectors(void);
 #define BLE_UPD_TRIAL	9u
 #define BLE_UPD_CONFIRM	10u
 #define BLE_UPD_CANCEL	11u
+#define BLE_RESET	12u	/* FND-1: software reset/poweroff */
 
 struct bs_state {
 	unsigned int magic;
@@ -360,6 +362,23 @@ bootstate_panic_note(void)
 		return;
 	bs_cur.last_reason = BSR_CRASH;
 	bs_persist();
+}
+
+/* FND-1: a userspace program asked for a reset or poweroff
+ * (SYS_RESET / SYS_POWEROFF). Record reason 4 (software
+ * request) and a boot-log event BEFORE the platform acts, so
+ * the next boot's bootlog tells the truth about why the
+ * previous boot ended. bs_persist() inside bs_log() makes
+ * both durable before this returns. */
+void
+bootstate_note_software_reset(unsigned int uptime_ms, int poweroff)
+{
+	if (!bs_ready)
+		return;
+	bs_cur.last_reason = BSR_SOFTWARE;
+	bs_persist();
+	bs_log(BLE_RESET, uptime_ms,
+	    poweroff ? "software poweroff" : "software reset");
 }
 
 /* B3: provisioning flag (bit0 of flags). */

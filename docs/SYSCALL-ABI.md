@@ -120,6 +120,13 @@ terdaftar (Fase D).
 | 55 | `SYS_FAT_DELETE` | r0=path | `0` / `-1` | Hapus file/direktori kosong |
 | 56 | `SYS_READDIR` | r0=path, r1=buf, r2=max | entri / `-1` | List direktori |
 
+## Syscall power (FND-1 ✅)
+
+| No | Nama | Argumen | Kembali | Keterangan |
+|---|---|---|---|---|
+| 106 | `SYS_RESET` | — | tidak kembali / `-1` | Reset software via PSCI `SYSTEM_RESET` (QEMU: conduit HVC). Sebelum reset, kernel mencatat `last_reason=4` (software request) + event bootlog 12. RV1103: seam TODO(HW) di `psci.c` (PMU/WDT) |
+| 107 | `SYS_POWEROFF` | — | tidak kembali / `-1` | Power off via PSCI `SYSTEM_OFF`. Pencatatan reason sama seperti `SYS_RESET` |
+
 ## Nomor dicadangkan
 
 | Rentang | Peruntukan | Status |

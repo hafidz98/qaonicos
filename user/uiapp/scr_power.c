@@ -1,19 +1,27 @@
 /*
- * scr_power.c - Power menu (§11): Sleep Now / Shutdown.
+ * scr_power.c - Power menu (D-GUI): Shutdown / Restart /
+ * Sleep Now / Back.
  *
- * Sleep Now: minta face tidur via SYS_DISPLAY_SLEEP(1), lalu lepas
- * token (face memadamkan display).  Shutdown: layar hitam + teks,
- * lalu diam (yield selamanya).  Restart butuh driver reset/PSCI —
- * belum tersedia, jadi tidak ditampilkan (jujur).
+ * Shutdown and Restart are real since FND-1: SYS_POWEROFF
+ * (PSCI SYSTEM_OFF) and SYS_RESET (PSCI SYSTEM_RESET). The
+ * kernel records bootstate reason 4 (software request)
+ * before acting. On success the syscalls never return; if
+ * one ever does (platform refused), the screen falls back
+ * to the old behaviour: message shown, yield forever.
+ *
+ * Sleep Now: ask the face to sleep via SYS_DISPLAY_SLEEP(1),
+ * then release the token (the face blanks the display).
  */
 #include "ulib/ulib.h"
 #include "screen.h"
 #include "ui_draw.h"
 
-static const char *items[2] = { "SLEEP NOW", "SHUTDOWN" };
+static const char *items[4] = {
+	"SHUTDOWN", "RESTART", "SLEEP NOW", "BACK"
+};
 static int	sel = 0;
 
-#define Y0	64
+#define Y0	58
 #define LH	30
 
 static void
@@ -22,12 +30,12 @@ pwr_enter(void)
 	sel = 0;
 }
 
-/* Layar hitam + teks tengah via strip lokal. */
+/* Black screen + centred text, flushed strip by strip. */
 static void
 halt_screen(const char *msg)
 {
 	static uint16_t buf[240 * 24];
-	int s, i;
+	int s;
 	for (s = 0; s < 10; s++) {
 		ui_set_strip(buf, s * 24, 24);
 		ui_clear(0x0000);
@@ -36,7 +44,14 @@ halt_screen(const char *msg)
 		sys_display_flush(0, (unsigned)(s * 24), 240, 24,
 				  buf, sizeof(buf));
 	}
-	(void)i;
+}
+
+/* Only reached if the platform refused the power syscall. */
+static void
+halt_forever(void)
+{
+	for (;;)
+		sys_yield();
 }
 
 static void
@@ -47,19 +62,28 @@ pwr_event(int ev)
 		if (sel > 0) sel--;
 		break;
 	case EV_DOWN:
-		if (sel < 1) sel++;
+		if (sel < 3) sel++;
 		break;
 	case EV_OK:
 		if (sel == 0) {
-			/* Sleep Now */
+			/* Shutdown (FND-1: real poweroff) */
+			halt_screen("SHUTTING DOWN");
+			puts("uiapp: shutdown (SYS_POWEROFF)\n");
+			(void)sys_poweroff();
+			halt_forever();
+		} else if (sel == 1) {
+			/* Restart (FND-1: real reset) */
+			halt_screen("RESTARTING");
+			puts("uiapp: restart (SYS_RESET)\n");
+			(void)sys_reset();
+			halt_forever();
+		} else if (sel == 2) {
+			/* Sleep Now: existing display-sleep path */
 			sys_display_sleep(1);
 			ui_request_release();
 		} else {
-			/* Shutdown */
-			halt_screen("DIMATIKAN");
-			puts("uiapp: shutdown\n");
-			for (;;)
-				sys_yield();
+			/* Back */
+			ui_pop();
 		}
 		break;
 	case EV_BACK:
@@ -75,7 +99,7 @@ pwr_render(void)
 {
 	int i;
 	ui_text_center(22, "POWER", C_DIM);
-	for (i = 0; i < 2; i++) {
+	for (i = 0; i < 4; i++) {
 		int y = Y0 + i * LH;
 		if (i == sel) {
 			ui_rect(40, y - 5, UI_W - 80, 24, C_SEL);

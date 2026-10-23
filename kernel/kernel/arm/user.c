@@ -48,6 +48,9 @@ extern int	credstore_selftest(void);
 extern int	bootstate_init(void);	/* bootstate.c (B2) */
 extern int	bootstate_safe_mode(void);
 extern void	bootstate_healthy(unsigned int);
+extern void	bootstate_note_software_reset(unsigned int, int);
+extern unsigned int psci_system_reset(void);	/* psci.c (FND-1) */
+extern unsigned int psci_system_off(void);	/* psci.c (FND-1) */
 extern void	bootstate_crash_sim(void);
 extern void	bootstate_info(unsigned int *, unsigned int *,
 		    unsigned int *, unsigned int *);
@@ -314,6 +317,8 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_WEBUI	103u	/* ONB-1: web UI bridge (shell queue + PIN) */
 #define	SYS_CRED	104u	/* B5.5: credential store */
 #define	SYS_EVENT_INJECT 105u	/* Dev/test: inject a button event into evq */
+#define	SYS_RESET	106u	/* FND-1: software reset (PSCI SYSTEM_RESET) */
+#define	SYS_POWEROFF	107u	/* FND-1: power off (PSCI SYSTEM_OFF) */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -1333,6 +1338,26 @@ user_syscall(struct arm_trap_frame *frame)
 			return (unsigned int)-1;
 		evq_push((int)a0);
 		return 0;
+	}
+	case SYS_RESET: {
+		/* FND-1: record the reason (bootstate reason 4)
+		 * BEFORE acting, so the next boot's bootlog
+		 * tells the truth. psci_system_reset() only
+		 * returns if the platform refused. */
+		bootstate_note_software_reset(
+		    arm_timer_ticks() * 10u, 0);
+		printf("sys: SYS_RESET (software request)\n");
+		(void)psci_system_reset();
+		return (unsigned int)-1;
+	}
+	case SYS_POWEROFF: {
+		/* FND-1: same contract as SYS_RESET, PSCI
+		 * SYSTEM_OFF instead of SYSTEM_RESET. */
+		bootstate_note_software_reset(
+		    arm_timer_ticks() * 10u, 1);
+		printf("sys: SYS_POWEROFF (software request)\n");
+		(void)psci_system_off();
+		return (unsigned int)-1;
 	}
 	case SYS_BOOTSTATE: {
 		if (a0 == 0u) {

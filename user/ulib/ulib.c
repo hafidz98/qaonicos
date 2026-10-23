@@ -875,6 +875,38 @@ sys_event_inject(int ev)
 	return ret;
 }
 
+/* FND-1: software reset (PSCI SYSTEM_RESET). On success this
+ * never returns; a return means the platform refused (-1). */
+int
+sys_reset(void)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r7, #106\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		:
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+/* FND-1: power off (PSCI SYSTEM_OFF). Same contract as
+ * sys_reset(): success never returns. */
+int
+sys_poweroff(void)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r7, #107\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		:
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
 /* D1: ACODEC init + register readback. */
 int
 sys_audio_init(void)
