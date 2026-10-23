@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/mach_param.h -- ARM machine parameters.
+ * mach3-port/src/md/arm/mach_param.h -- ARM machine parameters.
  */
 #ifndef	_MACHINE_MACH_PARAM_H_
 #define	_MACHINE_MACH_PARAM_H_

@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/fpu.c -- ARM VFP init.
+ * mach3-port/src/md/arm/fpu.c -- ARM VFP init.
  *
  * M3: enable VFPv3/4 coprocessor access; no per-thread state yet.
  */

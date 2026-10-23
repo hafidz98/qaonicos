@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/pte.h -- ARMv7 short-descriptor page table entries.
+ * mach3-port/src/md/arm/pte.h -- ARMv7 short-descriptor page table entries.
  */
 #ifndef	_ARM_PTE_H_
 #define	_ARM_PTE_H_

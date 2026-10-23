@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/machine_routines.h -- ARM MD routine declarations.
+ * mach3-port/src/md/arm/machine_routines.h -- ARM MD routine declarations.
  */
 #ifndef	_MACHINE_MACHINE_ROUTINES_H_
 #define	_MACHINE_MACHINE_ROUTINES_H_

@@ -1,5 +1,5 @@
 /*
- * kernel/kernel/arm/audio.c -- RV1103 ACODEC (audio codec) driver.
+ * mach3-port/src/ext/audio.c -- RV1103 ACODEC (audio codec) driver.
  *
  * D1: ACODEC init + register readback. D2/D3/D4 add I2S RX, DMA,
  * syscalls, and C6 uplink.

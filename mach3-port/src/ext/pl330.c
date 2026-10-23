@@ -1,5 +1,5 @@
 /*
- * kernel/kernel/arm/pl330.c -- Driver minimal ARM PL330 DMAC (D2b).
+ * mach3-port/src/ext/pl330.c -- Driver minimal ARM PL330 DMAC (D2b).
  *
  * Untuk audio: I2S RX (peripheral 21) -> RAM. Pola: microcode di RAM,
  * channel di-start via DMAGO (manager thread).

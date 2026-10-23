@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/setjmp.h -- ARM setjmp/longjmp for ddb.
+ * mach3-port/src/md/arm/setjmp.h -- ARM setjmp/longjmp for ddb.
  */
 #ifndef	_MACHINE_SETJMP_H_
 #define	_MACHINE_SETJMP_H_

@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/clock.c -- ARM generic timer (virtual) clock.
+ * mach3-port/src/md/arm/clock.c -- ARM generic timer (virtual) clock.
  *
  * 100 Hz periodic interrupt via the virtual timer PPI (30).
  * MI entry point for ticks: clock_interrupt() (kern/mach_clock.c),

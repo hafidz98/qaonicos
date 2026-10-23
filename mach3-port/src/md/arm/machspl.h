@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/machspl.h -- ARM interrupt priority levels.
+ * mach3-port/src/md/arm/machspl.h -- ARM interrupt priority levels.
  * UP ARMv7: all spl levels map to IRQ+FIQ disable; splx restores CPSR.
  */
 #ifndef	_MACHINE_MACHSPL_H_

@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/mach/arm/vm_param.h -- ARM machine-dependent VM parameters
+ * mach3-port/src/mach/arm/vm_param.h -- ARM machine-dependent VM parameters
  * (public interface).  QEMU -M virt: RAM 0x40000000-0x44000000 (64MB),
  * kernel linked at 0x40000000, identity-mapped.
  */

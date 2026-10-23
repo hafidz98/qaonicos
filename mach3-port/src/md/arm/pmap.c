@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/pmap.c -- ARMv7 pmap (identity-mapped kernel).
+ * mach3-port/src/md/arm/pmap.c -- ARMv7 pmap (identity-mapped kernel).
  *
  * The boot L1 (locore.s) section-maps all of RAM (0x40000000-0x44000000)
  * and the device window (0x08000000-0x0B000000) with VA == PA.

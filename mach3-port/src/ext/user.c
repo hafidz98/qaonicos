@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/user.c -- M4 item 4: user mode + syscall interface.
+ * mach3-port/src/ext/user.c -- M4 item 4: user mode + syscall interface.
  *
  * user_selftest(): called from startrtclock() (after task_selftest).
  *   Creates a user task (task_create, private pmap via task->map->pmap),

@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/aeabi.c -- ARM EABI helper routines.
+ * mach3-port/src/md/arm/aeabi.c -- ARM EABI helper routines.
  * Minimal implementations for freestanding kernel (no libgcc).
  */
 

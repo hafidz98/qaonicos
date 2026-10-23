@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/gpu.c -- Driver virtio-gpu 2D via virtio-mmio LEGACY
+ * mach3-port/src/ext/gpu.c -- Driver virtio-gpu 2D via virtio-mmio LEGACY
  * (App A1: backend display QEMU untuk Qabot).
  *
  * Pola transport disalin dari net.c (Fase D, terbukti): probe slot

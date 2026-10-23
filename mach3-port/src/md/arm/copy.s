@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/copy.s -- ARM block copy primitives.
+ * mach3-port/src/md/arm/copy.s -- ARM block copy primitives.
  *
  * Identity-mapped: copyin/copyout are just bcopy (no user/kernel
  * distinction in M3; no user tasks yet).

@@ -1,4 +1,4 @@
-/* mach3/kernel/arm/sched_param.h -- ARM scheduling parameters. */
+/* mach3-port/src/md/arm/sched_param.h -- ARM scheduling parameters. */
 #ifndef	_MACHINE_SCHED_PARAM_H_
 #define	_MACHINE_SCHED_PARAM_H_
 #endif	/* _MACHINE_SCHED_PARAM_H_ */

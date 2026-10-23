@@ -1,4 +1,4 @@
-/* mach3/kernel/mach/arm/machine_types.defs -- MIG machine types. */
+/* mach3-port/src/mach/arm/machine_types.defs -- MIG machine types. */
 #ifndef	_MACHINE_VM_TYPES_DEFS_
 #define	_MACHINE_VM_TYPES_DEFS_	1
 type natural_t = unsigned32;

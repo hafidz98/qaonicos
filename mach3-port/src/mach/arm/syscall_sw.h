@@ -1,4 +1,4 @@
-/* mach3/kernel/mach/arm/syscall_sw.h -- ARM software trap table.
+/* mach3-port/src/mach/arm/syscall_sw.h -- ARM software trap table.
  * For M3 boot (no userspace yet) only the macro shapes matter;
  * real user syscall stubs come with the userspace bring-up. */
 #ifndef	_MACH_ARM_SYSCALL_SW_H_

@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/db_machdep.h -- ARM ddb machine-dependent definitions.
+ * mach3-port/src/md/arm/db_machdep.h -- ARM ddb machine-dependent definitions.
  * Modelled on CMU Mach 3.0 mips/db_machdep.h.
  */
 #ifndef	_ARM_DB_MACHDEP_H_

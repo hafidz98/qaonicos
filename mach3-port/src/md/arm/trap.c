@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/trap.c -- ARM exception dispatch.
+ * mach3-port/src/md/arm/trap.c -- ARM exception dispatch.
  *
  * Trap frame is built by locore.s on the SVC stack:
  *

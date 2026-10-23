@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/pcb.c -- ARM pcb management and context switching.
+ * mach3-port/src/md/arm/pcb.c -- ARM pcb management and context switching.
  *
  * Kernel stacks are allocated with kmem_alloc (identity-mapped).
  * Context switch saves/restores callee-saved regs (r4-r11, sp, lr)

@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/mach/arm/thread_status.h -- ARM thread state flavors.
+ * mach3-port/src/mach/arm/thread_status.h -- ARM thread state flavors.
  * Modelled on CMU Mach 3.0 mach/mips/thread_status.h.
  */
 #ifndef	_MACH_ARM_THREAD_STATUS_H_

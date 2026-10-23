@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/net.c -- Driver virtio-net via virtio-mmio LEGACY
+ * mach3-port/src/ext/net.c -- Driver virtio-net via virtio-mmio LEGACY
  * (Fase D).
  *
  * Port dari archive/kernel-scratch/kernel/src/net.c (Fase 11, terbukti).

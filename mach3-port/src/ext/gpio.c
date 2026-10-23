@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/gpio.c -- Driver GPIO QaonicOS (Fase D).
+ * mach3-port/src/ext/gpio.c -- Driver GPIO QaonicOS (Fase D).
  *
  * Port dari archive/kernel-scratch/kernel/src/gpio.c (terbukti di
  * kernel lama).  Dua backend:

@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/machdep.c -- ARM machine-dependent misc routines.
+ * mach3-port/src/md/arm/machdep.c -- ARM machine-dependent misc routines.
  */
 #include <mach/machine/vm_types.h>
 #include <machine/machine_routines.h>

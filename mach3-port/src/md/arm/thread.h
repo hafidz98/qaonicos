@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/thread.h -- ARM machine-dependent thread state.
+ * mach3-port/src/md/arm/thread.h -- ARM machine-dependent thread state.
  * Modelled on CMU Mach 3.0 mips/thread.h.
  */
 #ifndef	_ARM_THREAD_H_

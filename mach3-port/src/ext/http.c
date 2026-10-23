@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/http.c -- Server HTTP/1.0 minimal untuk system
+ * mach3-port/src/ext/http.c -- Server HTTP/1.0 minimal untuk system
  * monitor (Fase D).
  *
  * Port dari archive/kernel-scratch/kernel/src/http.c (Fase 12/12b).

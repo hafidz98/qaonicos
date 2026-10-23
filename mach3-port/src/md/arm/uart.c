@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/uart.c -- PL011 UART driver (QEMU -M virt).
+ * mach3-port/src/md/arm/uart.c -- PL011 UART driver (QEMU -M virt).
  *
  * Base 0x09000000 (UART0).  PL011 registers used:
  *   DR  0x00  (data)

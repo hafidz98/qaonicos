@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/arm_init.c -- ARM machine-dependent initialization.
+ * mach3-port/src/md/arm/arm_init.c -- ARM machine-dependent initialization.
  *
  * Entry from locore.s (_reset -> arm_init).  Order mirrors mips_init():
  * console, memory sizing, pmap_bootstrap, machine_startup.

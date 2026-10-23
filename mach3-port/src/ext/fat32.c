@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/fat32.c -- Filesystem FAT32 read+write di atas
+ * mach3-port/src/ext/fat32.c -- Filesystem FAT32 read+write di atas
  * kartu SD (Fase D).
  *
  * Port dari archive/kernel-scratch/kernel/src/fat32.c (terbukti di

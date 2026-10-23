@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/tcp.c -- Server TCP minimal (satu koneksi, port 80)
+ * mach3-port/src/ext/tcp.c -- Server TCP minimal (satu koneksi, port 80)
  * untuk HTTP (Fase D).
  *
  * Port dari archive/kernel-scratch/kernel/src/tcp.c (Fase 12).

@@ -1,5 +1,5 @@
 /*
- * kernel/kernel/arm/pl330.h -- Driver minimal ARM PL330 DMAC (D2b).
+ * mach3-port/src/ext/pl330.h -- Driver minimal ARM PL330 DMAC (D2b).
  */
 #ifndef PL330_H
 #define PL330_H

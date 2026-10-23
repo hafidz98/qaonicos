@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/mig_stubs.c -- MIG client stubs (M3).
+ * mach3-port/src/md/arm/mig_stubs.c -- MIG client stubs (M3).
  *
  * The M2 MIG stub generator only emitted headers.  These are the
  * client-side RPCs a task uses to talk to its memory object (pager).

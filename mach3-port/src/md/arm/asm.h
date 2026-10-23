@@ -1,4 +1,4 @@
-/* mach3/kernel/arm/asm.h -- ARM assembler macros. */
+/* mach3-port/src/md/arm/asm.h -- ARM assembler macros. */
 #ifndef	_MACHINE_ASM_H_
 #define	_MACHINE_ASM_H_
 

@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/mach/arm/vm_types.h -- ARM machine-dependent VM types.
+ * mach3-port/src/mach/arm/vm_types.h -- ARM machine-dependent VM types.
  * Modelled on CMU Mach 3.0 mach/mips/vm_types.h.
  */
 #ifndef	_MACH_ARM_VM_TYPES_H_

@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/db_stubs.c -- ddb (kernel debugger) MD stubs (M3).
+ * mach3-port/src/md/arm/db_stubs.c -- ddb (kernel debugger) MD stubs (M3).
  *
  * The MI ddb is compiled in.  Full ddb support (disassembler, register
  * windows, COFF symbols) is future work.  These stubs let it link;

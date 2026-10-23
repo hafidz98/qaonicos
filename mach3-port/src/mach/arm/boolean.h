@@ -1,4 +1,4 @@
-/* mach3/kernel/mach/arm/boolean.h -- ARM boolean type. */
+/* mach3-port/src/mach/arm/boolean.h -- ARM boolean type. */
 #ifndef	_MACH_ARM_BOOLEAN_H_
 #define	_MACH_ARM_BOOLEAN_H_
 typedef int		boolean_t;

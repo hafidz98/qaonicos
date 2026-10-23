@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/userasm.s -- user mode entry/exit (M4 item 4).
+ * mach3-port/src/md/arm/userasm.s -- user mode entry/exit (M4 item 4).
  *
  * unsigned int user_enter_test(unsigned int user_sp, unsigned int user_pc):
  *   Set the USR-mode SP, then "return from exception" into user mode.

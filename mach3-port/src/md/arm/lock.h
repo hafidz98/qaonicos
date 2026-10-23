@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/lock.h -- ARM simple locks.
+ * mach3-port/src/md/arm/lock.h -- ARM simple locks.
  * NOTE: with NCPUS==1 && !MACH_LDEBUG, MACH_SLOCKS==0 and kern/lock.h
  * does not use this file at all.  Provided for completeness.
  */

@@ -19,9 +19,9 @@ if [ -f "$HOME/workspace/toolchain/env.sh" ]; then
 fi
 
 MACH3_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Mach 3.0 MI sources: vendored in-repo (kernel/mach3-src); override with
-# MACH3_SRC=/path/to/mach3-src to use an external tree instead.
-SRC="${MACH3_SRC:-$MACH3_DIR/mach3-src}/kernel"
+# Mach 3.0 MI sources: vendored in-repo (mach3-port/upstream/mach3);
+# override with MACH3_SRC=/path/to/mach3 to use an external tree instead.
+SRC="${MACH3_SRC:-$MACH3_DIR/upstream/mach3}/kernel"
 BUILD="$MACH3_DIR/build"
 GEN="$BUILD/gen"
 INC="$BUILD/inc"
@@ -39,21 +39,21 @@ command -v clang >/dev/null 2>&1 || { echo "FATAL: clang unavailable"; exit 1; }
 # --- directory layout ---
 mkdir -p "$GEN" "$OBJ" "$INC" "$INC/mach"
 # <machine/*.h>  -> ARM MD headers (M3: real, was mips stand-in in M2)
-ln -sfn "$MACH3_DIR/kernel/arm" "$INC/machine"
+ln -sfn "$MACH3_DIR/src/md/arm" "$INC/machine"
 # <mach/machine/*.h> -> ARM mach/machine headers
-ln -sfn "$MACH3_DIR/kernel/mach/arm" "$INC/mach/machine"
+ln -sfn "$MACH3_DIR/src/mach/arm" "$INC/mach/machine"
 
 # --- generated headers ---
-python3 "$MACH3_DIR/tools/gen_config.py" "$GEN"
-python3 "$MACH3_DIR/tools/gen_mig_stubs.py" "$GEN"
+python3 "$MACH3_DIR/build-tools/gen_config.py" "$GEN"
+python3 "$MACH3_DIR/build-tools/gen_mig_stubs.py" "$GEN"
 
 # --- compiler flags ---
 # -DKERNEL is MANDATORY (mach/vm_param.h deliberately #errors without it).
 # -Wno-implicit-function-declaration: 1990s C predates C99 prototypes.
 CFLAGS="--target=arm-none-eabi -DKERNEL -O1 -fno-builtin -fcommon"
-# M3: mi-overrides/ first so converted headers (e.g. ddb/db_output.h)
+# M3: overrides/ first so converted headers (e.g. ddb/db_output.h)
 # shadow pristine MI headers.
-OVR="$MACH3_DIR/mi-overrides"
+OVR="$MACH3_DIR/overrides"
 CFLAGS="$CFLAGS -I$OVR -I$GEN -I$INC -I$SRC"
 CFLAGS="$CFLAGS -Wno-implicit-function-declaration"
 # clang >= 16 promotes implicit-int to a hard error; 1990s C uses it.
@@ -66,8 +66,8 @@ CFLAGS="$CFLAGS -Wno-int-conversion"
 CFLAGS="$CFLAGS -include $GEN/md_globals.h"
 CFLAGS="$CFLAGS -Wno-deprecated-non-prototype -Wno-extra-tokens"
 
-# --- MI source list (conf/files + optionals, see tools/mi_sources.py) ---
-SRCS="$(python3 "$MACH3_DIR/tools/mi_sources.py" "$SRC")"
+# --- MI source list (conf/files + optionals, see build-tools/mi_sources.py) ---
+SRCS="$(python3 "$MACH3_DIR/build-tools/mi_sources.py" "$SRC")"
 
 # server_loop.c is a stray that expects -DSERVER_NAME from the build
 # (it is a generic server-loop template, not in conf/files upstream).

@@ -1,5 +1,5 @@
 /*
- * kernel/kernel/arm/bootstate.c -- B2 resilience core.
+ * mach3-port/src/ext/bootstate.c -- B2 resilience core.
  *
  * Persistent boot state + boot log ring on blk dev 0:
  *   sector [total-2]        : struct bs_state

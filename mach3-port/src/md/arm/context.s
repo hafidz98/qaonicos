@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/context.s -- ARM context switch primitives.
+ * mach3-port/src/md/arm/context.s -- ARM context switch primitives.
  *
  * struct pcb layout (machine/thread.h):
  *   0x00: iss (struct arm_saved_state = 20 words = 80 bytes)

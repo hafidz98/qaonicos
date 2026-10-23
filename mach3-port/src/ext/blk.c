@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/blk.c -- virtio-blk driver via virtio-mmio LEGACY.
+ * mach3-port/src/ext/blk.c -- virtio-blk driver via virtio-mmio LEGACY.
  *
  * M4 item 3: storage for QEMU -M virt.  Single device, synchronous
  * polled I/O (interrupts not needed yet).  Adapted from the proven

@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/pmap.h -- ARM pmap interface.
+ * mach3-port/src/md/arm/pmap.h -- ARM pmap interface.
  * Identity-mapped kernel (VA == PA); single L1 shared by kernel_pmap.
  * Modelled on CMU Mach 3.0 mips/pmap.h.
  */

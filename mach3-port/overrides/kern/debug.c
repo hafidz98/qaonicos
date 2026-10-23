@@ -164,7 +164,7 @@ void Assert(file, line)
 /*
  * M5: MI Debugger() is empty on ARM (no breakpoint asm), which lets the
  * compiler inline it away in panic(), defeating our MD override in
- * kernel/arm/db_stubs.c.  Declare extern (no definition); the MD
+ * mach3-port/src/md/arm/db_stubs.c.  Declare extern (no definition); the MD
  * Debugger() halts the CPU.
  */
 extern void	Debugger(const char *message);

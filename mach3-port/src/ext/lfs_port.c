@@ -1,5 +1,5 @@
 /*
- * kernel/kernel/arm/lfs_port.c -- littlefs port for QaonicOS (B1).
+ * mach3-port/src/ext/lfs_port.c -- littlefs port for QaonicOS (B1).
  *
  * Backend: RAM block device (1 MB = 256 blocks x 4096 B) so the
  * filesystem logic + power-cut behaviour are testable in QEMU

@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/ipc_test.c -- IPC + task bring-up self-tests (M4 item 2).
+ * mach3-port/src/md/arm/tests/ipc_test.c -- IPC + task bring-up self-tests (M4 item 2).
  *
  * ipc_selftest(): called from machine_init() (after ipc_bootstrap/ipc_init).
  *   Verifies kernel port allocate/deallocate via the special kernel ipc

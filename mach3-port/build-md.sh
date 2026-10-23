@@ -2,7 +2,8 @@
 # build-md.sh -- build ARM machine-dependent sources and link mach3.elf.
 #
 # 1. Runs build-mi.sh (MI objects -> build/obj/, now with ARM MD headers).
-# 2. Compiles kernel/arm/*.c and *.s -> build/obj-md/.
+# 2. Compiles src/md/arm/*.c|*.s, src/md/arm/tests/*.c and
+#    src/ext/*.c (+ ext/littlefs/*.c) -> build/obj-md/.
 # 3. Links with mach3.ld -> build/mach3.elf.
 set -u
 
@@ -13,9 +14,9 @@ if [ -f "$HOME/workspace/toolchain/env.sh" ]; then
 fi
 
 MACH3_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Mach 3.0 MI sources: vendored in-repo (kernel/mach3-src); override with
-# MACH3_SRC=/path/to/mach3-src to use an external tree instead.
-SRC="${MACH3_SRC:-$MACH3_DIR/mach3-src}/kernel"
+# Mach 3.0 MI sources: vendored in-repo (mach3-port/upstream/mach3);
+# override with MACH3_SRC=/path/to/mach3 to use an external tree instead.
+SRC="${MACH3_SRC:-$MACH3_DIR/upstream/mach3}/kernel"
 BUILD="$MACH3_DIR/build"
 GEN="$BUILD/gen"
 INC="$BUILD/inc"
@@ -45,7 +46,6 @@ fi
 
 # --- 1. MI ---
 "$MACH3_DIR/build-mi.sh" || exit 1
-
 # --- 1b. user programs (Fase C): init/ucat/uls/uecho/umon -> embedded ---
 # Tiap program: compile, link di INIT_CODE_VA (0x100000) via init.ld,
 # objcopy ke biner, embed.py -> build/gen/<name>_img.c
@@ -436,15 +436,15 @@ mkdir -p "$OBJMD"
 : > "$LOG"
 
 CFLAGS="--target=arm-none-eabi -march=armv7-a -DKERNEL -O1 -fno-builtin -fcommon"
-OVR="$MACH3_DIR/mi-overrides"
+OVR="$MACH3_DIR/overrides"
 CFLAGS="$CFLAGS -I$OVR -I$GEN -I$INC -I$SRC"
-CFLAGS="$CFLAGS -I$MACH3_DIR/kernel/arm/littlefs -I$MACH3_DIR/kernel/arm/littlefs/shim"
+CFLAGS="$CFLAGS -I$MACH3_DIR/src/ext/littlefs -I$MACH3_DIR/src/ext/littlefs/shim"
 CFLAGS="$CFLAGS -Wno-implicit-function-declaration -Wno-implicit-int"
 CFLAGS="$CFLAGS -Wno-int-conversion -Wno-deprecated-non-prototype"
 CFLAGS="$CFLAGS -Wno-extra-tokens -include $GEN/md_globals.h"
 
 pass=0; fail=0
-for src in "$MACH3_DIR/kernel/arm/"*.c; do
+for src in "$MACH3_DIR/src/md/arm/"*.c "$MACH3_DIR/src/md/arm/tests/"*.c "$MACH3_DIR/src/ext/"*.c; do
     base=$(basename "$src" .c)
     echo "CC md/$base.c" >> "$LOG"
     # shellcheck disable=SC2086
@@ -456,7 +456,7 @@ for src in "$MACH3_DIR/kernel/arm/"*.c; do
     fi
 done
 # B1: littlefs sources (subdir, own config header).
-for src in "$MACH3_DIR/kernel/arm/littlefs/"*.c; do
+for src in "$MACH3_DIR/src/ext/littlefs/"*.c; do
     base=$(basename "$src" .c)
     echo "CC md/littlefs/$base.c" >> "$LOG"
     # shellcheck disable=SC2086
@@ -467,7 +467,7 @@ for src in "$MACH3_DIR/kernel/arm/littlefs/"*.c; do
         fail=$((fail+1))
     fi
 done
-for src in "$MACH3_DIR/kernel/arm/"*.s; do
+for src in "$MACH3_DIR/src/md/arm/"*.s; do
     base=$(basename "$src" .s)
     echo "AS md/$base.s" >> "$LOG"
     # shellcheck disable=SC2086

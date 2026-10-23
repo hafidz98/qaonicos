@@ -1,4 +1,4 @@
-/* mach3/kernel/mach/arm/exception.h -- ARM exception codes. */
+/* mach3-port/src/mach/arm/exception.h -- ARM exception codes. */
 #ifndef	_MACH_ARM_EXCEPTION_H_
 #define	_MACH_ARM_EXCEPTION_H_
 #define	EXC_ARM_UNDEF		0	/* undefined instruction */

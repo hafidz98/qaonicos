@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/sched_test.c -- M5 Phase 4: preemptive scheduler test.
+ * mach3-port/src/md/arm/tests/sched_test.c -- M5 Phase 4: preemptive scheduler test.
  *
  * Two kernel worker threads spin printing their ID.  The 100Hz timer
  * sets need_ast periodically; the IRQ return path (locore.s) calls

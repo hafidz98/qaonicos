@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/uprog.s -- embedded first user programs (M4 item 4).
+ * mach3-port/src/md/arm/uprog.s -- embedded first user programs (M4 item 4).
  *
  * Position-independent ARMv7 code (adr for data), copied to a user page
  * at boot by user_selftest().  Syscall ABI: number in r7, args in

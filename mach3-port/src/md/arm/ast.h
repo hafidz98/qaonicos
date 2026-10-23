@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/ast.h -- ARM asynchronous system traps.
+ * mach3-port/src/md/arm/ast.h -- ARM asynchronous system traps.
  * AST pending flag lives in the pcb; checked on trap return.
  */
 #ifndef	_MACHINE_AST_H_

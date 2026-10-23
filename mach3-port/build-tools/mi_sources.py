@@ -2,7 +2,7 @@
 """
 mi_sources.py -- MI source list for build-mi.sh.
 
-Parses mach3-src/kernel/conf/files (the authoritative upstream build
+Parses upstream/mach3/kernel/conf/files (the authoritative upstream build
 list) and prints the .c files to compile, honouring `optional`
 conditions against the option values in gen_config.py:
 
@@ -17,7 +17,7 @@ dead code):
   kern/lock_mon.c    -> EXCLUDED (includes <mach/i386/vm_types.h>)
   kern/profile.c     -> EXCLUDED (references removed thread struct fields)
 
-Usage: mi_sources.py <mach3-src-kernel-dir>
+Usage: mi_sources.py <upstream-kernel-dir>
 Prints one relative path per line, e.g. "kern/ast.c".
 """
 import os

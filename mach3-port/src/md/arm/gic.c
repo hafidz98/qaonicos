@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/gic.c -- ARM GIC-400 (GICv2) driver, QEMU -M virt.
+ * mach3-port/src/md/arm/gic.c -- ARM GIC-400 (GICv2) driver, QEMU -M virt.
  *
  * GICD @ 0x08000000, GICC @ 0x08010000.
  * Timer PPI (interrupt 27, virtual timer) is the only source used in M3.

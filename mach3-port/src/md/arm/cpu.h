@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/cpu.h -- ARM cpu data (UP).
+ * mach3-port/src/md/arm/cpu.h -- ARM cpu data (UP).
  */
 #ifndef	_MACHINE_CPU_H_
 #define	_MACHINE_CPU_H_

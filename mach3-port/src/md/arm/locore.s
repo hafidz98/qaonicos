@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/locore.s -- ARMv7 boot and exception vectors.
+ * mach3-port/src/md/arm/locore.s -- ARMv7 boot and exception vectors.
  *
  * QEMU -M virt: loaded at 0x40000000 (ELF e_entry = _start).
  * Sets up an identity-mapped L1 (RAM 0x40000000-0x44000000 as normal WB,

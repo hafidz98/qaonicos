@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/netstack.c -- Ethernet + ARP + IPv4 + ICMP echo
+ * mach3-port/src/ext/netstack.c -- Ethernet + ARP + IPv4 + ICMP echo
  * (Fase D).
  *
  * Port dari archive/kernel-scratch/kernel/src/netstack.c (Fase 11).

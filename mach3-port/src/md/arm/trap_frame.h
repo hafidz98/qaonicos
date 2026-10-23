@@ -1,5 +1,5 @@
 /*
- * mach3/kernel/arm/trap_frame.h -- trap frame layout (M4 item 4).
+ * mach3-port/src/md/arm/trap_frame.h -- trap frame layout (M4 item 4).
  *
  * Built by locore.s exception handlers on the SVC stack via SRS:
  *   srsdb sp!, #0x13  ->  [sp] = LR, [sp+4] = SPSR  (then push {r0-r12})

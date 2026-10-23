@@ -1,4 +1,4 @@
-/* mach3/kernel/arm/ast_types.h -- ARM AST types. */
+/* mach3-port/src/md/arm/ast_types.h -- ARM AST types. */
 #ifndef	_MACHINE_AST_TYPES_H_
 #define	_MACHINE_AST_TYPES_H_
 
