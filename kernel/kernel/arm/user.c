@@ -69,6 +69,10 @@ extern int	bootstate_update_cancel(void);
 extern int	upd_verify_package(const unsigned char *,
 		    unsigned int, unsigned int *);
 extern unsigned int bootstate_log_count(void);
+extern void	bootstate_log_event(unsigned int, unsigned int,
+		    const char *);	/* bootstate.c (FND-3) */
+extern void	bootstate_note_watchdog(unsigned int,
+		    const char *);	/* bootstate.c (FND-3) */
 extern unsigned int arm_timer_ticks(void);
 extern void	uart_putc(char c);
 
@@ -434,6 +438,17 @@ struct daemon {
 	int		state;	/* 0=mati, 1=runnable, 2=menunggu (Q9: parent spawn) */
 	int		progid;
 	unsigned	uprog_idx;	/* indeks di uprog_names/states */
+	/* FND-3 health supervisor (see the wd_* block below
+	 * sched_run). All ticks are arm_timer_ticks() units
+	 * (100 Hz). */
+	unsigned	wd_last_progress; /* tick of last non-YIELD syscall */
+	unsigned	wd_warn_at;	/* age (ticks) that arms the warn */
+	unsigned	wd_hang_at;	/* age (ticks) that declares a hang */
+	unsigned	wd_warned;	/* tick the current warn fired, 0=none */
+	unsigned	wd_hangs;	/* hangs declared this boot */
+	unsigned	wd_respawns;	/* respawns this boot (persistent) */
+	int		wd_imgidx;	/* daemon_images[] index, -1 = not
+				 * respawnable (spawn slot) */
 };
 
 static struct daemon	daemons[NDAEMON];
@@ -445,6 +460,48 @@ static volatile unsigned gui_pending = 0;
 static unsigned		gui_launched = 0;
 static int		sched_cur = -1;
 static int		sched_active = 0;
+
+/*
+ * FND-3: health supervisor state (design + evidence:
+ * docs/rencana-fondasi-tanpa-board/DEVLOG-FND3.md).
+ *
+ * Liveness model: a daemon proves progress by making
+ * syscalls OTHER than SYS_YIELD -- every product daemon's
+ * main loop polls something every iteration (face polls
+ * events, uiapp polls acquire/events, qabotd and sh poll
+ * the console), so a healthy daemon stamps wd_last_progress
+ * many times per second. Two hang classes:
+ *  (a) yields-but-wedged: yields continue (switch points
+ *      run) but progress froze -- caught by wd_supervise()
+ *      at the switch points;
+ *  (b) never-yields: no switch point ever runs again --
+ *      caught by wd_irq_tick() from the timer IRQ: if no
+ *      scheduler switch happened for WD_STARVE_TICKS while
+ *      a user-mode frame was running, the runner is
+ *      spinning and only the IRQ path can still act.
+ * WD_ENABLED exists so the pre-fix FAIL evidence could be
+ * produced with the supervisor's call sites compiled out
+ * and everything else identical (see the dev log).
+ */
+#define	WD_ENABLED	1
+#define	WD_MAX_RESPAWN	2u	/* per daemon per boot */
+#define	WD_MAX_CHILD_KILLS 3u	/* consecutive spawn-child kills */
+#define	WD_STARVE_TICKS	3000u	/* class (b): 30 s at 100 Hz */
+/* Boot log events (mirror bootstate.c BLE_WD_*). */
+#define	WD_EV_WARN	13u
+#define	WD_EV_HANG	14u
+#define	WD_EV_RESPAWN	15u
+#define	WD_EV_RESET	16u
+/* Exit code a spawn parent sees when the supervisor killed
+ * its child (decimal 53405 in sh's `run` output). */
+#define	USER_EXIT_WDOG	0xD09Du
+
+static volatile unsigned wd_last_activity; /* last switch tick */
+static unsigned		wd_child_kills;	/* consecutive child kills */
+static volatile int	wd_irq_tripped;
+
+static int	wd_supervise(void);
+static void	wd_fatal_reset(const char *who);
 
 /* Q9: state spawn. Slot NDAEMON-1 dipakai untuk child yang di-spawn.
  * spawn_parent = indeks daemon parent (yang menunggu), -1 bila tidak ada.
@@ -660,6 +717,13 @@ user_syscall(struct arm_trap_frame *frame)
 	/* #7 debug: track current syscall for panic diagnosis. */
 	extern unsigned int dbg_cur_syscall;
 	dbg_cur_syscall = num;
+	/* FND-3: progress stamp. Any syscall other than
+	 * SYS_YIELD is work (polling counts: the daemon loops
+	 * are poll-shaped), so it proves the caller is not
+	 * wedged in a bare yield loop. */
+	if (sched_active && sched_cur >= 0 && num != SYS_YIELD)
+		daemons[sched_cur].wd_last_progress =
+		    arm_timer_ticks();
 	unsigned int a4 = frame->r[4];
 	unsigned int a5 = frame->r[5];
 
@@ -1096,9 +1160,13 @@ user_syscall(struct arm_trap_frame *frame)
 			 *     the holder progid. Product spawns (FAT)
 			 *     always get progid -1. */
 			extern unsigned char	uls_img[], ufault_img[],
-						ufaultd_img[];
+						ufaultd_img[], uyield_img[],
+						uhangd_img[], uspin_img[],
+						uhangc_img[];
 			extern unsigned int	uls_img_len, ufault_img_len,
-						ufaultd_img_len;
+						ufaultd_img_len, uyield_img_len,
+						uhangd_img_len, uspin_img_len,
+						uhangc_img_len;
 			static const struct {
 				const char	*name;
 				unsigned char	*img;
@@ -1110,6 +1178,18 @@ user_syscall(struct arm_trap_frame *frame)
 				  &ufault_img_len, -1 },
 				{ "embed:ufaultd", ufaultd_img,
 				  &ufaultd_img_len, PROG_UIAPP },
+				/* FND-3 hang injection: yields forever
+				 * without progress; holds the display
+				 * (PROG_UIAPP) then yields forever;
+				 * spins without ever yielding. */
+				{ "embed:uyield", uyield_img,
+				  &uyield_img_len, -1 },
+				{ "embed:uhangd", uhangd_img,
+				  &uhangd_img_len, PROG_UIAPP },
+				{ "embed:uspin", uspin_img,
+				  &uspin_img_len, -1 },
+				{ "embed:uhangc", uhangc_img,
+				  &uhangc_img_len, -1 },
 			};
 			unsigned int hi, ei;
 			int matched = 0;
@@ -1162,6 +1242,16 @@ user_syscall(struct arm_trap_frame *frame)
 		child->state = 1; /* runnable */
 		child->progid = embed_progid;	/* -1; hook override utk test */
 		child->uprog_idx = 0;
+		/* FND-3: the spawn slot is supervised too (kill +
+		 * wake the parent; never respawned -- the parent
+		 * decides what runs next). */
+		child->wd_last_progress = arm_timer_ticks();
+		child->wd_warn_at = 1500u;	/* 15 s */
+		child->wd_hang_at = 3000u;	/* 30 s */
+		child->wd_warned = 0;
+		child->wd_hangs = 0;
+		child->wd_respawns = 0;
+		child->wd_imgidx = -1;
 
 		spawn_parent = sched_cur;
 		spawn_done = 0;
@@ -1563,10 +1653,24 @@ sched_yield_switch(struct arm_trap_frame *f)
 	/* Pump network sekali tiap yield: HTTP tetap hidup di sela
 	 * daemon.  Driver net polling murni (tanpa IRQ) jadi aman
 	 * dari konteks trap SVC. */
+	wd_last_activity = arm_timer_ticks();	/* FND-3 */
 	net_pump();
 	gui_maybe_launch();	/* Boot UX: deferred GUI launch */
 	cur = &daemons[sched_cur];
 	ctx_save(&cur->ctx, f);
+#if WD_ENABLED
+	if (wd_supervise()) {
+		/* FND-3: the supervisor killed + respawned the
+		 * CURRENT daemon (it yielded but never
+		 * progressed): ctx_save stored the dead
+		 * instance's ctx and wd_respawn replaced it
+		 * with a fresh one -- resume the new instance
+		 * directly instead of the saved ctx. */
+		sched_activate(cur);
+		ctx_load(f, &cur->ctx);
+		return;
+	}
+#endif
 	next = pick_next();
 	if (next == cur || next == 0)
 		return;	/* sendirian: frame tak diubah, r0=0 via caller */
@@ -1671,12 +1775,22 @@ sched_exit_switch(struct arm_trap_frame *f, unsigned int code)
 		spawn_done = 1;
 		daemons[sched_cur].state = 0;
 		daemons[spawn_parent].state = 1; /* parent runnable lagi */
+		/* FND-3: the parent was WAITING, not hung: restart
+		 * its progress clock. A child that exits on its
+		 * own also clears the consecutive-kill counter. */
+		daemons[spawn_parent].wd_last_progress =
+		    arm_timer_ticks();
+		wd_child_kills = 0;
 		printf("spawn: child exit 0x%x, parent %d dibangunkan\n",
 		       code, spawn_parent);
 	} else {
 		daemons[sched_cur].state = 0;
 	}
 	uprog_states[daemons[sched_cur].uprog_idx] = 2u;	/* EXITED */
+	wd_last_activity = arm_timer_ticks();	/* FND-3 */
+#if WD_ENABLED
+	(void)wd_supervise();
+#endif
 	next = pick_next();
 	if (next == 0) {
 		/* Semua mati: trampoline terakhir. */
@@ -1716,6 +1830,29 @@ sched_register_daemon(const char *name, task_t task, pmap_t pmap,
 	d->state = 1;
 	d->progid = (int)progid;
 	d->uprog_idx = nuprog;
+	/* FND-3: supervisor registration. progid here is the
+	 * daemon_images[] index (launch_daemon passes it), so
+	 * it doubles as the respawn identity. Deadlines derive
+	 * from the role (PLAN FND-3): GUI daemons poll events
+	 * at FRAME_MS cadence and get 20 s; qabotd may sit in
+	 * provider waits and gets 30 s; sh blocks on input --
+	 * though it polls the console, so this is a pure
+	 * backstop -- and gets 120 s. Warn at half the hang
+	 * deadline. */
+	d->wd_last_progress = arm_timer_ticks();
+	d->wd_warned = 0;
+	d->wd_hangs = 0;
+	d->wd_respawns = 0;
+	d->wd_imgidx = (int)progid;
+	switch (progid) {
+	case 0:	/* face */
+	case 1:	/* uiapp */
+		d->wd_warn_at = 1000u; d->wd_hang_at = 2000u; break;
+	case 3:	/* sh */
+		d->wd_warn_at = 6000u; d->wd_hang_at = 12000u; break;
+	default: /* qabotd + any future daemon */
+		d->wd_warn_at = 1500u; d->wd_hang_at = 3000u; break;
+	}
 	if (nuprog < UPROG_MAX) {
 		uprog_names[nuprog] = name;
 		uprog_states[nuprog] = 0u;	/* RUNNABLE */
@@ -1734,6 +1871,7 @@ sched_run(void)
 	struct daemon *d;
 	unsigned int rc;
 	sched_active = 1;
+	wd_last_activity = arm_timer_ticks();	/* FND-3 */
 	d = pick_next();
 	if (d == 0) {
 		printf("sched: tidak ada daemon\n");
@@ -2129,6 +2267,288 @@ static struct uprog_image daemon_images[] = {
  * ("daemon table penuh", no qaon> prompt; found by soak-test
  * regression 2026-10-20). */
 static struct user_task	uprog_udesc[NUPROGS + NDAEMON_IMAGES];
+
+/*
+ * FND-3: health supervisor implementation. The model and
+ * the ladder are described with the state block above
+ * sched_cur; the full design + evidence live in
+ * docs/rencana-fondasi-tanpa-board/DEVLOG-FND3.md. Fixed
+ * table, integer math, no allocation in the supervisor
+ * itself (respawn reuses setup_uprog_task, the same
+ * machinery gui_maybe_launch already runs from the switch
+ * path). ARCH: the supervisor is the principled R6
+ * exception (docs/ARSITEKTUR.md S5): policy in kernel
+ * because it must act exactly when userspace is what hung.
+ */
+
+/* Compose a bootlog note "wd <kind> <name>" (36-char cap
+ * in struct bs_rec; buf is 40). */
+static void
+wd_note(char *buf, unsigned int max, const char *kind,
+    const char *name)
+{
+	unsigned int i = 0, j;
+
+	for (j = 0; "wd "[j] && i < max - 1u; j++)
+		buf[i++] = "wd "[j];
+	for (j = 0; kind[j] && i < max - 1u; j++)
+		buf[i++] = kind[j];
+	if (i < max - 1u)
+		buf[i++] = ' ';
+	for (j = 0; name[j] && i < max - 1u; j++)
+		buf[i++] = name[j];
+	buf[i] = 0;
+}
+
+/*
+ * wdt_kick -- the hardware watchdog seam. On the board,
+ * the software supervisor feeds the RV1103 dw-wdt
+ * (0xff5a0000, two-stage: interrupt first, reset on a
+ * second uncleared timeout -- docs/riset-soc-rv1103/
+ * RINGKASAN.md S2 item 3) from exactly here, so the
+ * hardware only ever extends a verdict the supervisor
+ * has already reached. The kick must mean "the
+ * supervisor ran and nothing was overdue", never "a
+ * timer fired": wd_supervise() calls it only after a
+ * scan that found every daemon within its deadline.
+ * The dw-wdt clock rate is unknown (CRU table), so the
+ * hardware timeout programming waits for the driver;
+ * supervisor deadlines stay in 100 Hz ticks meanwhile.
+ * In QEMU this is a no-op. TODO(HW).
+ */
+static void
+wdt_kick(void)
+{
+}
+
+/* Terminal rung: mark the reset as a watchdog crash
+ * through the bootstate path (reason 3 + fail_count armed
+ * so the next boot lands in safe mode), log it, reset.
+ * Returns only if the platform refuses the reset. */
+static void
+wd_fatal_reset(const char *who)
+{
+	char note[40];
+	unsigned int rc;
+
+	wd_note(note, sizeof(note), "reset", who);
+	printf("watchdog: FATAL (%s) -- bootstate watchdog "
+	    "mark + reset\n", who);
+	bootstate_note_watchdog(arm_timer_ticks() * 10u, note);
+	rc = psci_system_reset();
+	printf("watchdog: platform refused reset (PSCI rc=0x%x)\n",
+	    rc);
+}
+
+/* Rebuild a persistent daemon in its own slot from its
+ * embedded image: fresh Mach task/pmap/context, same
+ * udesc (setup_uprog_task resets its heap bookkeeping).
+ * The dead instance's task/memory are NOT destroyed --
+ * Mach task teardown in the switch path is a bigger
+ * change than this track owns; the leak is bounded by
+ * WD_MAX_RESPAWN per daemon per boot (the FND-2 dev log
+ * already deferred VM destruction to this design).
+ * State a respawned daemon loses: everything it held in
+ * RAM (face: expression/idle timers; uiapp: menu position
+ * -- it restarts in the acquire-wait loop; qabotd: any
+ * in-flight provider session + the TCP connection, which
+ * daemon_reclaim already closed; sh: the session -- it
+ * re-takes the console and re-runs its startup, including
+ * its self-test). On-disk state (littlefs config,
+ * credentials, bootstate) is untouched. */
+static int
+wd_respawn(struct daemon *d)
+{
+	struct uprog_image *im;
+	task_t utask;
+	pmap_t upmap;
+	unsigned int stack_top, i;
+
+	if (d->wd_imgidx < 0 ||
+	    (unsigned)d->wd_imgidx >= NDAEMON_IMAGES)
+		return -1;
+	im = &daemon_images[d->wd_imgidx];
+	if (setup_uprog_task(im->name, im->img, *im->lenp,
+	    im->stack_pages, d->udesc, &utask, &upmap,
+	    &stack_top) != 0)
+		return -1;
+	d->task = utask;
+	d->pmap = upmap;
+	for (i = 0; i < 13u; i++)
+		d->ctx.r[i] = 0;
+	d->ctx.sp_usr = stack_top;
+	d->ctx.lr_usr = 0;
+	d->ctx.pc = INIT_CODE_VA;
+	d->ctx.spsr = 0x10u;	/* USR, IRQ on */
+	d->state = 1;
+	d->wd_last_progress = arm_timer_ticks();
+	d->wd_warned = 0;
+	uprog_states[d->uprog_idx] = 0u;	/* RUNNABLE again */
+	return 0;
+}
+
+/*
+ * wd_supervise -- class (a) scan, run at the scheduler
+ * switch points. Returns 1 iff it killed + respawned the
+ * CURRENT daemon (the caller must resume the fresh ctx
+ * instead of the saved one).
+ *
+ * Ladder per daemon: progress age > warn deadline ->
+ * bootlog BLE_WD_WARN + print (once per episode; re-arms
+ * when progress resumes). Age > hang deadline -> bootlog
+ * BLE_WD_HANG, then: spawn child -> reclaim + wake the
+ * parent with USER_EXIT_WDOG (WD_MAX_CHILD_KILLS
+ * consecutive child kills -> fatal reset: three wedged
+ * children in a row with no clean run in between is a
+ * system problem, not a program problem); persistent
+ * daemon -> reclaim (FND-2) + respawn while the
+ * per-boot budget lasts, else fatal reset via
+ * wd_fatal_reset() -- the bootstate mark arms safe mode
+ * for the next boot.
+ */
+static int
+wd_supervise(void)
+{
+	unsigned int now = arm_timer_ticks();
+	unsigned int idx;
+	int cur_respawned = 0;
+	int any_overdue = 0;
+	char note[40];
+
+	for (idx = 0; idx < NDAEMON; idx++) {
+		struct daemon *d = &daemons[idx];
+		unsigned int age;
+
+		if (d->state != 1)
+			continue;	/* dead, or WAITING on spawn */
+		if (d->wd_hang_at == 0)
+			continue;	/* not supervised */
+		age = now - d->wd_last_progress;
+		if (age <= d->wd_warn_at) {
+			if (d->wd_warned) {
+				d->wd_warned = 0;
+				printf("watchdog: '%s' progressing "
+				    "again\n", d->name);
+			}
+			continue;
+		}
+		any_overdue = 1;
+		if (!d->wd_warned) {
+			d->wd_warned = now;
+			wd_note(note, sizeof(note), "warn", d->name);
+			bootstate_log_event(WD_EV_WARN, now * 10u,
+			    note);
+			printf("watchdog: '%s' no progress for %u ms"
+			    " -- warn\n", d->name, age * 10u);
+			continue;
+		}
+		if (age <= d->wd_hang_at)
+			continue;	/* warned; grace running */
+
+		d->wd_hangs++;
+		wd_note(note, sizeof(note), "hang", d->name);
+		bootstate_log_event(WD_EV_HANG, now * 10u, note);
+		printf("watchdog: '%s' HANG (no progress %u ms)\n",
+		    d->name, age * 10u);
+
+		if (idx == NDAEMON - 1u) {
+			/* Spawn child: no image identity to
+			 * respawn; kill it and let the parent
+			 * decide what runs next. */
+			wd_child_kills++;
+			if (wd_child_kills >= WD_MAX_CHILD_KILLS)
+				wd_fatal_reset(d->name);
+			daemon_reclaim((int)idx);
+			spawn_exitcode = USER_EXIT_WDOG;
+			spawn_done = 1;
+			d->state = 0;
+			if (spawn_parent >= 0) {
+				daemons[spawn_parent].state = 1;
+				daemons[spawn_parent].
+				    wd_last_progress = now;
+			}
+			printf("watchdog: spawn child killed "
+			    "(kill %u), parent woken with 0x%x\n",
+			    wd_child_kills, USER_EXIT_WDOG);
+			continue;
+		}
+
+		daemon_reclaim((int)idx);
+		d->state = 0;
+		if (d->wd_respawns >= WD_MAX_RESPAWN) {
+			printf("watchdog: '%s' respawn budget "
+			    "exhausted (%u)\n", d->name,
+			    d->wd_respawns);
+			wd_fatal_reset(d->name);
+			d->wd_respawns = 0;	/* refused: reladder */
+		}
+		d->wd_respawns++;
+		if (wd_respawn(d) != 0) {
+			printf("watchdog: '%s' respawn setup "
+			    "failed\n", d->name);
+			wd_fatal_reset(d->name);
+			continue;
+		}
+		wd_note(note, sizeof(note), "respawn", d->name);
+		bootstate_log_event(WD_EV_RESPAWN, now * 10u, note);
+		printf("watchdog: '%s' respawned (respawn %u)\n",
+		    d->name, d->wd_respawns);
+		if ((int)idx == sched_cur)
+			cur_respawned = 1;
+	}
+	if (!any_overdue)
+		wdt_kick();
+	return cur_respawned;
+}
+
+/*
+ * wd_irq_tick -- class (b): called from the timer IRQ
+ * (trap.c) on every tick with usermode=1 when the
+ * interrupted frame was running user code. If the
+ * cooperative scheduler has not run for WD_STARVE_TICKS
+ * while user code holds the CPU, the running daemon is
+ * spinning: switch points will never run again, so this
+ * IRQ path is the only mechanism left. Its action is
+ * deliberately the terminal rung only -- bootstate
+ * watchdog mark + platform reset -- because nothing in
+ * IRQ context can safely do the softer rungs (no task
+ * setup, no switch surgery). Safety of the mark from
+ * IRQ: the gate (sched active + interrupted frame is
+ * user mode) means the boot thread is entirely out of
+ * the kernel, so the shared bootstate buffer is free and
+ * blk I/O is polled. If the platform refuses the reset,
+ * the window re-arms and the trip retries (and re-logs)
+ * instead of wedging silently.
+ */
+void
+wd_irq_tick(unsigned int usermode)
+{
+	unsigned int now;
+	const char *who;
+	char note[40];
+
+#if !WD_ENABLED
+	(void)usermode;
+	return;
+#endif
+	if (!sched_active || sched_cur < 0 || wd_irq_tripped)
+		return;
+	if (!usermode)
+		return;	/* kernel/WFI stretches are not hangs */
+	now = arm_timer_ticks();
+	if (now - wd_last_activity <= WD_STARVE_TICKS)
+		return;
+	wd_irq_tripped = 1;
+	who = daemons[sched_cur].name;
+	wd_note(note, sizeof(note), "reset", who);
+	printf("watchdog: no scheduler activity for %u ms while"
+	    " '%s' runs -- watchdog reset\n",
+	    (now - wd_last_activity) * 10u, who);
+	bootstate_note_watchdog(now * 10u, note);
+	(void)psci_system_reset();
+	wd_irq_tripped = 0;
+	wd_last_activity = now;
+}
 
 /*
  * user_launch_init -- Fase C/D + App A2.

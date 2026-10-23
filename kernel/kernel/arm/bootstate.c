@@ -71,6 +71,10 @@ extern unsigned int blk_total_sectors(void);
 #define BLE_UPD_CONFIRM	10u
 #define BLE_UPD_CANCEL	11u
 #define BLE_RESET	12u	/* FND-1: software reset/poweroff */
+#define BLE_WD_WARN	13u	/* FND-3: supervisor warn (no progress) */
+#define BLE_WD_HANG	14u	/* FND-3: supervisor hang declared */
+#define BLE_WD_RESPAWN	15u	/* FND-3: supervisor respawned daemon */
+#define BLE_WD_RESET	16u	/* FND-3: supervisor watchdog reset */
 
 struct bs_state {
 	unsigned int magic;
@@ -379,6 +383,39 @@ bootstate_note_software_reset(unsigned int uptime_ms, int poweroff)
 	bs_persist();
 	bs_log(BLE_RESET, uptime_ms,
 	    poweroff ? "software poweroff" : "software reset");
+}
+
+/* FND-3: generic boot-log writer for the health supervisor
+ * (user.c). Event numbers 13..16 are the BLE_WD_* defines
+ * above; the caller composes the note. bs_log() is already
+ * a no-op when bootstate is off this boot. */
+void
+bootstate_log_event(unsigned int event, unsigned int uptime_ms,
+    const char *note)
+{
+	bs_log(event, uptime_ms, note);
+}
+
+/* FND-3: the supervisor is resetting the device because a
+ * daemon hung past every softer rung. Record it like a
+ * crash the bootstate path already understands:
+ * last_reason = BSR_WATCHDOG (3) and fail_count armed to
+ * THRESHOLD-1 -- the same arithmetic bootstate_crash_sim()
+ * uses -- so the NEXT boot's bootstate_init() increment
+ * lands on the threshold and arms safe mode. Repeated
+ * runtime hangs therefore end in the existing 3-strikes
+ * safe mode (shell only, which then healthy-marks and
+ * self-clears if its one-shots pass), never in an endless
+ * reset loop. Both fields are durable before this returns:
+ * bs_log() persists the state after writing the record. */
+void
+bootstate_note_watchdog(unsigned int uptime_ms, const char *note)
+{
+	if (!bs_ready)
+		return;
+	bs_cur.last_reason = BSR_WATCHDOG;
+	bs_cur.fail_count = BS_FAIL_THRESHOLD - 1u;
+	bs_log(BLE_WD_RESET, uptime_ms, note ? note : "watchdog reset");
 }
 
 /* B3: provisioning flag (bit0 of flags). */

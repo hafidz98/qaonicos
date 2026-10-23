@@ -44,6 +44,8 @@ static const char *const trap_names[] = {
 
 /* user.c (M4 item 4) */
 extern unsigned int	user_syscall(struct arm_trap_frame *frame);
+/* user.c (FND-3): health supervisor tick check */
+extern void		wd_irq_tick(unsigned int usermode);
 extern void		user_fault(struct arm_trap_frame *frame,
 				   unsigned int code);
 #define	USER_EXIT_DABT	0xDAB7u
@@ -107,6 +109,13 @@ arm_trap_handler(struct arm_trap_frame *frame, int trapno)
 			 * SYS_YIELD. */
 			arm_timer_eoi();
 			timer_ticks++;	/* M4: verification counter */
+			/* FND-3: class (b) starvation check -- if
+			 * the cooperative scheduler has not run
+			 * for 30 s while a user-mode frame holds
+			 * the CPU, the runner never yields and
+			 * only this IRQ path can still act
+			 * (watchdog mark + reset, in user.c). */
+			wd_irq_tick(usermode ? 1u : 0u);
 			/* M5 Phase 4: scheduler demo runs from startrtclock
 			 * (thread context), not from IRQ.  Timer just ticks. */
 			gic_eoi(irq);

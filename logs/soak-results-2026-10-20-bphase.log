@@ -1,0 +1,133 @@
+boot 1 ok 3.8s
+boot 2 ok 3.7s
+boot 3 ok 3.9s
+boot 4 ok 4.0s
+boot 5 ok 3.6s
+boot 6 ok 3.8s
+boot 7 ok 3.5s
+boot 8 ok 3.8s
+boot 9 ok 3.4s
+boot 10 ok 3.4s
+boot 11 ok 5.3s
+boot 12 ok 3.6s
+boot 13 ok 3.6s
+boot 14 ok 3.7s
+boot 15 ok 4.0s
+boot 16 ok 3.7s
+boot 17 ok 3.3s
+boot 18 ok 3.2s
+boot 19 ok 3.4s
+boot 20 ok 3.6s
+boot 21 ok 3.4s
+boot 22 ok 3.5s
+boot 23 ok 4.0s
+boot 24 ok 3.6s
+boot 25 ok 3.8s
+boot 26 ok 3.7s
+boot 27 ok 3.4s
+boot 28 ok 3.1s
+boot 29 ok 3.3s
+boot 30 ok 3.2s
+boot 31 ok 3.3s
+boot 32 ok 3.3s
+boot 33 ok 3.2s
+boot 34 ok 3.3s
+boot 35 ok 3.4s
+boot 36 ok 3.6s
+boot 37 ok 3.7s
+boot 38 ok 3.7s
+boot 39 ok 3.7s
+boot 40 ok 3.5s
+boot 41 ok 3.3s
+boot 42 ok 3.5s
+boot 43 ok 3.4s
+boot 44 ok 3.6s
+boot 45 ok 3.4s
+boot 46 ok 3.6s
+boot 47 ok 3.6s
+boot 48 ok 3.5s
+boot 49 ok 3.6s
+boot 50 ok 3.2s
+boot 51 ok 3.3s
+boot 52 ok 3.4s
+boot 53 ok 3.5s
+boot 54 ok 3.5s
+boot 55 ok 3.5s
+boot 56 ok 3.4s
+boot 57 ok 3.7s
+boot 58 ok 3.5s
+boot 59 ok 3.4s
+boot 60 ok 3.5s
+boot 61 ok 3.7s
+boot 62 ok 3.7s
+boot 63 ok 3.5s
+boot 64 ok 3.4s
+boot 65 ok 3.6s
+boot 66 ok 3.5s
+boot 67 ok 3.5s
+boot 68 ok 3.7s
+boot 69 ok 3.5s
+boot 70 ok 3.4s
+boot 71 ok 3.3s
+boot 72 ok 3.4s
+boot 73 ok 3.5s
+boot 74 ok 3.6s
+boot 75 ok 3.6s
+boot 76 ok 3.6s
+boot 77 ok 3.6s
+boot 78 ok 3.8s
+boot 79 ok 3.7s
+boot 80 ok 3.5s
+boot 81 ok 3.3s
+boot 82 ok 3.4s
+boot 83 ok 3.5s
+boot 84 ok 3.4s
+boot 85 ok 3.5s
+boot 86 ok 3.7s
+boot 87 ok 3.5s
+boot 88 ok 3.4s
+boot 89 ok 3.7s
+boot 90 ok 3.6s
+boot 91 ok 3.5s
+boot 92 ok 3.0s
+boot 93 ok 3.1s
+boot 94 ok 3.1s
+boot 95 ok 3.3s
+boot 96 ok 3.4s
+boot 97 ok 3.4s
+boot 98 ok 3.6s
+boot 99 ok 3.8s
+boot 100 ok 3.5s
+cut 1 ok
+cut 2 ok
+cut 3 ok
+cut 4 ok
+cut 5 ok
+cut 6 ok
+cut 7 ok
+cut 8 ok
+cut 9 ok
+cut 10 ok
+cut 11 ok
+cut 12 ok
+cut 13 ok
+cut 14 ok
+cut 15 ok
+cut 16 ok
+cut 17 ok
+cut 18 ok
+cut 19 ok
+cut 20 ok
+cut 21 ok
+cut 22 ok
+cut 23 ok
+cut 24 ok
+cut 25 ok
+cut 26 ok
+cut 27 ok
+cut 28 ok
+cut 29 ok
+cut 30 ok
+final ok (FS + bootstate intact after power cuts)
+SOAK SUMMARY: fails=0
+SOAK SUMMARY: fails=0
