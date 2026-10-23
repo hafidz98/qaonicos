@@ -338,3 +338,31 @@ webui_shell_post(const char *buf, unsigned int len)
 	ws_last_ms = now_ms();
 	return 0;
 }
+
+/* FND-2: the shell executor (sh, the only SYS_WEBUI taker)
+ * died. Settle the bridge so it cannot wedge forever:
+ * a command still queued (state 1) is dropped -- nobody
+ * will ever claim it (same rule as set_enabled(0)); a
+ * command taken but never posted (state 2) is completed
+ * with an error result, so the web side polling
+ * webui_shell_result() gets a definitive answer instead
+ * of waiting for a dead program. States 0 and 3 need
+ * nothing. Called from the kernel death-reclaim path. */
+void
+webui_shell_executor_died(void)
+{
+	static const char msg[] =
+	    "web shell: executor exited before completing the command\n";
+	unsigned int i;
+
+	if (ws_state == 1u) {
+		ws_state = 0;
+		ws_last_ms = now_ms();
+	} else if (ws_state == 2u) {
+		for (i = 0; msg[i] && i < WS_OUT_MAX - 1u; i++)
+			ws_out[i] = msg[i];
+		ws_out_len = i;
+		ws_state = 3;
+		ws_last_ms = now_ms();
+	}
+}

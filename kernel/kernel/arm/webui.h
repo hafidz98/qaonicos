@@ -35,5 +35,6 @@ int	webui_shell_result(char *buf, unsigned int max);
 /* Userspace half (called from the syscall 103 handler). */
 int	webui_shell_take(char *buf, unsigned int max);
 int	webui_shell_post(const char *buf, unsigned int len);
+void	webui_shell_executor_died(void);	/* FND-2 */
 
 #endif

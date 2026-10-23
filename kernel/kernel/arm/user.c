@@ -36,6 +36,7 @@ extern int	lfs_port_write(const char *, const unsigned char *,
 /* ONB-1 (webui.c): web shell bridge + device PIN. */
 extern int	webui_shell_take(char *, unsigned int);
 extern int	webui_shell_post(const char *, unsigned int);
+extern void	webui_shell_executor_died(void);	/* FND-2 */
 extern int	webui_pin_set(const char *, unsigned int);
 extern int	webui_pin_present(void);
 extern int	credstore_set(const char *, const unsigned char *,
@@ -474,6 +475,10 @@ static int		dpy_sleep_req = 0;
 static unsigned		face_req_expr = 0u;
 static char		face_req_text[FACE_TEXT_MAX];
 static int		face_req_pending = 0;
+/* FND-2: daemon index that posted the pending face request
+ * (-1 = none / not a daemon). Lets the death-reclaim path
+ * drop a request whose poster is gone. */
+static int		face_req_owner = -1;
 
 /* Jam dinding (App A4): di-set program ntp via SYS_TIME_SET (detik
  * Unix UTC).  SYS_TIME_GET = set + (ticks_berlalu / 100). */
@@ -513,6 +518,15 @@ evq_pop(void)
 	evq_head = (evq_head + 1u) % EVQ_LEN;
 	return ev;
 }
+
+/* FND-2: daemon index that opened the single TCP client
+ * connection (-1 = no daemon owner: closed, or opened by a
+ * pre-scheduler one-shot). The connection is exclusive
+ * (tcp_client_connect fails while one is open), so it is
+ * per-daemon state: if the owner dies, the reclaim path
+ * closes it instead of leaving every later connect to fail
+ * until the connection timeout. */
+static int		tcp_client_owner = -1;
 
 /*
  * Penerjemah console -> EV_*: keyboard QEMU (WASD + Enter + Esc + M),
@@ -970,11 +984,16 @@ user_syscall(struct arm_trap_frame *frame)
 		}
 		return (unsigned int)n;
 	}
-	case SYS_TCP_CONNECT:
+	case SYS_TCP_CONNECT: {
 		/* a0=ip dst, a1=port dst -> 0/-1 */
+		int rc;
 		if (a1 > 65535u)
 			return (unsigned int)-1;
-		return (unsigned int)tcp_client_connect(a0, (unsigned short)a1);
+		rc = tcp_client_connect(a0, (unsigned short)a1);
+		if (rc == 0)	/* FND-2: record the owning daemon */
+			tcp_client_owner = sched_active ? sched_cur : -1;
+		return (unsigned int)rc;
+	}
 	case SYS_TCP_STATUS:
 		return (unsigned int)tcp_client_status();
 	case SYS_TCP_SEND: {
@@ -995,6 +1014,7 @@ user_syscall(struct arm_trap_frame *frame)
 	}
 	case SYS_TCP_CLOSE:
 		tcp_client_close();
+		tcp_client_owner = -1;	/* FND-2 */
 		return 0;
 	case SYS_FACE_EXPR: {
 		/* Q4: a0=expr(0..7) set, a0=0xFFFFFFFF poll.
@@ -1014,6 +1034,7 @@ user_syscall(struct arm_trap_frame *frame)
 			for (i = 0; i < FACE_TEXT_MAX; i++)
 				to[i] = face_req_text[i];
 			face_req_pending = 0;
+			face_req_owner = -1;
 			return 0;
 		}
 		if (a0 > 7u)
@@ -1035,6 +1056,7 @@ user_syscall(struct arm_trap_frame *frame)
 			face_req_text[0] = '\0';	/* pakai default face */
 		}
 		face_req_pending = 1;
+		face_req_owner = sched_active ? sched_cur : -1;	/* FND-2 */
 		return 0;
 	}
 	case SYS_SPAWN: {
@@ -1050,6 +1072,7 @@ user_syscall(struct arm_trap_frame *frame)
 		pmap_t upmap;
 		unsigned int stack_top;
 		int len;
+		int embed_progid = -1;
 
 		if (!sched_active || sched_cur < 0)
 			return (unsigned int)-1;
@@ -1061,32 +1084,54 @@ user_syscall(struct arm_trap_frame *frame)
 
 		len = fat32_read_file(kpath, imgbuf, sizeof(imgbuf));
 		if (len <= 0) {
-			/* Q9 test hook: "embed:uls" pakai image embedded.
-			 * Untuk verifikasi mekanisme spawn tanpa tergantung FAT. */
-			unsigned int ei;
-			int is_embed_uls = 1;
-			const char *want = "embed:uls";
-			for (ei = 0; want[ei]; ei++) {
-				if (kpath[ei] != want[ei]) {
-					is_embed_uls = 0;
+			/* Test hooks: "embed:<name>" spawns an embedded
+			 * image without depending on FAT (Q9 pattern).
+			 *   embed:uls     Q9 spawn self-test program.
+			 *   embed:ufault  FND-2: takes the console, faults.
+			 *   embed:ufaultd FND-2: becomes the display
+			 *     holder, then faults. Its progid override
+			 *     (PROG_UIAPP) exists ONLY in this hook: the
+			 *     display token is progid-keyed, so a test
+			 *     child that must die holding it has to carry
+			 *     the holder progid. Product spawns (FAT)
+			 *     always get progid -1. */
+			extern unsigned char	uls_img[], ufault_img[],
+						ufaultd_img[];
+			extern unsigned int	uls_img_len, ufault_img_len,
+						ufaultd_img_len;
+			static const struct {
+				const char	*name;
+				unsigned char	*img;
+				unsigned int	*lenp;
+				int		progid;
+			} hooks[] = {
+				{ "embed:uls", uls_img, &uls_img_len, -1 },
+				{ "embed:ufault", ufault_img,
+				  &ufault_img_len, -1 },
+				{ "embed:ufaultd", ufaultd_img,
+				  &ufaultd_img_len, PROG_UIAPP },
+			};
+			unsigned int hi, ei;
+			int matched = 0;
+
+			for (hi = 0; hi < sizeof(hooks) / sizeof(hooks[0]);
+			     hi++) {
+				const char *want = hooks[hi].name;
+				for (ei = 0; want[ei]; ei++)
+					if (kpath[ei] != want[ei])
+						break;
+				if (want[ei] == '\0' && kpath[ei] == '\0') {
+					matched = 1;
 					break;
 				}
 			}
-			if (kpath[ei] != '\0')
-				is_embed_uls = 0;
-			if (is_embed_uls) {
-				extern unsigned char uls_img[];
-				extern unsigned int uls_img_len;
-				if (uls_img_len <= sizeof(imgbuf)) {
-					for (ei = 0; ei < uls_img_len; ei++)
-						imgbuf[ei] = uls_img[ei];
-					len = (int)uls_img_len;
-				} else {
-					return (unsigned int)-1;
-				}
-			} else {
+			if (!matched ||
+			    *hooks[hi].lenp > sizeof(imgbuf))
 				return (unsigned int)-1;
-			}
+			for (ei = 0; ei < *hooks[hi].lenp; ei++)
+				imgbuf[ei] = hooks[hi].img[ei];
+			len = (int)*hooks[hi].lenp;
+			embed_progid = hooks[hi].progid;
 		}
 
 		/* Setup task child di slot terakhir. */
@@ -1115,7 +1160,7 @@ user_syscall(struct arm_trap_frame *frame)
 		child->ctx.pc = INIT_CODE_VA;
 		child->ctx.spsr = 0x10u;	/* USR, IRQ on */
 		child->state = 1; /* runnable */
-		child->progid = -1;
+		child->progid = embed_progid;	/* -1; hook override utk test */
 		child->uprog_idx = 0;
 
 		spawn_parent = sched_cur;
@@ -1530,11 +1575,95 @@ sched_yield_switch(struct arm_trap_frame *f)
 	ctx_load(f, &next->ctx);
 }
 
+/*
+ * FND-2: daemon_reclaim -- hand back everything a dying
+ * daemon held, so a daemon death cannot wedge the system
+ * until the next power cycle ("screen/console dead until
+ * power cycle" was a whole field-failure class). Called
+ * from sched_exit_switch(), the single funnel for BOTH
+ * death routes (clean SYS_EXIT and user_fault isolation),
+ * before the slot is marked dead. Keyed by daemon index;
+ * display ownership is progid-keyed, console and TCP
+ * ownership are index-keyed. Full state inventory:
+ * docs/rencana-fondasi-tanpa-board/DEVLOG-FND2.md.
+ */
+static void
+daemon_reclaim(int idx)
+{
+	struct daemon *d = &daemons[idx];
+
+	/* Display token. */
+	if (d->progid >= 0 && d->progid == dpy_holder) {
+		if (d->progid == PROG_UIAPP) {
+			/* Mirror SYS_DISPLAY_RELEASE: token home,
+			 * queued input dropped. A pending sleep
+			 * request is NOT cleared: the Sleep Now
+			 * flow sets it immediately before release,
+			 * so a holder dying in between must not
+			 * lose the user's request (same rule as
+			 * the RELEASE path). */
+			dpy_holder = PROG_FACE;
+			evq_clear();
+			printf("reclaim: '%s' died holding display "
+			    "-> token back to face\n", d->name);
+		} else {
+			/* The face itself died holding the token.
+			 * The token is PROG_FACE-keyed by design
+			 * and already home; what must not survive
+			 * is state aimed AT the face: a pending
+			 * sleep request (its only consumer is
+			 * gone) and queued input typed for a dead
+			 * reader. A future face instance starts
+			 * clean. */
+			dpy_sleep_req = 0;
+			evq_clear();
+			if (face_req_pending) {
+				face_req_pending = 0;
+				face_req_owner = -1;
+			}
+			printf("reclaim: face died holding display "
+			    "-> sleep/queue/face-request state cleared\n");
+		}
+	}
+
+	/* A pending face request posted BY the dying daemon:
+	 * its author is gone; the face must not act on it. */
+	if (face_req_pending && face_req_owner == idx) {
+		face_req_pending = 0;
+		face_req_owner = -1;
+		printf("reclaim: dropped face request from dead '%s'\n",
+		    d->name);
+	}
+
+	/* Console ownership: back to the boot default (anyone
+	 * may read). The web-shell executor IS the console
+	 * owner (sh is the only SYS_WEBUI taker), so its death
+	 * also settles the webui bridge: a queued or running
+	 * command must not wedge the bridge forever. */
+	if (console_owner == idx) {
+		console_owner = -1;
+		printf("reclaim: '%s' died owning console "
+		    "-> console open\n", d->name);
+		webui_shell_executor_died();
+	}
+
+	/* The single TCP client connection, if this daemon
+	 * opened it: close gracefully (FIN). A connect still
+	 * in SYN_SENT is left to the existing client timeout. */
+	if (tcp_client_owner == idx) {
+		tcp_client_owner = -1;
+		tcp_client_close();
+		printf("reclaim: closed TCP client connection of "
+		    "dead '%s'\n", d->name);
+	}
+}
+
 static void
 sched_exit_switch(struct arm_trap_frame *f, unsigned int code)
 {
 	struct daemon *next;
 	net_pump();
+	daemon_reclaim(sched_cur);	/* FND-2 */
 	printf("sched: '%s' exit 0x%x\n", daemons[sched_cur].name, code);
 	/* Q9: bila yang exit adalah child spawn, bangunkan parent. */
 	if (sched_cur == (int)(NDAEMON - 1) && spawn_parent != -1) {
