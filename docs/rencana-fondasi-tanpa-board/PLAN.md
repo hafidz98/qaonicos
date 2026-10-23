@@ -193,4 +193,9 @@ layout question for the hardware phase).
 FND-1 -> FND-2 -> FND-3 (one recovery chain, in this
 order), then FND-4, then FND-5. After FND-5: the C6L
 track (C6L-1..C6L-5) per
-`docs/rencana-komunikasi-c6/PLAN.md`.
+`docs/rencana-komunikasi-c6/PLAN.md`. After C6L: the UI
+track (UI-1..UI-6, LVGL inside uiapp) per
+`docs/riset-ui-framework/RINGKASAN.md` — owner decision
+2026-10-23 (LVGL adopted; Qt/QML rejected; UI-1 is a
+measure-first go/no-go against the ~287 KB boot-partition
+headroom).
