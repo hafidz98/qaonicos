@@ -170,7 +170,12 @@ ENTRY=$("$LLVM_READELF" -h "$BUILD/uiapp.elf" | sed -n 's/.*Entry point address:
 python3 "$USR/pad-bss.py" "$BUILD/uiapp.bin" "$BUILD/uiapp.elf" \
     >>"$LOG" 2>&1 || \
     { echo "FAIL pad-bss user/uiapp.bin"; exit 1; }
-python3 "$USR/embed.py" "$BUILD/uiapp.bin" "$GEN/uiapp_img.c" "uiapp_img" 65536 >>"$LOG" 2>&1 || \
+# uiapp cap raised 65536 -> 98304 at C6L-1: the link layer
+# (streaming reader + KV framing + wire-level mock parser)
+# grows uiapp.bin to ~69 KB; the cap is a build-time guard
+# only (the loader takes the real image size), and the
+# 4 MiB boot partition still has ~940 KB headroom.
+python3 "$USR/embed.py" "$BUILD/uiapp.bin" "$GEN/uiapp_img.c" "uiapp_img" 98304 >>"$LOG" 2>&1 || \
     { echo "FAIL embed uiapp_img"; exit 1; }
 echo "USER: uiapp.elf entry=$ENTRY ok"
 
@@ -198,6 +203,31 @@ python3 "$USR/pad-bss.py" "$BUILD/uvoice.bin" "$BUILD/uvoice.elf" \
 python3 "$USR/embed.py" "$BUILD/uvoice.bin" "$GEN/uvoice_img.c" "uvoice_img" 32768 >>"$LOG" 2>&1 || \
     { echo "FAIL embed uvoice_img"; exit 1; }
 echo "USER: uvoice.elf entry=$ENTRY ok"
+
+# --- 1d1. user program ulinktest (C6L-1): link layer + wire freeze test. ---
+echo "BUILD user program ulinktest"
+# shellcheck disable=SC2086
+clang $UCFLAGS -I"$USR" -c "$USR/ulinktest.c" -o "$BUILD/ulinktest.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/ulinktest.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/ulinktest.elf" "$BUILD/ulinktest.o" \
+    "$BUILD/uartproto_uartproto.o" "$BUILD/uartproto_mock_comcu.o" \
+    "$BUILD/cfg.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/ulinktest.elf (see $LOG)"; exit 1; }
+ENTRY=$("$LLVM_READELF" -h "$BUILD/ulinktest.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: ulinktest entry $ENTRY != 0x100000"; exit 1; }
+"$LLVM_OBJCOPY" -O binary "$BUILD/ulinktest.elf" "$BUILD/ulinktest.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/ulinktest.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/ulinktest.bin" "$BUILD/ulinktest.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/ulinktest.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/ulinktest.bin" "$GEN/ulinktest_img.c" "ulinktest_img" 65536 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed ulinktest_img"; exit 1; }
+echo "USER: ulinktest.elf entry=$ENTRY ok"
 
 # --- 1d. user program ntp (App A4): daemon sinkron jam via NTP. ---
 echo "BUILD user program ntp"
@@ -488,7 +518,7 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice ulinktest upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }

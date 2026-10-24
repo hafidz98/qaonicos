@@ -113,6 +113,8 @@ extern unsigned char	uaudiogain_img[];	/* D3: gain + overrun */
 extern unsigned int	uaudiogain_img_len;
 extern unsigned char	uvoice_img[];	/* D4: VOICE.START + AUD uplink */
 extern unsigned int	uvoice_img_len;
+extern unsigned char	ulinktest_img[];	/* C6L-1: link layer + wire freeze */
+extern unsigned int	ulinktest_img_len;
 extern unsigned char	upl330_img[];	/* D2b: PL330 microcode */
 extern unsigned int	upl330_img_len;
 extern unsigned char	ulfs_img[];	/* B1: littlefs test */
@@ -3008,6 +3010,7 @@ static struct uprog_image uprogs[] = {
 	{ "uaudiocap", uaudiocap_img, &uaudiocap_img_len, 1u },	/* D2: I2S RX */
 	{ "uaudiogain", uaudiogain_img, &uaudiogain_img_len, 1u },	/* D3: gain */
 	{ "uvoice", uvoice_img, &uvoice_img_len, 1u },	/* D4: VOICE uplink */
+	{ "ulinktest", ulinktest_img, &ulinktest_img_len, 1u },	/* C6L-1: link test */
 	{ "upl330", upl330_img, &upl330_img_len, 1u },	/* D2b: PL330 */
 	{ "ulfs", ulfs_img, &ulfs_img_len, 1u },	/* B1: littlefs */
 	{ "ublogtest", ublogtest_img, &ublogtest_img_len, 1u },	/* B2 diag */
