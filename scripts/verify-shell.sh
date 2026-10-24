@@ -15,6 +15,18 @@ LOG=/tmp/shell-verify.log
 
 rm -f "$SOCK" "$LOG"
 
+# Always kill our QEMU, even when the python check FAILs under set -e.
+# Without this, a FAIL exits before the kill lines below and the orphan
+# QEMU holds the disk-image lock, poisoning the next script's boot.
+cleanup() {
+    if [ -n "${QPID:-}" ]; then
+        kill "$QPID" 2>/dev/null || true
+        wait "$QPID" 2>/dev/null || true
+    fi
+    pkill -f "qaon-serial[.]sock" 2>/dev/null || true
+}
+trap cleanup EXIT
+
 # Boot QEMU: serial via unix socket (interaktif)
 source "$HOME/workspace/toolchain/env.sh" 2>/dev/null || true
 qemu-system-arm -M virt -cpu cortex-a7 -m 64 -nographic \
@@ -135,8 +147,7 @@ else:
     sys.exit(1)
 PYEOF
 RC=$?
-kill $QPID 2>/dev/null || true
-pkill -f "qaon-serial[.]sock" 2>/dev/null || true
-wait $QPID 2>/dev/null || true
+# QEMU cleanup is the EXIT trap above, not here: under set -e a failing
+# python check exits before this point, so kill lines here never run.
 echo "--- transkrip: $LOG ---"
 exit $RC
