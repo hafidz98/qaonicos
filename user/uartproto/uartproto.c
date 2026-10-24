@@ -401,6 +401,66 @@ uproto_kv_del(const char *key)
 	return uproto_cmd1("KV.DEL", key, resp, sizeof(resp));
 }
 
+/* --- NET.HTTP: length-prefixed binary body (C6L-2) ---
+ *
+ * Wire (defined by the C6L-2 peer, scripts/mock-c6.py;
+ * NOT part of frozen v1.1):  NET.HTTP GET <url>\n ->
+ * "OK <len>\n" + exactly <len> body bytes. The body
+ * framing reuses the KV.GET shape (length IS the
+ * terminator), so the stream stays synchronised.
+ * Returns 0 when the whole body fit, -2 when truncated
+ * into body (still NUL-safe for text bodies, *len_out
+ * = the peer's full length), -1 on error. */
+int
+uproto_nethttp_get(const char *url, unsigned char *body, unsigned cap,
+		   unsigned *len_out)
+{
+	char line[160], hdr[160];
+	unsigned len = 0u, take;
+	int n;
+
+	if (!url || !url[0] || !body || cap == 0)
+		return -1;
+	if (be_ensure_open() != 0)
+		return -1;
+	cpycat(line, sizeof(line), "NET.HTTP GET", url, 0);
+	{
+		unsigned n = slen(line);
+		if (n + 1 > sizeof(line))
+			return -1;
+		line[n++] = '\n';
+		if (cur_be->write((unsigned char *)line, n) != 0)
+			return -1;
+	}
+	rd_len = rd_pos = 0;
+	if (rd_line(hdr, sizeof(hdr)) < 0)
+		return -1;
+	if (hdr[0] == 'E' && hdr[1] == 'R' && hdr[2] == 'R')
+		return -1;
+	n = parse_ok_count(hdr);
+	if (n < 0)
+		return -1;
+	len = (unsigned)n;
+	if (len_out)
+		*len_out = len;
+	take = (len < cap) ? len : cap;
+	if (rd_exact(body, take) != 0)
+		return -1;
+	if (len > take) {
+		unsigned char sink[32];
+		unsigned left = len - take;
+		while (left > 0) {
+			unsigned chunk = (left < sizeof(sink)) ?
+			    left : sizeof(sink);
+			if (rd_exact(sink, chunk) != 0)
+				return -1;
+			left -= chunk;
+		}
+		return -2;
+	}
+	return 0;
+}
+
 /* --- Data plane v2: VOICE.START/STOP + AUD frames --- */
 
 unsigned

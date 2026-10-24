@@ -49,6 +49,10 @@ struct uproto_backend {
 /* The in-process mock backend (mock_comcu.c). */
 extern struct uproto_backend uproto_backend_mock;
 
+/* The host-bridge backend (bridge.c, C6L-2): guest TCP
+ * to the host Python peer at 10.0.2.2:18082. */
+extern struct uproto_backend uproto_backend_bridge;
+
 /* Select a backend; NULL selects the mock. The previous
  * backend is closed and the new one opened. */
 void	uproto_backend_select(struct uproto_backend *be);

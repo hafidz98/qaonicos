@@ -74,6 +74,14 @@ int	uproto_kv_get(const char *key, char *val, unsigned vsz,
 /* Delete a key. Returns 0, or -1 on error. */
 int	uproto_kv_del(const char *key);
 
+/* --- NET.HTTP (C6L-2 peer addition, NOT frozen v1.1) ---
+ * Wire: NET.HTTP GET <url>\n -> "OK <len>\n" + <len>
+ * body bytes (KV.GET body shape). Returns 0 when the
+ * whole body fit, -2 when truncated into body
+ * (*len_out = the peer's full length), -1 on error. */
+int	uproto_nethttp_get(const char *url, unsigned char *body,
+			   unsigned cap, unsigned *len_out);
+
 /* --- Binary frame format v2 (frozen) --- */
 #define	LINK_FRAME_MAGIC0	'Q'
 #define	LINK_FRAME_MAGIC1	'A'
