@@ -6,6 +6,11 @@
  * "lr" masuk clobber karena svc menimpanya (pelajaran Clang P6).
  */
 #include "ulib.h"
+/* Full struct uipc_msg: the RPC wrappers dereference
+ * hdr.reply / hdr.id (the other wrappers only pass
+ * pointers, which is why the forward declaration in
+ * ulib.h sufficed until IPC-4). */
+#include "uipc.h"
 
 int
 sys_write(int fd, const void *buf, unsigned len)

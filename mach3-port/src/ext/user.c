@@ -145,6 +145,8 @@ extern unsigned char	utlscli_img[];	/* Q2b SEMENTARA: uji TLS client */
 extern unsigned int	utlscli_img_len;
 extern unsigned char	qabotd_img[];	/* Q4: daemon persisten Qabot */
 extern unsigned int	qabotd_img_len;
+extern unsigned char	uipcld_img[];	/* IPC-4: concurrent client daemon (test-only) */
+extern unsigned int	uipcld_img_len;
 extern unsigned char	qabot_img[];	/* Qabot harness Q1: ReAct + mock */
 extern unsigned int	qabot_img_len;
 
