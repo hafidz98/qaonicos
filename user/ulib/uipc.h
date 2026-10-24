@@ -1,7 +1,9 @@
 /*
- * uipc.h - QaonicOS Mach IPC user API, v0 (IPC-1).
+ * uipc.h - QaonicOS Mach IPC user API, v0 (IPC-1),
+ * extended with blocking receive in IPC-2 (the API
+ * freeze is IPC-4).
  *
- * Poll-only inline message passing over real Mach ports,
+ * Inline message passing over real Mach ports,
  * through the extension-layer glue (mach3-port/src/ext/
  * ipc_glue.c). The constants and the message layout in
  * this header are MIRRORED BY HAND in ipc_glue.c (the
@@ -36,12 +38,18 @@
  * the exact length carry it in-band; the test programs
  * use multiple-of-4 body lengths throughout.
  *
- * All calls are poll-only in v0: nothing ever blocks.
- * A send to a full queue and a receive on an empty
- * queue return an error code immediately (blocking
- * receive is IPC-2; port lifecycle on daemon death is
- * IPC-3; the name registry that replaces the test
- * rendezvous below is IPC-4).
+ * All send calls are poll-only: a send to a full queue
+ * returns an error code immediately. Receive has two
+ * forms (IPC-2): uipc_recv_poll() never blocks;
+ * uipc_recv(timeout_ms) parks the caller in the kernel
+ * scheduler when the queue is empty -- timeout 0 is
+ * exactly the poll form, >0 is a deadline in
+ * milliseconds, -1 parks without a deadline (allowed
+ * but bootlogged by the kernel; the watchdog treats a
+ * parked daemon as exempt-but-observed). A deadline
+ * expiry returns UIPC_ETIME. Port lifecycle on daemon
+ * death is IPC-3; the name registry that replaces the
+ * test rendezvous below is IPC-4.
  *
  * Port names are opaque unsigned handles in the
  * caller's own IPC space. Function returns are >= 0 on
@@ -59,7 +67,7 @@
 
 /* Syscall numbers (mirror mach3-port/src/ext/user.c). */
 #define SYS_SEND	10u	/* (dest, buf, len, flags) */
-#define SYS_RECV	11u	/* (port, buf, max) -> len */
+#define SYS_RECV	11u	/* (port, buf, max, timeout_ms) */
 /* 12 SYS_RPC and 23 SYS_RPC_USER stay reserved (IPC-4). */
 #define SYS_IPC_PORT	25u	/* (sub, a1, a2) port mgmt */
 
@@ -106,20 +114,34 @@ struct uipc_msg {
 #define UIPC_EBUSY	(-7)	/* rendezvous slot conflict */
 #define UIPC_ENOMEM	(-8)	/* kernel resource shortage */
 #define UIPC_ENORV	(-9)	/* rendezvous slot empty */
+#define UIPC_ETIME	(-10)	/* blocking recv: deadline expired
+				 * with the queue still empty */
+#define UIPC_EPARK	(-11)	/* INTERNAL park/wake handshake:
+				 * the raw SYS_RECV stub returns it
+				 * when a blocking call was parked and
+				 * then woken; uipc_recv() loops on it
+				 * and never returns it to callers */
 
 /* Port management. */
 int	uipc_port_alloc(void);		/* -> name or UIPC_E* */
 int	uipc_port_destroy(unsigned name);
 int	uipc_port_setqlimit(unsigned name, unsigned limit);
 
-/* Message passing (poll-only). len is the TOTAL size
- * (header + body), body <= UIPC_BODY_MAX. */
+/* Message passing. len is the TOTAL size (header +
+ * body), body <= UIPC_BODY_MAX. Sends never block.
+ * uipc_recv_poll is IPC-1's form (timeout 0).
+ * uipc_recv is the IPC-2 default: timeout_ms 0 = poll,
+ * >0 = park up to that many milliseconds, -1 = park
+ * without a deadline (bootlogged). -> total len or
+ * UIPC_E* (UIPC_ETIME on deadline expiry). */
 int	uipc_send(unsigned dest, const struct uipc_msg *m,
 		  unsigned len);
 int	uipc_reply(unsigned dest_once, const struct uipc_msg *m,
 		   unsigned len);
 int	uipc_recv_poll(unsigned port, struct uipc_msg *m,
 		       unsigned max);	/* -> total len or UIPC_E* */
+int	uipc_recv(unsigned port, struct uipc_msg *m,
+		  unsigned max, int timeout_ms);
 
 /* TEST-ONLY rendezvous (IPC-1). A fixed set of named
  * slots in the glue; PUBLISH parks a receive right,

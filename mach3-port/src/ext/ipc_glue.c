@@ -23,17 +23,20 @@
  * layer beneath the trap takes identity explicitly --
  * that is the layer used here.
  *
- * NO BLOCKING. ipc_mqueue_send/receive block via
- * thread_block() on current_thread() -- meaningless
- * under the extension scheduler -- but both have a
- * native timeout-0 mode that returns *_TIMED_OUT
+ * NO BLOCKING IN THE GLUE. ipc_mqueue_send/receive
+ * block via thread_block() on current_thread() --
+ * meaningless under the extension scheduler -- but both
+ * have a native timeout-0 mode that returns *_TIMED_OUT
  * without reaching the blocking branch (verified in
  * upstream ipc/ipc_mqueue.c: the empty-queue receive
  * checks `time_out == 0` before any thread_will_wait,
  * and the full-queue send likewise). The glue passes
  * timeout 0 ALWAYS; polling lives in userspace. The
- * sanctioned blocking receive (D-IPC-1) arrives as a
- * scheduler switch point in IPC-2, built on this file.
+ * sanctioned blocking receive (D-IPC-1) is a scheduler
+ * switch point in user.c (IPC-2), built on this file:
+ * recv_ex reports the port-object identity a wait
+ * parks on, and send wakes parked receivers through
+ * sched_ipc_wake_port() after staging.
  *
  * MESSAGE SHAPE. Userspace sees the 24-byte uipc.h
  * header; the glue translates it field by field into a
@@ -50,10 +53,10 @@
  * The wire size is rounded up to a multiple of 4 (a
  * kmsg requirement) with zero padding.
  *
- * Not built here, by plan: blocking receive (IPC-2),
- * port/space teardown on daemon death (IPC-3), the
- * name registry (IPC-4 -- the test rendezvous below is
- * scaffolding that IPC-4 deletes, not extends).
+ * Not built here, by plan: port/space teardown on
+ * daemon death (IPC-3), the name registry (IPC-4 --
+ * the test rendezvous below is scaffolding that IPC-4
+ * deletes, not extends).
  * Out-of-line memory is out of scope indefinitely
  * (D-IPC-3); the inline body cap is 4096 B.
  */
@@ -85,6 +88,13 @@ extern kern_return_t mach_port_extract_right(ipc_space_t, mach_port_t,
 					     mach_msg_type_name_t,
 					     ipc_object_t *,
 					     mach_msg_type_name_t *);
+
+/* IPC-2: scheduler wake hook (user.c). Called after a
+ * message has been STAGED on a port: any daemon parked
+ * in a blocking receive on that port object becomes
+ * runnable again (D-IPC-1: the wake restarts its
+ * watchdog progress clock). */
+extern void sched_ipc_wake_port(void *port_obj);
 
 /* Userspace message header (mirror of struct uipc_msg's
  * first 24 bytes in user/ulib/uipc.h). */
@@ -181,19 +191,31 @@ ipc_glue_send(task_t who, unsigned int dest, const void *ubuf,
 		ipc_kmsg_free(kmsg);
 		return (unsigned int)map_send_err(mr);
 	}
-	/* Timeout 0, always: a full queue is UIPC_EFULL,
-	 * never a block (see the header comment). */
-	mr = ipc_mqueue_send(kmsg, MACH_SEND_TIMEOUT, 0);
-	if (mr != MACH_MSG_SUCCESS) {
-		ipc_kmsg_destroy(kmsg);
-		return (unsigned int)map_send_err(mr);
+	/* IPC-2: copyin translated the destination name
+	 * into the destination port OBJECT (it sits in the
+	 * kmsg header's remote-port field). Capture it
+	 * before the send consumes the kmsg: after a
+	 * successful send the scheduler matches parked
+	 * receivers against exactly this identity. */
+	{
+		void *dest_obj = (void *)kmsg->ikm_header.msgh_remote_port;
+
+		/* Timeout 0, always: a full queue is
+		 * UIPC_EFULL, never a block (see the header
+		 * comment). */
+		mr = ipc_mqueue_send(kmsg, MACH_SEND_TIMEOUT, 0);
+		if (mr != MACH_MSG_SUCCESS) {
+			ipc_kmsg_destroy(kmsg);
+			return (unsigned int)map_send_err(mr);
+		}
+		sched_ipc_wake_port(dest_obj);
 	}
 	return 0;
 }
 
-unsigned int
-ipc_glue_recv(task_t who, unsigned int port, void *ubuf,
-	      unsigned int max)
+static unsigned int
+recv_core(task_t who, unsigned int port, void *ubuf,
+	  unsigned int max, void **obj_out)
 {
 	struct uipc_hdr *uh = (struct uipc_hdr *)ubuf;
 	unsigned char *ubody = (unsigned char *)ubuf + UIPC_HDR_SIZE;
@@ -214,6 +236,15 @@ ipc_glue_recv(task_t who, unsigned int port, void *ubuf,
 			       &mqueue, &object);
 	if (mr != MACH_MSG_SUCCESS)
 		return (unsigned int)UIPC_EDEST;
+	/* IPC-2: hand the port-object identity to the
+	 * caller before the receive attempt, so the
+	 * UIPC_EEMPTY path (the one that parks) has it too.
+	 * A raw pointer is a safe identity for a wait's
+	 * whole life: the receive right lives in the
+	 * waiter's own space for exactly that long, so the
+	 * port cannot be freed underneath the park. */
+	if (obj_out != (void **)0)
+		*obj_out = (void *)object;
 	/* Timeout 0, always: an empty queue is UIPC_EEMPTY,
 	 * never a block. MACH_RCV_LARGE semantics: a
 	 * message bigger than the buffer stays queued. */
@@ -252,6 +283,20 @@ ipc_glue_recv(task_t who, unsigned int port, void *ubuf,
 	}
 	ipc_kmsg_free(kmsg);
 	return total;
+}
+
+unsigned int
+ipc_glue_recv(task_t who, unsigned int port, void *ubuf,
+	      unsigned int max)
+{
+	return recv_core(who, port, ubuf, max, (void **)0);
+}
+
+unsigned int
+ipc_glue_recv_ex(task_t who, unsigned int port, void *ubuf,
+		 unsigned int max, void **obj_out)
+{
+	return recv_core(who, port, ubuf, max, obj_out);
 }
 
 /* ---------------- test rendezvous (IPC-1 only) ----------------

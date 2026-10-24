@@ -326,7 +326,7 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_RESET	106u	/* FND-1: software reset (PSCI SYSTEM_RESET) */
 #define	SYS_POWEROFF	107u	/* FND-1: power off (PSCI SYSTEM_OFF) */
 #define	SYS_SEND	10u	/* IPC-1: ipc send (dest, buf, len, flags) -> 0/UIPC_E* */
-#define	SYS_RECV	11u	/* IPC-1: ipc recv poll (port, buf, max) -> len/UIPC_E* */
+#define	SYS_RECV	11u	/* IPC-1: ipc recv (port, buf, max) -> len/UIPC_E*; IPC-2: a3=timeout ms (0=poll, >0=block till deadline, -1=block, no deadline) */
 /* 12 stays reserved for SYS_RPC (IPC-4). */
 #define	SYS_IPC_PORT	25u	/* IPC-1: port mgmt + test rendezvous (sub, a1, a2) */
 
@@ -440,7 +440,7 @@ struct daemon {
 	pmap_t		pmap;
 	struct user_task *udesc;
 	struct user_ctx	ctx;
-	int		state;	/* 0=mati, 1=runnable, 2=menunggu (Q9: parent spawn) */
+	int		state;	/* 0=mati, 1=runnable, 2=menunggu (Q9: parent spawn; IPC-2: blocking recv -- ipc_wait_active membedakan) */
 	int		progid;
 	unsigned	uprog_idx;	/* indeks di uprog_names/states */
 	/* FND-3 health supervisor (see the wd_* block below
@@ -454,6 +454,20 @@ struct daemon {
 	unsigned	wd_respawns;	/* respawns this boot (persistent) */
 	int		wd_imgidx;	/* daemon_images[] index, -1 = not
 				 * respawnable (spawn slot) */
+	/* IPC-2: blocking-receive wait record (see the
+	 * IPC-2 block below sched_activate). Meaningful
+	 * while ipc_wait_active: the daemon is parked in
+	 * state 2 on this port, or was woken and has not
+	 * yet re-entered SYS_RECV to collect the verdict.
+	 * ipc_wait_port is the destination port OBJECT
+	 * (ipc_port_t identity, opaque void * here) that
+	 * the glue matches sends against;
+	 * ipc_wait_deadline is an arm_timer_ticks()
+	 * deadline, 0 = no deadline (the bootlogged -1
+	 * form). */
+	void		*ipc_wait_port;
+	unsigned	ipc_wait_deadline;
+	unsigned char	ipc_wait_active;
 };
 
 static struct daemon	daemons[NDAEMON];
@@ -465,6 +479,15 @@ static volatile unsigned gui_pending = 0;
 static unsigned		gui_launched = 0;
 static int		sched_cur = -1;
 static int		sched_active = 0;
+/* IPC-2: return value of the daemon RESUMED by a
+ * switch. trap.c writes user_syscall's return over the
+ * (possibly switched) frame's r0, so a switch's caller
+ * must hand back the resumed daemon's parked r0: 0 for
+ * yield/exit parks (ctx_save forces it) and UIPC_EPARK
+ * for IPC parks (ctx_save_wait). Every switch function
+ * sets this right after its ctx_load; the no-switch
+ * paths leave it 0. */
+static unsigned		sched_resume_ret = 0;
 
 /*
  * FND-3: health supervisor state (design + evidence:
@@ -705,6 +728,10 @@ copy_path_user(unsigned int va, char *kpath, unsigned max)
 /* Scheduler + arbiter App A2 (definisi setelah user_syscall). */
 static void	sched_yield_switch(struct arm_trap_frame *frame);
 static void	sched_exit_switch(struct arm_trap_frame *frame, unsigned int code);
+/* IPC-2: blocking-receive engine (definisi di blok IPC-2). */
+static unsigned int sys_recv_block(struct arm_trap_frame *frame,
+				   unsigned int port, unsigned int ubuf,
+				   unsigned int max, int timeout_ms);
 extern void	net_pump(void);
 
 /* #7 debug: current syscall number (for panic diagnosis). */
@@ -759,9 +786,16 @@ user_syscall(struct arm_trap_frame *frame)
 		/* App A2: bila scheduler daemon aktif, yield = pindah ke
 		 * daemon runnable berikutnya (round-robin) + pump net.
 		 * Konteks pemanggil disimpan; saat kembali nanti r0=0.
-		 * Fase one-shot (belum aktif): nop. */
-		if (sched_active)
+		 * Fase one-shot (belum aktif): nop.
+		 * IPC-2: the return is sched_resume_ret -- the
+		 * RESUMED daemon's parked r0 (0 for yield/exit
+		 * parks, UIPC_EPARK for IPC parks), because
+		 * trap.c overwrites the switched frame's r0
+		 * with this value. */
+		if (sched_active) {
 			sched_yield_switch(frame);
+			return sched_resume_ret;
+		}
 		return 0;
 	case SYS_SBRK: {
 		/* Heap pages are pre-allocated at task creation (no
@@ -946,7 +980,9 @@ user_syscall(struct arm_trap_frame *frame)
 	case SYS_EXIT:
 		if (sched_active) {
 			sched_exit_switch(frame, a0);
-			return 0;
+			/* IPC-2: hand the RESUMED daemon its
+			 * parked r0 (see SYS_YIELD). */
+			return sched_resume_ret;
 		}
 		/* Leave user mode for good: resume at the trampoline
 		 * in SVC; r0 carries the exit code. */
@@ -1158,6 +1194,11 @@ user_syscall(struct arm_trap_frame *frame)
 			 *   embed:uls     Q9 spawn self-test program.
 			 *   embed:uipcsrv / embed:uipccli  IPC-1
 			 *     round-trip test pair.
+			 *   embed:uipksrv / embed:uipkcli  IPC-2
+			 *     blocking-recv round-trip pair;
+			 *     embed:uipkpark (65 s deadline park)
+			 *     and embed:uipknd (no-deadline park)
+			 *     are IPC-2's park probes.
 			 *   embed:ufault  FND-2: takes the console, faults.
 			 *   embed:ufaultd FND-2: becomes the display
 			 *     holder, then faults. Its progid override
@@ -1170,12 +1211,16 @@ user_syscall(struct arm_trap_frame *frame)
 						ufaultd_img[], uyield_img[],
 						uhangd_img[], uspin_img[],
 						uhangc_img[], uipcsrv_img[],
-						uipccli_img[];
+						uipccli_img[], uipksrv_img[],
+						uipkcli_img[], uipkpark_img[],
+						uipknd_img[];
 			extern unsigned int	uls_img_len, ufault_img_len,
 						ufaultd_img_len, uyield_img_len,
 						uhangd_img_len, uspin_img_len,
 						uhangc_img_len, uipcsrv_img_len,
-						uipccli_img_len;
+						uipccli_img_len, uipksrv_img_len,
+						uipkcli_img_len, uipkpark_img_len,
+						uipknd_img_len;
 			static const struct {
 				const char	*name;
 				unsigned char	*img;
@@ -1205,6 +1250,16 @@ user_syscall(struct arm_trap_frame *frame)
 				  &uipcsrv_img_len, -1 },
 				{ "embed:uipccli", uipccli_img,
 				  &uipccli_img_len, -1 },
+				/* IPC-2: blocking-recv pair + park
+				 * probes (see docs/rencana-ipc). */
+				{ "embed:uipksrv", uipksrv_img,
+				  &uipksrv_img_len, -1 },
+				{ "embed:uipkcli", uipkcli_img,
+				  &uipkcli_img_len, -1 },
+				{ "embed:uipkpark", uipkpark_img,
+				  &uipkpark_img_len, -1 },
+				{ "embed:uipknd", uipknd_img,
+				  &uipknd_img_len, -1 },
 			};
 			unsigned int hi, ei;
 			int matched = 0;
@@ -1612,10 +1667,19 @@ user_syscall(struct arm_trap_frame *frame)
 		return ipc_glue_send(cur_utask, a0,
 				     (const void *)a1, a2, a3);
 	case SYS_RECV:
-		/* IPC-1: a0=port name a1=buf a2=max. */
+		/* IPC-1: a0=port name a1=buf a2=max, a3=0
+		 * (poll). IPC-2: a3 != 0 is the blocking
+		 * form -- a3 > 0 a deadline in ms, a3 = -1
+		 * no deadline (bootlogged; see
+		 * sys_recv_block). One-shot callers (no
+		 * scheduler yet) always get poll semantics:
+		 * there is nobody to switch to. */
 		if (cur_utask == TASK_NULL || !user_range_ok(a1, a2))
 			return (unsigned int)-1;
-		return ipc_glue_recv(cur_utask, a0, (void *)a1, a2);
+		if (a3 == 0u || !sched_active || sched_cur < 0)
+			return ipc_glue_recv(cur_utask, a0,
+					     (void *)a1, a2);
+		return sys_recv_block(frame, a0, a1, a2, (int)a3);
 	case SYS_IPC_PORT: {
 		/* IPC-1: a0=sub. RV_* subs take the slot name
 		 * string in a1 and the port name in a2; the
@@ -1688,6 +1752,272 @@ sched_activate(struct daemon *d)
 	arm_pmap_activate_user(d->pmap);
 }
 
+/*
+ * IPC-2: blocking receive -- the third scheduler switch
+ * point (D-IPC-1; plan: docs/rencana-ipc, as-built:
+ * DEVLOG-IPC2.md).
+ *
+ * State 2 (WAITING) is now general: a daemon is in it
+ * either as a spawn parent (Q9: spawn_done collects it)
+ * or as an IPC waiter (ipc_wait_active set; the wait
+ * record in struct daemon collects it). wd_supervise()
+ * only ever judges state 1, so BOTH kinds of waiter are
+ * exempt from hang verdicts while parked -- the
+ * spawn-parent rule of FND-3, generalised.
+ *
+ * A wait completes in exactly three ways:
+ *  (1) a send stages a message on the port -- the glue
+ *      calls sched_ipc_wake_port() with the destination
+ *      port OBJECT; matching waiters become runnable;
+ *  (2) the deadline expires -- ipc_wait_expire() runs
+ *      in every switch prologue and once per tick in
+ *      the all-parked idle loop, and makes the waiter
+ *      runnable;
+ *  (3) never, for the no-deadline (-1) form -- allowed,
+ *      but bootlogged (event 17) so a parked-forever
+ *      daemon is visible in post-mortem, per D-IPC-1's
+ *      "never an *unobserved* infinite park". Daemon
+ *      death as a completion is IPC-3's lifecycle work.
+ * Wakes only flip state + stamp wd_last_progress
+ * (D-IPC-1: the wake restarts the progress clock, the
+ * Q9 spawn-wake precedent); the wait record stays open
+ * until the woken daemon re-enters SYS_RECV, where the
+ * verdict is decided in ITS OWN context: poll first (a
+ * queued message beats an expired deadline), then the
+ * deadline, then park again. That keeps every copyout
+ * in the receiver's own pmap -- no completion work is
+ * ever done in a waker's context.
+ *
+ * The resume channel: ctx_save_wait() parks the waiter
+ * with r0 = UIPC_EPARK in its saved ctx. Whichever
+ * switch later resumes it loads that ctx and the
+ * switch's caller returns sched_resume_ret, which
+ * trap.c writes over the frame's r0 -- so the waiter's
+ * SYS_RECV returns UIPC_EPARK and the ulib wrapper
+ * re-issues the call, which resolves the wait as
+ * above. No pc is ever rewound and no syscall is
+ * re-executed by the kernel.
+ */
+#define	IPC_EV_PARK_NODEADLINE	17u	/* bootlog: ipc park, no deadline */
+
+static void
+ctx_save_wait(struct user_ctx *c, struct arm_trap_frame *f)
+{
+	unsigned int i;
+	for (i = 0; i < 13u; i++)
+		c->r[i] = f->r[i];
+	c->pc = f->lr;
+	c->spsr = f->spsr;
+	ctx_save_usr(&c->sp_usr, &c->lr_usr);
+	c->r[0] = (unsigned int)UIPC_EPARK; /* resume verdict */
+}
+
+static void
+ipc_wait_wake_idx(unsigned int idx)
+{
+	struct daemon *d = &daemons[idx];
+
+	if (d->state != 2 || !d->ipc_wait_active)
+		return;
+	d->state = 1;	/* runnable again */
+	/* D-IPC-1: a wake is progress. */
+	d->wd_last_progress = arm_timer_ticks();
+}
+
+/* Called by the glue (ipc_glue.c) after a message has
+ * been staged: wake every waiter parked on that port
+ * object (at most one task can hold a receive right,
+ * but the scan does not rely on it). */
+void
+sched_ipc_wake_port(void *port_obj)
+{
+	unsigned int i;
+
+	if (port_obj == (void *)0)
+		return;
+	for (i = 0; i < NDAEMON; i++)
+		if (daemons[i].ipc_wait_active &&
+		    daemons[i].ipc_wait_port == port_obj)
+			ipc_wait_wake_idx(i);
+}
+
+static void
+ipc_wait_expire(unsigned int now)
+{
+	unsigned int i;
+
+	for (i = 0; i < NDAEMON; i++) {
+		struct daemon *d = &daemons[i];
+
+		if (d->ipc_wait_active && d->ipc_wait_deadline != 0u &&
+		    now >= d->ipc_wait_deadline)
+			ipc_wait_wake_idx(i);
+	}
+}
+
+static void
+ipc_park_log_nodeadline(struct daemon *d)
+{
+	char note[40];
+	unsigned int i = 0, j;
+	const char *pre = "ipc park-nodeadline ";
+
+	for (j = 0; pre[j] && i < sizeof(note) - 1u; j++)
+		note[i++] = pre[j];
+	for (j = 0; d->name[j] && i < sizeof(note) - 1u; j++)
+		note[i++] = d->name[j];
+	note[i] = 0;
+	bootstate_log_event(IPC_EV_PARK_NODEADLINE,
+			    arm_timer_ticks() * 10u, note);
+	printf("ipc: '%s' parked with no deadline (bootlogged ev=17)\n",
+	       d->name);
+}
+
+/*
+ * The wait switch itself. Parks the current daemon
+ * (already recorded as an IPC waiter by sys_recv_block)
+ * and resumes the next runnable daemon. Returns 1 when
+ * the CURRENT daemon can continue in place -- its own
+ * deadline expired during the prologue, or the
+ * all-parked idle loop ended with the current daemon
+ * runnable again -- and 0 when the frame now belongs to
+ * another daemon (sched_resume_ret set for the caller).
+ *
+ * All-parked idle: nobody is runnable, so instead of
+ * returning to a frame, spin here one timer tick at a
+ * time. SVC trap context in this port runs with IRQs
+ * MASKED (CPSR.I=1 -- measured: cpsr=0x...93 in the
+ * trap, spsr=0x...10 in user mode), so the tick
+ * counter (incremented in the IRQ handler) is frozen
+ * while a trap handler runs; the idle therefore
+ * unmasks IRQs for the raw tick wait itself and
+ * re-masks before doing any other kernel work, so
+ * every other line of this function runs in exactly
+ * the environment the other switch prologues run in.
+ * The nested timer IRQs are safe: they take their own
+ * frame on the SVC stack, and wd_irq_tick() only ever
+ * judges USER-mode frames ("kernel/WFI stretches are
+ * not hangs"), so class (b) cannot fire from here;
+ * stamping wd_last_activity per tick keeps its
+ * precondition false regardless. Per tick: pump the
+ * network (a TCP arrival can be the event a waiter
+ * indirectly needs, and HTTP stays alive) and expire
+ * deadlines. The first wake -- a deadline here, since
+ * no userspace runs to send -- ends the idle.
+ */
+static int
+sched_ipc_wait_switch(struct arm_trap_frame *f)
+{
+	struct daemon *cur, *next;
+
+	sched_resume_ret = 0;
+	wd_last_activity = arm_timer_ticks();	/* FND-3 */
+	net_pump();
+	gui_maybe_launch();	/* Boot UX: deferred GUI launch */
+	cur = &daemons[sched_cur];
+	ctx_save_wait(&cur->ctx, f);
+	cur->state = 2;	/* WAITING (IPC) */
+	ipc_wait_expire(arm_timer_ticks());
+#if WD_ENABLED
+	(void)wd_supervise();
+#endif
+	next = pick_next();
+	if (next == cur)
+		return 1;	/* own deadline already due */
+	if (next != 0) {
+		sched_cur = (int)(next - daemons);
+		sched_activate(next);
+		ctx_load(f, &next->ctx);
+		sched_resume_ret = next->ctx.r[0];
+		return 0;	/* switched away */
+	}
+	for (;;) {
+		unsigned int t0;
+
+		/* One tick with IRQs live (see the block
+		 * comment): the ONLY unmasked stretch in
+		 * the switch, bracketing a pure wait. */
+		__asm__ volatile ("cpsie i" ::: "memory");
+		t0 = arm_timer_ticks();
+		while (arm_timer_ticks() == t0) {
+			/* spin one tick */
+		}
+		__asm__ volatile ("cpsid i" ::: "memory");
+		wd_last_activity = arm_timer_ticks();
+		net_pump();
+		ipc_wait_expire(arm_timer_ticks());
+		next = pick_next();
+		if (next == 0)
+			continue;
+		if (next == cur)
+			return 1;	/* completed in place */
+		sched_cur = (int)(next - daemons);
+		sched_activate(next);
+		ctx_load(f, &next->ctx);
+		sched_resume_ret = next->ctx.r[0];
+		return 0;	/* switched away */
+	}
+}
+
+/*
+ * SYS_RECV, blocking form (a3 != 0). The poll always
+ * runs first: a message already queued is delivered
+ * without parking, and a message that raced a deadline
+ * beats it. Only the empty-queue path opens the wait
+ * record and parks. Re-dispatch after a wake keeps the
+ * ORIGINAL record (and deadline): the wait is one
+ * logical operation however many parks it took.
+ */
+static unsigned int
+sys_recv_block(struct arm_trap_frame *frame, unsigned int port,
+	       unsigned int ubuf, unsigned int max, int timeout_ms)
+{
+	struct daemon *d = &daemons[sched_cur];
+
+	for (;;) {
+		void *obj = (void *)0;
+		unsigned int rc = ipc_glue_recv_ex(cur_utask, port,
+		    (void *)ubuf, max, &obj);
+		unsigned int now;
+
+		if (rc != (unsigned int)UIPC_EEMPTY) {
+			d->ipc_wait_active = 0;
+			return rc;
+		}
+		now = arm_timer_ticks();
+		if (d->ipc_wait_active && d->ipc_wait_port == obj) {
+			/* Re-dispatch of an open wait. Still
+			 * empty: an expired deadline is the
+			 * verdict; otherwise park again under
+			 * the same record. */
+			if (d->ipc_wait_deadline != 0u &&
+			    now >= d->ipc_wait_deadline) {
+				d->ipc_wait_active = 0;
+				return (unsigned int)UIPC_ETIME;
+			}
+		} else {
+			/* Open the wait record. */
+			d->ipc_wait_active = 1;
+			d->ipc_wait_port = obj;
+			if (timeout_ms < 0) {
+				d->ipc_wait_deadline = 0u;
+				ipc_park_log_nodeadline(d);
+			} else {
+				/* 100 Hz ticks, rounded up: a
+				 * deadline never fires early. */
+				unsigned int ticks =
+				    ((unsigned int)timeout_ms + 9u) / 10u;
+				if (ticks == 0u)
+					ticks = 1u;
+				d->ipc_wait_deadline = now + ticks;
+			}
+		}
+		if (sched_ipc_wait_switch(frame))
+			continue;	/* completed in place */
+		return sched_resume_ret;	/* switched away */
+	}
+}
+
 static void
 sched_yield_switch(struct arm_trap_frame *f)
 {
@@ -1695,9 +2025,18 @@ sched_yield_switch(struct arm_trap_frame *f)
 	/* Pump network sekali tiap yield: HTTP tetap hidup di sela
 	 * daemon.  Driver net polling murni (tanpa IRQ) jadi aman
 	 * dari konteks trap SVC. */
+	sched_resume_ret = 0;	/* IPC-2 */
 	wd_last_activity = arm_timer_ticks();	/* FND-3 */
 	net_pump();
 	gui_maybe_launch();	/* Boot UX: deferred GUI launch */
+	/* IPC-2: a parked waiter's deadline may have come
+	 * due since the last switch; expiring it here (and
+	 * in the other switch prologues) is what guarantees
+	 * a parked daemon is re-examined at least once per
+	 * switch anywhere in the system. The wake stamps
+	 * wd_last_progress, so the supervisor below never
+	 * judges a just-expired waiter on its park age. */
+	ipc_wait_expire(arm_timer_ticks());
 	cur = &daemons[sched_cur];
 	ctx_save(&cur->ctx, f);
 #if WD_ENABLED
@@ -1710,6 +2049,7 @@ sched_yield_switch(struct arm_trap_frame *f)
 		 * directly instead of the saved ctx. */
 		sched_activate(cur);
 		ctx_load(f, &cur->ctx);
+		sched_resume_ret = cur->ctx.r[0];	/* IPC-2 */
 		return;
 	}
 #endif
@@ -1719,6 +2059,7 @@ sched_yield_switch(struct arm_trap_frame *f)
 	sched_cur = (int)(next - daemons);
 	sched_activate(next);
 	ctx_load(f, &next->ctx);
+	sched_resume_ret = next->ctx.r[0];	/* IPC-2 */
 }
 
 /*
@@ -1808,7 +2149,9 @@ static void
 sched_exit_switch(struct arm_trap_frame *f, unsigned int code)
 {
 	struct daemon *next;
+	sched_resume_ret = 0;	/* IPC-2 */
 	net_pump();
+	ipc_wait_expire(arm_timer_ticks());	/* IPC-2 prologue */
 	daemon_reclaim(sched_cur);	/* FND-2 */
 	printf("sched: '%s' exit 0x%x\n", daemons[sched_cur].name, code);
 	/* Q9: bila yang exit adalah child spawn, bangunkan parent. */
@@ -1844,6 +2187,7 @@ sched_exit_switch(struct arm_trap_frame *f, unsigned int code)
 	sched_cur = (int)(next - daemons);
 	sched_activate(next);
 	ctx_load(f, &next->ctx);
+	sched_resume_ret = next->ctx.r[0];	/* IPC-2 */
 }
 
 /* Daemon didaftarkan dari user_launch_init (setelah one-shot). */
@@ -2462,7 +2806,7 @@ wd_supervise(void)
 		unsigned int age;
 
 		if (d->state != 1)
-			continue;	/* dead, or WAITING on spawn */
+			continue;	/* dead, or WAITING (spawn parent Q9 / IPC waiter IPC-2): parked is not hung */
 		if (d->wd_hang_at == 0)
 			continue;	/* not supervised */
 		age = now - d->wd_last_progress;
