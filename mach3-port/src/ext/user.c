@@ -115,6 +115,8 @@ extern unsigned char	uvoice_img[];	/* D4: VOICE.START + AUD uplink */
 extern unsigned int	uvoice_img_len;
 extern unsigned char	ulinktest_img[];	/* C6L-1: link layer + wire freeze */
 extern unsigned int	ulinktest_img_len;
+extern unsigned char	ulinkbr_img[];	/* C6L-2: bridge test */
+extern unsigned int	ulinkbr_img_len;
 extern unsigned char	upl330_img[];	/* D2b: PL330 microcode */
 extern unsigned int	upl330_img_len;
 extern unsigned char	ulfs_img[];	/* B1: littlefs test */
@@ -1327,6 +1329,16 @@ user_syscall(struct arm_trap_frame *frame)
 				 * (see docs/rencana-ipc/DEVLOG-IPC5). */
 				{ "embed:uipcaud", uipcaud_img,
 				  &uipcaud_img_len, -1 },
+				/* C6L-2: bridge backend + host peer
+				 * test (see docs/rencana-komunikasi-
+				 * c6/DEVLOG-C6L2). Spawn-only on
+				 * purpose: a boot one-shot runs
+				 * with the scheduler inactive, where
+				 * SYS_YIELD is a nop and net_pump
+				 * never runs, so the bridge could
+				 * never complete a handshake there. */
+				{ "embed:ulinkbr", ulinkbr_img,
+				  &ulinkbr_img_len, -1 },
 			};
 			unsigned int hi, ei;
 			int matched = 0;

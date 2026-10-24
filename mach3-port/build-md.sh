@@ -140,7 +140,7 @@ for f in main ui ui_draw scr_menu scr_mon scr_settings scr_power scr_wifi scr_bl
     clang $UCFLAGS2 -c "$USR/uiapp/$f.c" -o "$BUILD/uiapp_$f.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/uiapp/$f.c (see $LOG)"; exit 1; }
 done
-for f in uartproto mock_comcu; do
+for f in uartproto mock_comcu bridge; do
     # shellcheck disable=SC2086
     clang $UCFLAGS2 -c "$USR/uartproto/$f.c" -o "$BUILD/uartproto_$f.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/uartproto/$f.c (see $LOG)"; exit 1; }
@@ -228,6 +228,32 @@ python3 "$USR/pad-bss.py" "$BUILD/ulinktest.bin" "$BUILD/ulinktest.elf" \
 python3 "$USR/embed.py" "$BUILD/ulinktest.bin" "$GEN/ulinktest_img.c" "ulinktest_img" 65536 >>"$LOG" 2>&1 || \
     { echo "FAIL embed ulinktest_img"; exit 1; }
 echo "USER: ulinktest.elf entry=$ENTRY ok"
+
+# --- 1d1b. user program ulinkbr (C6L-2): bridge backend + host peer test. ---
+echo "BUILD user program ulinkbr"
+# shellcheck disable=SC2086
+clang $UCFLAGS -I"$USR" -c "$USR/ulinkbr.c" -o "$BUILD/ulinkbr.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/ulinkbr.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/ulinkbr.elf" "$BUILD/ulinkbr.o" \
+    "$BUILD/uartproto_uartproto.o" "$BUILD/uartproto_mock_comcu.o" \
+    "$BUILD/uartproto_bridge.o" \
+    "$BUILD/cfg.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/ulinkbr.elf (see $LOG)"; exit 1; }
+ENTRY=$("$LLVM_READELF" -h "$BUILD/ulinkbr.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: ulinkbr entry $ENTRY != 0x100000"; exit 1; }
+"$LLVM_OBJCOPY" -O binary "$BUILD/ulinkbr.elf" "$BUILD/ulinkbr.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/ulinkbr.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/ulinkbr.bin" "$BUILD/ulinkbr.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/ulinkbr.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/ulinkbr.bin" "$GEN/ulinkbr_img.c" "ulinkbr_img" 65536 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed ulinkbr_img"; exit 1; }
+echo "USER: ulinkbr.elf entry=$ENTRY ok"
 
 # --- 1d. user program ntp (App A4): daemon sinkron jam via NTP. ---
 echo "BUILD user program ntp"
@@ -518,7 +544,7 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice ulinktest upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice ulinktest ulinkbr upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }
