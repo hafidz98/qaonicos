@@ -4,7 +4,7 @@ setup done -> finale screen screendump."""
 import socket, subprocess, os, sys, time, threading
 
 tc = os.path.expanduser("~/workspace/toolchain")
-ROOT = "/home/hatch/workspace/qaonic_os"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SER = "/tmp/onb2-ser.sock"
 MON = "/tmp/onb2-mon.sock"
 for s in (SER, MON):

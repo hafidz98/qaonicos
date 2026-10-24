@@ -23,7 +23,7 @@ phantom failures).
 """
 import os, re, socket, subprocess, sys, threading, time
 
-ROOT = "/home/hatch/workspace/qaonic_os"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tc = os.path.expanduser("~/workspace/toolchain")
 env = dict(os.environ)
 env["PATH"] = tc + "/usr/bin:" + env.get("PATH", "")

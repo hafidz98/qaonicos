@@ -50,7 +50,7 @@ exact name first.
 import http.client, os, re, socket, subprocess, sys
 import threading, time, urllib.parse
 
-ROOT = "/home/hatch/workspace/qaonic_os"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tc = os.path.expanduser("~/workspace/toolchain")
 env = dict(os.environ)
 env["PATH"] = tc + "/usr/bin:" + env.get("PATH", "")
