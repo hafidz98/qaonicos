@@ -175,10 +175,17 @@ int	sys_ipc_send(unsigned dest, const void *buf,
 		     unsigned len, unsigned flags);
 int	sys_ipc_recv(unsigned port, void *buf, unsigned max,
 		     int timeout_ms);
+int	sys_ipc_rpc(unsigned dest, void *buf, unsigned len,
+		    int timeout_ms);
+int	sys_ipc_rpc_user(const char *name, void *buf,
+			 unsigned len, int timeout_ms);
 int	sys_ipc_port(unsigned sub, unsigned a1, unsigned a2);
 int	uipc_port_alloc(void);
 int	uipc_port_destroy(unsigned name);
 int	uipc_port_setqlimit(unsigned name, unsigned limit);
+int	uipc_register(const char *name, unsigned port);
+int	uipc_lookup(const char *name);
+int	uipc_reg_gen(const char *name);
 int	uipc_send(unsigned dest, const struct uipc_msg *m,
 		  unsigned len);
 int	uipc_reply(unsigned dest_once, const struct uipc_msg *m,
@@ -187,9 +194,10 @@ int	uipc_recv_poll(unsigned port, struct uipc_msg *m,
 		       unsigned max);
 int	uipc_recv(unsigned port, struct uipc_msg *m,
 		  unsigned max, int timeout_ms);
-int	uipc_test_publish(const char *slot, unsigned port);
-int	uipc_test_resolve(const char *slot);
-int	uipc_test_claim(const char *slot);
+int	uipc_rpc(unsigned dest, struct uipc_msg *m,
+		 unsigned len, int timeout_ms);
+int	uipc_rpc_user(const char *name, struct uipc_msg *m,
+		      unsigned len, int timeout_ms);
 int	sys_event_inject(int ev);	/* dev/test: push EV_* into the event queue */
 int	sys_reset(void);	/* FND-1: software reset (never returns on success) */
 int	sys_poweroff(void);	/* FND-1: power off (never returns on success) */

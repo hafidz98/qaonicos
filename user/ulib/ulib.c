@@ -6,6 +6,11 @@
  * "lr" masuk clobber karena svc menimpanya (pelajaran Clang P6).
  */
 #include "ulib.h"
+/* Full struct uipc_msg: the RPC wrappers dereference
+ * hdr.reply / hdr.id (the other wrappers only pass
+ * pointers, which is why the forward declaration in
+ * ulib.h sufficed until IPC-4). */
+#include "uipc.h"
 
 int
 sys_write(int fd, const void *buf, unsigned len)
@@ -848,7 +853,19 @@ sys_spawn_wait(void)
  * defined in ulib/uipc.h; the numeric literals here mirror
  * them (uipc.h includes this header, not vice versa). */
 
-/* SYS_SEND (10): (dest, buf, len, flags) -> 0 or UIPC_E* */
+/* SYS_SEND (10): (dest, buf, len, flags) -> 0 or UIPC_E*.
+ * NOTE on the constraints: r0 is READ-WRITE -- it
+ * carries the argument in and the kernel's return
+ * value out (trap.c overwrites the frame's r0; r1-r3
+ * are restored). A pure input constraint for r0 lets
+ * the compiler reuse r0 across the call: the EPARK
+ * loop in uipc_recv() then re-issues the receive
+ * with port=-11 (the previous return value), which
+ * the glue rightly answers EDEST. That latent stub
+ * bug (invisible while IPC-2's build happened to
+ * reload the argument) is what the IPC-4 server
+ * probe caught; every IPC stub below models r0 as
+ * read-write for the same reason. */
 int
 sys_ipc_send(unsigned dest, const void *buf, unsigned len,
 	     unsigned flags)
@@ -857,15 +874,13 @@ sys_ipc_send(unsigned dest, const void *buf, unsigned len,
 	register unsigned _r1 __asm__("r1") = (unsigned)buf;
 	register unsigned _r2 __asm__("r2") = len;
 	register unsigned _r3 __asm__("r3") = flags;
-	int ret;
 	__asm__ volatile(
 		"mov r7, #10\n\t"
-		"svc #0\n\t"
-		"mov %0, r0"
-		: "=r" (ret)
-		: "r" (_r0), "r" (_r1), "r" (_r2), "r" (_r3)
+		"svc #0"
+		: "+r" (_r0)
+		: "r" (_r1), "r" (_r2), "r" (_r3)
 		: "r7", "lr", "memory", "cc");
-	return ret;
+	return (int)_r0;
 }
 
 /* SYS_RECV (11): (port, buf, max, timeout_ms) -> total
@@ -882,15 +897,58 @@ sys_ipc_recv(unsigned port, void *buf, unsigned max,
 	register unsigned _r1 __asm__("r1") = (unsigned)buf;
 	register unsigned _r2 __asm__("r2") = max;
 	register unsigned _r3 __asm__("r3") = (unsigned)timeout_ms;
-	int ret;
 	__asm__ volatile(
 		"mov r7, #11\n\t"
-		"svc #0\n\t"
-		"mov %0, r0"
-		: "=r" (ret)
-		: "r" (_r0), "r" (_r1), "r" (_r2), "r" (_r3)
+		"svc #0"
+		: "+r" (_r0)
+		: "r" (_r1), "r" (_r2), "r" (_r3)
 		: "r7", "lr", "memory", "cc");
-	return ret;
+	return (int)_r0;
+}
+
+/* SYS_RPC (12): (dest, buf, len, timeout_ms) -> reply
+ * len or UIPC_E*. The request is in buf with hdr.reply
+ * set to a reply port the caller holds; the reply is
+ * written over the request. A woken park returns
+ * UIPC_EPARK (-11) like SYS_RECV; the uipc_rpc()
+ * wrapper below continues the wait with a plain
+ * uipc_recv() on the reply port (never by re-issuing
+ * SYS_RPC, which would duplicate the request). */
+int
+sys_ipc_rpc(unsigned dest, void *buf, unsigned len,
+	    int timeout_ms)
+{
+	register unsigned _r0 __asm__("r0") = dest;
+	register unsigned _r1 __asm__("r1") = (unsigned)buf;
+	register unsigned _r2 __asm__("r2") = len;
+	register unsigned _r3 __asm__("r3") = (unsigned)timeout_ms;
+	__asm__ volatile(
+		"mov r7, #12\n\t"
+		"svc #0"
+		: "+r" (_r0)
+		: "r" (_r1), "r" (_r2), "r" (_r3)
+		: "r7", "lr", "memory", "cc");
+	return (int)_r0;
+}
+
+/* SYS_RPC_USER (23): (name string, buf, len, timeout_ms)
+ * -- registry lookup, then the SYS_RPC engine. Same
+ * return contract as SYS_RPC. */
+int
+sys_ipc_rpc_user(const char *name, void *buf, unsigned len,
+		 int timeout_ms)
+{
+	register unsigned _r0 __asm__("r0") = (unsigned)name;
+	register unsigned _r1 __asm__("r1") = (unsigned)buf;
+	register unsigned _r2 __asm__("r2") = len;
+	register unsigned _r3 __asm__("r3") = (unsigned)timeout_ms;
+	__asm__ volatile(
+		"mov r7, #23\n\t"
+		"svc #0"
+		: "+r" (_r0)
+		: "r" (_r1), "r" (_r2), "r" (_r3)
+		: "r7", "lr", "memory", "cc");
+	return (int)_r0;
 }
 
 /* SYS_IPC_PORT (25): (sub, a1, a2) -> name/0 or UIPC_E* */
@@ -900,19 +958,18 @@ sys_ipc_port(unsigned sub, unsigned a1, unsigned a2)
 	register unsigned _r0 __asm__("r0") = sub;
 	register unsigned _r1 __asm__("r1") = a1;
 	register unsigned _r2 __asm__("r2") = a2;
-	int ret;
 	__asm__ volatile(
 		"mov r7, #25\n\t"
-		"svc #0\n\t"
-		"mov %0, r0"
-		: "=r" (ret)
-		: "r" (_r0), "r" (_r1), "r" (_r2)
+		"svc #0"
+		: "+r" (_r0)
+		: "r" (_r1), "r" (_r2)
 		: "r7", "lr", "memory", "cc");
-	return ret;
+	return (int)_r0;
 }
 
 /* Sub-ops: 0 ALLOC_RECV, 1 DESTROY, 2 SETQLIMIT,
- * 3 RV_PUBLISH, 4 RV_RESOLVE, 5 RV_CLAIM (uipc.h). */
+ * 3 REGISTER, 4 LOOKUP, 5 REG_GEN (uipc.h). Subs >= 3
+ * take a name string in a1. */
 
 int
 uipc_port_alloc(void)
@@ -930,6 +987,24 @@ int
 uipc_port_setqlimit(unsigned name, unsigned limit)
 {
 	return sys_ipc_port(2u, name, limit);
+}
+
+int
+uipc_register(const char *name, unsigned port)
+{
+	return sys_ipc_port(3u, (unsigned)name, port);
+}
+
+int
+uipc_lookup(const char *name)
+{
+	return sys_ipc_port(4u, (unsigned)name, 0u);
+}
+
+int
+uipc_reg_gen(const char *name)
+{
+	return sys_ipc_port(5u, (unsigned)name, 0u);
 }
 
 int
@@ -968,22 +1043,48 @@ uipc_recv(unsigned port, struct uipc_msg *m, unsigned max,
 	return rc;
 }
 
+/* IPC-4 RPC wrapper. Allocates the reply port, sets
+ * hdr.reply, and destroys the reply port on every
+ * return path. A parked wait returns UIPC_EPARK (-11)
+ * from the raw stub; we continue it with a plain
+ * uipc_recv() on the reply port (the kernel wait
+ * record survives; re-issuing SYS_RPC would duplicate
+ * the request). A delivered Mach send-once death
+ * notice (id 71) is mapped to UIPC_EPEER. */
 int
-uipc_test_publish(const char *slot, unsigned port)
+uipc_rpc(unsigned dest, struct uipc_msg *m, unsigned len,
+	 int timeout_ms)
 {
-	return sys_ipc_port(3u, (unsigned)slot, port);
+	int reply = uipc_port_alloc();
+	int rc;
+	if (reply < 0)
+		return reply;
+	m->reply = (unsigned)reply;
+	rc = sys_ipc_rpc(dest, m, len, timeout_ms);
+	if (rc == -11)	/* UIPC_EPARK */
+		rc = uipc_recv((unsigned)reply, m, len, timeout_ms);
+	if (rc > 0 && m->id == 71)	/* notify, not a reply */
+		rc = -12;	/* UIPC_EPEER */
+	uipc_port_destroy((unsigned)reply);
+	return rc;
 }
 
 int
-uipc_test_resolve(const char *slot)
+uipc_rpc_user(const char *name, struct uipc_msg *m,
+	      unsigned len, int timeout_ms)
 {
-	return sys_ipc_port(4u, (unsigned)slot, 0u);
-}
-
-int
-uipc_test_claim(const char *slot)
-{
-	return sys_ipc_port(5u, (unsigned)slot, 0u);
+	int reply = uipc_port_alloc();
+	int rc;
+	if (reply < 0)
+		return reply;
+	m->reply = (unsigned)reply;
+	rc = sys_ipc_rpc_user(name, m, len, timeout_ms);
+	if (rc == -11)	/* UIPC_EPARK */
+		rc = uipc_recv((unsigned)reply, m, len, timeout_ms);
+	if (rc > 0 && m->id == 71)	/* notify, not a reply */
+		rc = -12;	/* UIPC_EPEER */
+	uipc_port_destroy((unsigned)reply);
+	return rc;
 }
 
 /* Q9: jadi eksklusif pembaca console. */

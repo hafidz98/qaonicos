@@ -145,6 +145,8 @@ extern unsigned char	utlscli_img[];	/* Q2b SEMENTARA: uji TLS client */
 extern unsigned int	utlscli_img_len;
 extern unsigned char	qabotd_img[];	/* Q4: daemon persisten Qabot */
 extern unsigned int	qabotd_img_len;
+extern unsigned char	uipcld_img[];	/* IPC-4: concurrent client daemon (test-only) */
+extern unsigned int	uipcld_img_len;
 extern unsigned char	qabot_img[];	/* Qabot harness Q1: ReAct + mock */
 extern unsigned int	qabot_img_len;
 
@@ -327,8 +329,9 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_POWEROFF	107u	/* FND-1: power off (PSCI SYSTEM_OFF) */
 #define	SYS_SEND	10u	/* IPC-1: ipc send (dest, buf, len, flags) -> 0/UIPC_E* */
 #define	SYS_RECV	11u	/* IPC-1: ipc recv (port, buf, max) -> len/UIPC_E*; IPC-2: a3=timeout ms (0=poll, >0=block till deadline, -1=block, no deadline) */
-/* 12 stays reserved for SYS_RPC (IPC-4). */
-#define	SYS_IPC_PORT	25u	/* IPC-1: port mgmt + test rendezvous (sub, a1, a2) */
+#define	SYS_RPC		12u	/* IPC-4: rpc (dest, buf, len, timeout_ms) -> reply len/UIPC_E*; request in, reply out, same buffer */
+#define	SYS_RPC_USER	23u	/* IPC-4: rpc by registry name (name string, buf, len, timeout_ms) */
+#define	SYS_IPC_PORT	25u	/* IPC-1: port mgmt; IPC-4: + registry (sub, a1, a2) */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -429,7 +432,7 @@ struct user_ctx {
 	unsigned int	spsr;
 };
 
-#define	NDAEMON		6u	/* face, uiapp, qabotd, sh (Q9), utcpkeep (F1), + slot spawn (Q9) */
+#define	NDAEMON		6u	/* face, uiapp, qabotd, uipcld (IPC-4), sh (Q9), + slot spawn (Q9) */
 #define	PROG_FACE	0
 #define	PROG_UIAPP	1
 #define	PROG_NTP	2	/* App A4: sinkron jam (tak pegang display) */
@@ -750,7 +753,35 @@ static void	sched_exit_switch(struct arm_trap_frame *frame, unsigned int code);
 static unsigned int sys_recv_block(struct arm_trap_frame *frame,
 				   unsigned int port, unsigned int ubuf,
 				   unsigned int max, int timeout_ms);
+/* IPC-4: RPC engine (definisi di blok IPC-4, setelah
+ * sys_recv_block). */
+static unsigned int sys_rpc_call(struct arm_trap_frame *frame,
+				 unsigned int dest, unsigned int ubuf,
+				 unsigned int len, int timeout_ms);
 extern void	net_pump(void);
+
+/* IPC-4: shared peer-note for SYS_SEND and the SYS_RPC
+ * engine. On a successful reply-carrying COPY_SEND,
+ * (re)set the pending peer: the old ref is released
+ * first, a ref on the destination object is taken and
+ * stored. A failed send, a send-once reply, or a
+ * no-reply send stages nothing. */
+static void
+rpc_peer_note(void *dest_obj, unsigned int reply, unsigned int flags)
+{
+	struct daemon *sd;
+
+	if (!sched_active || sched_cur < 0 ||
+	    (flags & UIPC_F_SEND_ONCE) || reply == 0u ||
+	    dest_obj == (void *)0)
+		return;
+	sd = &daemons[sched_cur];
+	if (sd->ipc_peer_next_obj != (void *)0)
+		ipc_glue_release_ref(sd->ipc_peer_next_obj);
+	ipc_glue_take_ref(dest_obj);
+	sd->ipc_peer_next_obj = dest_obj;
+	sd->ipc_peer_next_reply = reply;
+}
 
 /* #7 debug: current syscall number (for panic diagnosis). */
 unsigned int	dbg_cur_syscall;
@@ -1210,20 +1241,22 @@ user_syscall(struct arm_trap_frame *frame)
 			/* Test hooks: "embed:<name>" spawns an embedded
 			 * image without depending on FAT (Q9 pattern).
 			 *   embed:uls     Q9 spawn self-test program.
-			 *   embed:uipcsrv / embed:uipccli  IPC-1
-			 *     round-trip test pair.
-			 *   embed:uipksrv / embed:uipkcli  IPC-2
-			 *     blocking-recv round-trip pair;
-			 *     embed:uipkpark (65 s deadline park)
+			 *   embed:uipkpark (65 s deadline park)
 			 *     and embed:uipknd (no-deadline park)
-			 *     are IPC-2's park probes.
-			 *   embed:uipcdsetup / embed:uipcdclean /
-			 *     embed:uipcdfault / embed:uipcdwedge /
-			 *     embed:uipcdrain  IPC-3 lifecycle legs
-			 *     (driven from sh via the test-only
-			 *     `ipc` builtins: a spawn child cannot
-			 *     spawn, so no driver program can
-			 *     parent them).
+			 *     are IPC-2's park probes (kept: they
+			 *     do not use the deleted rendezvous).
+			 *   embed:uiptoolssrv  IPC-4 mock `tools`
+			 *     server. Its progid override (2, the
+			 *     qabotd daemon_images index) exists
+			 *     ONLY in this hook: the registry's
+			 *     reserved-name policy is progid-keyed,
+			 *     so a test server that must claim
+			 *     `tools` has to carry the owner progid
+			 *     (same precedent as ufaultd's
+			 *     PROG_UIAPP override below).
+			 *   embed:uipcregexit / embed:uipcregfull
+			 *     IPC-4 registry legs (anti-rendezvous
+			 *     + table-full probes).
 			 *   embed:ufault  FND-2: takes the console, faults.
 			 *   embed:ufaultd FND-2: becomes the display
 			 *     holder, then faults. Its progid override
@@ -1235,23 +1268,19 @@ user_syscall(struct arm_trap_frame *frame)
 			extern unsigned char	uls_img[], ufault_img[],
 						ufaultd_img[], uyield_img[],
 						uhangd_img[], uspin_img[],
-						uhangc_img[], uipcsrv_img[],
-						uipccli_img[], uipksrv_img[],
-						uipkcli_img[], uipkpark_img[],
+						uhangc_img[], uipkpark_img[],
 						uipknd_img[],
-						uipcdsetup_img[], uipcdclean_img[],
-						uipcdfault_img[], uipcdwedge_img[],
-						uipcdrain_img[];
+						uiptoolssrv_img[],
+						uipcregexit_img[],
+						uipcregfull_img[];
 			extern unsigned int	uls_img_len, ufault_img_len,
 						ufaultd_img_len, uyield_img_len,
 						uhangd_img_len, uspin_img_len,
-						uhangc_img_len, uipcsrv_img_len,
-						uipccli_img_len, uipksrv_img_len,
-						uipkcli_img_len, uipkpark_img_len,
+						uhangc_img_len, uipkpark_img_len,
 						uipknd_img_len,
-						uipcdsetup_img_len, uipcdclean_img_len,
-						uipcdfault_img_len, uipcdwedge_img_len,
-						uipcdrain_img_len;
+						uiptoolssrv_img_len,
+						uipcregexit_img_len,
+						uipcregfull_img_len;
 			static const struct {
 				const char	*name;
 				unsigned char	*img;
@@ -1275,33 +1304,21 @@ user_syscall(struct arm_trap_frame *frame)
 				  &uspin_img_len, -1 },
 				{ "embed:uhangc", uhangc_img,
 				  &uhangc_img_len, -1 },
-				/* IPC-1: Mach IPC round-trip pair
-				 * (see docs/rencana-ipc). */
-				{ "embed:uipcsrv", uipcsrv_img,
-				  &uipcsrv_img_len, -1 },
-				{ "embed:uipccli", uipccli_img,
-				  &uipccli_img_len, -1 },
-				/* IPC-2: blocking-recv pair + park
-				 * probes (see docs/rencana-ipc). */
-				{ "embed:uipksrv", uipksrv_img,
-				  &uipksrv_img_len, -1 },
-				{ "embed:uipkcli", uipkcli_img,
-				  &uipkcli_img_len, -1 },
+				/* IPC-2: park probes (see docs/rencana-ipc). */
 				{ "embed:uipkpark", uipkpark_img,
 				  &uipkpark_img_len, -1 },
 				{ "embed:uipknd", uipknd_img,
 				  &uipknd_img_len, -1 },
-				/* IPC-3: lifecycle legs (see docs/rencana-ipc). */
-				{ "embed:uipcdsetup", uipcdsetup_img,
-				  &uipcdsetup_img_len, -1 },
-				{ "embed:uipcdclean", uipcdclean_img,
-				  &uipcdclean_img_len, -1 },
-				{ "embed:uipcdfault", uipcdfault_img,
-				  &uipcdfault_img_len, -1 },
-				{ "embed:uipcdwedge", uipcdwedge_img,
-				  &uipcdwedge_img_len, -1 },
-				{ "embed:uipcdrain", uipcdrain_img,
-				  &uipcdrain_img_len, -1 },
+				/* IPC-4: mock tools server (progid 2,
+				 * the qabotd index, so it may claim
+				 * the reserved name `tools`) +
+				 * registry legs (see docs/rencana-ipc). */
+				{ "embed:uiptoolssrv", uiptoolssrv_img,
+				  &uiptoolssrv_img_len, 2 },
+				{ "embed:uipcregexit", uipcregexit_img,
+				  &uipcregexit_img_len, -1 },
+				{ "embed:uipcregfull", uipcregfull_img,
+				  &uipcregfull_img_len, -1 },
 			};
 			unsigned int hi, ei;
 			int matched = 0;
@@ -1717,13 +1734,14 @@ user_syscall(struct arm_trap_frame *frame)
 		 * and the glue answers its documented -6.
 		 * IPC-3: on a successful reply-carrying
 		 * COPY_SEND (not a send-once reply), the
-		 * pending peer is (re)set: the old ref is
-		 * released first, a ref on the destination
-		 * object is taken and stored. A failed
-		 * send stages nothing and touches nothing;
-		 * a no-reply send leaves a pending peer
-		 * untouched for a later park on its reply
-		 * port. v1 tracks only the most recent
+		 * pending peer is (re)set by rpc_peer_note
+		 * (shared with the SYS_RPC engine): the old
+		 * ref is released first, a ref on the
+		 * destination object is taken and stored.
+		 * A failed send stages nothing and touches
+		 * nothing; a no-reply send leaves a pending
+		 * peer untouched for a later park on its
+		 * reply port. v1 tracks only the most recent
 		 * outstanding request: parking on an older
 		 * reply port after a newer request is
 		 * unannotated (its deadline still bounds
@@ -1736,19 +1754,40 @@ user_syscall(struct arm_trap_frame *frame)
 		rc = ipc_glue_send_ex(cur_utask, a0,
 				      (const void *)a1, a2, a3,
 				      &dest_obj, &reply);
-		if (rc == 0u && sched_active && sched_cur >= 0 &&
-		    !(a3 & UIPC_F_SEND_ONCE) && reply != 0u &&
-		    dest_obj != (void *)0) {
-			struct daemon *sd = &daemons[sched_cur];
-
-			if (sd->ipc_peer_next_obj != (void *)0)
-				ipc_glue_release_ref(
-				    sd->ipc_peer_next_obj);
-			ipc_glue_take_ref(dest_obj);
-			sd->ipc_peer_next_obj = dest_obj;
-			sd->ipc_peer_next_reply = reply;
-		}
+		if (rc == 0u)
+			rpc_peer_note(dest_obj, reply, a3);
 		return rc;
+	}
+	case SYS_RPC:
+		/* IPC-4: a0=dest name a1=buf a2=len
+		 * a3=timeout_ms (SYS_RECV encoding). The
+		 * request header's reply field names the
+		 * reply port the caller holds (0 = the
+		 * caller used the uipc_rpc wrapper, which
+		 * always sets one; a raw 0 here is a
+		 * no-reply request whose wait can only end
+		 * by deadline -- the engine treats it as
+		 * EINVAL, since an RPC without a reply
+		 * port is a caller bug, not a wait). */
+		if (cur_utask == TASK_NULL || !user_range_ok(a1, a2))
+			return (unsigned int)-1;
+		return sys_rpc_call(frame, a0, a1, a2, (int)a3);
+	case SYS_RPC_USER: {
+		/* IPC-4: a0=name string, a1=buf, a2=len,
+		 * a3=timeout_ms. Registry lookup first,
+		 * then the SYS_RPC engine. */
+		static char kname[16];
+		unsigned int dest;
+
+		if (cur_utask == TASK_NULL || !user_range_ok(a1, a2))
+			return (unsigned int)-1;
+		if (copy_path_user(a0, kname, sizeof(kname)) != 0)
+			return (unsigned int)-1;
+		dest = ipc_glue_registry(cur_utask, cur_progid,
+					 IPCP_LOOKUP, kname, 0u);
+		if ((int)dest < 0)
+			return dest;
+		return sys_rpc_call(frame, dest, a1, a2, (int)a3);
 	}
 	case SYS_RECV:
 		/* IPC-1: a0=port name a1=buf a2=max, a3=0
@@ -1765,17 +1804,22 @@ user_syscall(struct arm_trap_frame *frame)
 					     (void *)a1, a2);
 		return sys_recv_block(frame, a0, a1, a2, (int)a3);
 	case SYS_IPC_PORT: {
-		/* IPC-1: a0=sub. RV_* subs take the slot name
-		 * string in a1 and the port name in a2; the
-		 * plain subs take name in a1, qlimit in a2. */
+		/* IPC-1: a0=sub. Registry subs (>= 3) take
+		 * the name string in a1 and the port name
+		 * in a2; the plain subs take name in a1,
+		 * qlimit in a2. The caller's progid is the
+		 * kernel-assigned spawn identity (see
+		 * ipc_glue.h); it is passed, never trusted
+		 * from the caller. */
 		static char kname[16];
-		if (a0 >= IPCP_RV_PUBLISH) {
+		if (a0 >= IPCP_REGISTER) {
 			if (copy_path_user(a1, kname, sizeof(kname)) != 0)
 				return (unsigned int)-1;
-			return ipc_glue_port(cur_utask, a0, kname, a2, 0u);
+			return ipc_glue_port(cur_utask, cur_progid,
+					     a0, kname, a2, 0u);
 		}
-		return ipc_glue_port(cur_utask, a0, (const char *)0,
-				     a1, a2);
+		return ipc_glue_port(cur_utask, cur_progid, a0,
+				     (const char *)0, a1, a2);
 	}
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
@@ -2221,6 +2265,59 @@ sys_recv_block(struct arm_trap_frame *frame, unsigned int port,
 	}
 }
 
+/* IPC-4 RPC engine (SYS_RPC / SYS_RPC_USER share it;
+ * the USER form resolves the name first, then calls
+ * here with the send name). The request is in ubuf
+ * with hdr.reply naming a reply port the caller holds
+ * (the uipc_rpc wrapper always sets one; a raw call
+ * with reply 0 is EINVAL -- an RPC without a reply
+ * port is a caller bug, not a wait). Steps:
+ *   1. send via the glue (COPY_SEND, never
+ *      SEND_ONCE for a request); on success the peer
+ *      note is set exactly as SYS_SEND sets it, so
+ *      the IPC-3 EPEER path covers a server that
+ *      dies mid-RPC.
+ *   2. one-shot callers (no scheduler) get a single
+ *      poll: EEMPTY if no reply yet.
+ *   3. daemon callers wait with sys_recv_block on
+ *      the reply port, same buffer, same timeout
+ *      encoding (0 = poll, >0 = deadline ms, -1 =
+ *      no deadline). If the park switches away, the
+ *      syscall returns UIPC_EPARK and the ulib
+ *      wrapper continues the wait with a plain
+ *      uipc_recv on the reply port -- it NEVER
+ *      re-issues SYS_RPC, which would duplicate the
+ *      request. The wait record's original deadline
+ *      governs the re-dispatch, so continuing with
+ *      the original timeout is safe.
+ * A reply larger than the request buffer returns
+ * UIPC_E2BIG and the message stays queued (Mach
+ * semantics); the wrapper destroys its reply port
+ * on E2BIG, discarding that queued reply. */
+static unsigned int
+sys_rpc_call(struct arm_trap_frame *frame, unsigned int dest,
+	     unsigned int ubuf, unsigned int len, int timeout_ms)
+{
+	void *dest_obj = (void *)0;
+	unsigned int reply = 0u, rc;
+	unsigned int hdr_reply;
+
+	if (len < 24u)
+		return (unsigned int)UIPC_EINVAL;
+	hdr_reply = ((const unsigned int *)ubuf)[0];
+	if (hdr_reply == 0u)
+		return (unsigned int)UIPC_EINVAL;
+	rc = ipc_glue_send_ex(cur_utask, dest, (const void *)ubuf,
+			      len, 0u, &dest_obj, &reply);
+	if (rc != 0u)
+		return rc;
+	rpc_peer_note(dest_obj, reply, 0u);
+	if (!sched_active || sched_cur < 0)
+		return ipc_glue_recv(cur_utask, reply, (void *)ubuf,
+				     len);
+	return sys_recv_block(frame, reply, ubuf, len, timeout_ms);
+}
+
 static void
 sched_yield_switch(struct arm_trap_frame *f)
 {
@@ -2525,9 +2622,9 @@ sched_register_daemon(const char *name, task_t task, pmap_t pmap,
 	case 0:	/* face */
 	case 1:	/* uiapp */
 		d->wd_warn_at = 1000u; d->wd_hang_at = 2000u; break;
-	case 3:	/* sh */
+	case 4:	/* sh (last daemon_images entry; see below) */
 		d->wd_warn_at = 6000u; d->wd_hang_at = 12000u; break;
-	default: /* qabotd + any future daemon */
+	default: /* qabotd + uipcld + any future daemon */
 		d->wd_warn_at = 1500u; d->wd_hang_at = 3000u; break;
 	}
 	if (nuprog < UPROG_MAX) {
@@ -2924,7 +3021,12 @@ static struct uprog_image daemon_images[] = {
 	/* { "utcpcli", utcpcli_img, &utcpcli_img_len, 1u }, */	/* Nonaktif: tcc hanya 1 koneksi (race dengan utlscli). Aktifkan untuk uji Q2a saja. */
 	/* { "utlscli", utlscli_img, &utlscli_img_len, 8u }, */	/* Nonaktif Q2c/F2: tcc 1 koneksi; aktifkan sementara untuk uji TLS */
 	{ "qabotd", qabotd_img, &qabotd_img_len, 8u },	/* progid 2: Qabot daemon persisten (Q4) */
-	{ "sh", sh_img, &sh_img_len, 1u },	/* progid 3: shell qaon> (Q9) */
+	{ "uipcld", uipcld_img, &uipcld_img_len, 1u },	/* progid 3: IPC-4 concurrent client daemon (test-only,
+							 * marker-gated: dormant without /data/iptoolsc-test
+							 * == "1"; INSERTED BEFORE sh -- sh must stay last,
+							 * see SH_IMAGE_IDX below; the 15/30 s default
+							 * watchdog class above applies to it) */
+	{ "sh", sh_img, &sh_img_len, 1u },	/* progid 4: shell qaon> (Q9) */
 	/* { "utcpkeep", utcpkeep_img, &utcpkeep_img_len, 1u }, */	/* F1: nonaktif (tcc 1 koneksi) */
 	/* { "utlskeep", utlskeep_img, &utlskeep_img_len, 1u }, */	/* F1: nonaktif (investigasi selesai) */
 

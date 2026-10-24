@@ -1,0 +1,36 @@
+PASS boot 1 reaches qaon> prompt
+PASS boot 1 shell alive (bootctl)
+PASS lookup-before-register -> ENORV (-9)
+FAIL reserved `tools` claimed from sh -> EPERM (-13)
+FAIL refused claim has no side effect (lookup still ENORV)
+FAIL unbound reserved `link` -> EPERM (-13)
+PASS open name registers ok
+FAIL lookup returns send name + generation 1
+FAIL gen reads back 1
+FAIL qlimit 2 on own port ok
+PASS self-send 1 ok
+PASS self-send 2 ok (queue now full)
+FAIL third self-send -> EFULL (-4)
+FAIL pollrecv drains first (id 11)
+FAIL pollrecv drains second (id 12)
+FAIL pollrecv on empty -> EEMPTY (-5)
+PASS oversize send -> E2BIG (-6)
+FAIL destroy own port ok
+FAIL send to destroyed port -> EDEST (-3)
+PASS regexit leg registers + exits 0
+FAIL lookup of dead-owner entry -> EDEST (-3), not a live port
+FAIL death bumped the generation to 2
+FAIL table-full leg exits 0
+FAIL table-full: 8 registrations ok
+FAIL table-full: 9th registration -> EBUSY (-7)
+PASS boot 1: no kernel fault anywhere
+PASS boot 1: shell responsive at the end (fail_count=0)
+PASS boot 2 arrives after reboot
+PASS boot 2 reaches qaon> prompt
+PASS boot 2: web login creates PIN + session
+PASS boot 2: web settings enable the web shell
+PASS boot 2: marker set to 1
+PASS boot 2: GUI daemons launched
+PASS boot 2: web shell accepted run embed:uiptoolssrv
+PASS server#1 registered `tools`
+FAIL client lookup gen 1
