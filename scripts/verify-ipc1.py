@@ -165,12 +165,12 @@ check("shell alive (bootctl)", shell_cmd("bootctl", "fail_count=", 30))
 srv_pass = False
 cli_pass = False
 seg = run_prog("uipcsrv")
-check("srv setup run exits 0", "exit 0" in seg)
+check("srv setup run exits 0", "exit 0\n" in seg)
 check("srv setup: port published via rendezvous",
       "UIPCSRV: setup port published" in seg)
 
 seg = run_prog("uipccli")
-check("cli setup run exits 0", "exit 0" in seg)
+check("cli setup run exits 0", "exit 0\n" in seg)
 check("probe: recv on empty queue -> -5 (EEMPTY)",
       "UIPCCLI: probe empty-queue rc=-5 OK" in seg)
 check("probe: send to full queue -> -4 (EFULL)",
@@ -189,12 +189,12 @@ for rnd in range(10):
         break
     if not srv_pass:
         seg = run_prog("uipcsrv")
-        check(f"srv drain round {rnd} exits 0", "exit 0" in seg)
+        check(f"srv drain round {rnd} exits 0", "exit 0\n" in seg)
         if "UIPCSRV: PASS served=100/100" in seg:
             srv_pass = True
     if not cli_pass:
         seg = run_prog("uipccli")
-        check(f"cli round {rnd} exits 0", "exit 0" in seg)
+        check(f"cli round {rnd} exits 0", "exit 0\n" in seg)
         if "UIPCCLI: PASS replies=100/100" in seg:
             cli_pass = True
 
@@ -208,6 +208,8 @@ check("shell responsive at the end (fail_count=0)",
       shell_cmd("bootctl", "fail_count=0", 30))
 
 p.kill()
+with open(os.path.join(ROOT, "logs", "ipc1-serial.log"), "wb") as fh:
+    fh.write(serial)
 fails = [n for n, ok in results if not ok]
 print(f"IPC1-VERIFY: {'PASS' if not fails else 'FAIL'} "
       f"({len(results) - len(fails)}/{len(results)} checks)")
