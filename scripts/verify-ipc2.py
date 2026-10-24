@@ -332,6 +332,11 @@ st, hd, body = req("POST", "/settings",
                         "mode": "dev", "shell_on": "on"}),
                    cookie=cookie)
 check("boot 2: web settings enable the web shell", st == 200)
+# Provision so the face leaves its setup QR screen for
+# the home screen (it polls the flag ~1 Hz); boot 3's
+# `setup reset` restores the unprovisioned state.
+check("boot 2: setup done provisions the device",
+      shell_cmd("setup done", "device provisioned", 20))
 
 
 def web_cmd(cmd):
@@ -347,11 +352,12 @@ check("boot 2: GUI daemons launched",
 time.sleep(3)
 
 # The face opens on the setup QR while the device is
-# unprovisioned and settles on its home (eyes) screen
-# after a while; wait for the home screen so the
-# mid-park liveness check below samples the same state
-# in every run (an earlier version sampled blindly and
-# raced the QR screen).
+# unprovisioned (boot 2 provisioned it above) and
+# settles on its home (eyes) screen once it notices
+# the flag; wait for the home screen so the mid-park
+# liveness check below samples the same state in every
+# run (an earlier version sampled blindly and raced
+# the QR screen).
 ec = 0
 for _try in range(30):
     ec = eye_count(screendump("ipc2-nd-pre"))
