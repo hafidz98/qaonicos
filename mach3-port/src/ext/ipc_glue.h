@@ -27,25 +27,32 @@
 #define UIPC_ETIME	(-10)	/* IPC-2: blocking deadline expiry */
 #define UIPC_EPARK	(-11)	/* IPC-2: internal park/wake code */
 #define UIPC_EPEER	(-12)	/* IPC-3: RPC peer died while waiting */
+#define UIPC_EPERM	(-13)	/* IPC-4: reserved name, non-owner */
 
 #define UIPC_F_SEND_ONCE	1u
 
-/* SYS_IPC_PORT sub-ops (mirror uipc.h IPCP_*). */
+/* SYS_IPC_PORT sub-ops (mirror uipc.h IPCP_*). Subs >= 3
+ * take a kernel-copied name string. */
 #define IPCP_ALLOC_RECV	0u
 #define IPCP_DESTROY	1u
 #define IPCP_SETQLIMIT	2u
-#define IPCP_RV_PUBLISH	3u
-#define IPCP_RV_RESOLVE	4u
-#define IPCP_RV_CLAIM	5u
+#define IPCP_REGISTER	3u
+#define IPCP_LOOKUP	4u
+#define IPCP_REG_GEN	5u
 
 /* SYS_SEND: (who, dest name, user buf, total len, flags).
  * SYS_RECV: (who, port name, user buf, buffer max).
- * SYS_IPC_PORT: (who, sub, kname, x, y) -- for the RV_*
- * subs kname is the kernel-copied slot-name string and x
- * is the port name (PUBLISH); for the plain subs kname
- * is NULL, x is the port name and y the qlimit
- * (SETQLIMIT). Returns are >= 0 on success (a byte count
- * or a port name) or a UIPC_E* code, as unsigned. */
+ * SYS_IPC_PORT: (who, progid, sub, kname, x, y) --
+ * progid is the caller's kernel-assigned spawn identity
+ * (the daemon_images index the kernel itself spawned,
+ * -1 for one-shots); the registry's reserved-name
+ * policy keys on it and NEVER on a caller-supplied id.
+ * For the registry subs kname is the kernel-copied
+ * name string and x is the port name (REGISTER); for
+ * the plain subs kname is NULL, x is the port name
+ * and y the qlimit (SETQLIMIT). Returns are >= 0 on
+ * success (a byte count or a port name) or a UIPC_E*
+ * code, as unsigned. */
 extern unsigned int ipc_glue_send(task_t who, unsigned int dest,
 				  const void *ubuf, unsigned int len,
 				  unsigned int flags);
@@ -62,9 +69,24 @@ extern unsigned int ipc_glue_recv(task_t who, unsigned int port,
 extern unsigned int ipc_glue_recv_ex(task_t who, unsigned int port,
 				     void *ubuf, unsigned int max,
 				     void **obj_out);
-extern unsigned int ipc_glue_port(task_t who, unsigned int sub,
+extern unsigned int ipc_glue_port(task_t who, int progid,
+				  unsigned int sub,
 				  const char *kname, unsigned int x,
 				  unsigned int y);
+/* IPC-4 registry (name -> port + generation, kernel
+ * resident). REGISTER binds a name to the caller's
+ * receive port (progid-keyed reserved-name policy);
+ * LOOKUP mints a send right + reports the entry
+ * generation only via REG_GEN (the syscall returns a
+ * single value). registry_dead marks every entry
+ * holding the destroyed port object dead and bumps
+ * its generation; it is called from teardown pass 1
+ * and from the DESTROY hook, with the object pinned. */
+extern unsigned int ipc_glue_registry(task_t who, int progid,
+				      unsigned int sub,
+				      const char *name,
+				      unsigned int port);
+extern void ipc_glue_registry_dead(void *obj);
 /* IPC-3: send variant that also reports the destination
  * port OBJECT (an ipc_port_t, opaque void *) and the
  * reply port NAME from the message header, on success

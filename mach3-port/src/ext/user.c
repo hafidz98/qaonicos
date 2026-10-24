@@ -329,8 +329,9 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_POWEROFF	107u	/* FND-1: power off (PSCI SYSTEM_OFF) */
 #define	SYS_SEND	10u	/* IPC-1: ipc send (dest, buf, len, flags) -> 0/UIPC_E* */
 #define	SYS_RECV	11u	/* IPC-1: ipc recv (port, buf, max) -> len/UIPC_E*; IPC-2: a3=timeout ms (0=poll, >0=block till deadline, -1=block, no deadline) */
-/* 12 stays reserved for SYS_RPC (IPC-4). */
-#define	SYS_IPC_PORT	25u	/* IPC-1: port mgmt + test rendezvous (sub, a1, a2) */
+#define	SYS_RPC		12u	/* IPC-4: rpc (dest, buf, len, timeout_ms) -> reply len/UIPC_E*; request in, reply out, same buffer */
+#define	SYS_RPC_USER	23u	/* IPC-4: rpc by registry name (name string, buf, len, timeout_ms) */
+#define	SYS_IPC_PORT	25u	/* IPC-1: port mgmt; IPC-4: + registry (sub, a1, a2) */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -752,7 +753,35 @@ static void	sched_exit_switch(struct arm_trap_frame *frame, unsigned int code);
 static unsigned int sys_recv_block(struct arm_trap_frame *frame,
 				   unsigned int port, unsigned int ubuf,
 				   unsigned int max, int timeout_ms);
+/* IPC-4: RPC engine (definisi di blok IPC-4, setelah
+ * sys_recv_block). */
+static unsigned int sys_rpc_call(struct arm_trap_frame *frame,
+				 unsigned int dest, unsigned int ubuf,
+				 unsigned int len, int timeout_ms);
 extern void	net_pump(void);
+
+/* IPC-4: shared peer-note for SYS_SEND and the SYS_RPC
+ * engine. On a successful reply-carrying COPY_SEND,
+ * (re)set the pending peer: the old ref is released
+ * first, a ref on the destination object is taken and
+ * stored. A failed send, a send-once reply, or a
+ * no-reply send stages nothing. */
+static void
+rpc_peer_note(void *dest_obj, unsigned int reply, unsigned int flags)
+{
+	struct daemon *sd;
+
+	if (!sched_active || sched_cur < 0 ||
+	    (flags & UIPC_F_SEND_ONCE) || reply == 0u ||
+	    dest_obj == (void *)0)
+		return;
+	sd = &daemons[sched_cur];
+	if (sd->ipc_peer_next_obj != (void *)0)
+		ipc_glue_release_ref(sd->ipc_peer_next_obj);
+	ipc_glue_take_ref(dest_obj);
+	sd->ipc_peer_next_obj = dest_obj;
+	sd->ipc_peer_next_reply = reply;
+}
 
 /* #7 debug: current syscall number (for panic diagnosis). */
 unsigned int	dbg_cur_syscall;
@@ -1705,13 +1734,14 @@ user_syscall(struct arm_trap_frame *frame)
 		 * and the glue answers its documented -6.
 		 * IPC-3: on a successful reply-carrying
 		 * COPY_SEND (not a send-once reply), the
-		 * pending peer is (re)set: the old ref is
-		 * released first, a ref on the destination
-		 * object is taken and stored. A failed
-		 * send stages nothing and touches nothing;
-		 * a no-reply send leaves a pending peer
-		 * untouched for a later park on its reply
-		 * port. v1 tracks only the most recent
+		 * pending peer is (re)set by rpc_peer_note
+		 * (shared with the SYS_RPC engine): the old
+		 * ref is released first, a ref on the
+		 * destination object is taken and stored.
+		 * A failed send stages nothing and touches
+		 * nothing; a no-reply send leaves a pending
+		 * peer untouched for a later park on its
+		 * reply port. v1 tracks only the most recent
 		 * outstanding request: parking on an older
 		 * reply port after a newer request is
 		 * unannotated (its deadline still bounds
@@ -1724,19 +1754,40 @@ user_syscall(struct arm_trap_frame *frame)
 		rc = ipc_glue_send_ex(cur_utask, a0,
 				      (const void *)a1, a2, a3,
 				      &dest_obj, &reply);
-		if (rc == 0u && sched_active && sched_cur >= 0 &&
-		    !(a3 & UIPC_F_SEND_ONCE) && reply != 0u &&
-		    dest_obj != (void *)0) {
-			struct daemon *sd = &daemons[sched_cur];
-
-			if (sd->ipc_peer_next_obj != (void *)0)
-				ipc_glue_release_ref(
-				    sd->ipc_peer_next_obj);
-			ipc_glue_take_ref(dest_obj);
-			sd->ipc_peer_next_obj = dest_obj;
-			sd->ipc_peer_next_reply = reply;
-		}
+		if (rc == 0u)
+			rpc_peer_note(dest_obj, reply, a3);
 		return rc;
+	}
+	case SYS_RPC:
+		/* IPC-4: a0=dest name a1=buf a2=len
+		 * a3=timeout_ms (SYS_RECV encoding). The
+		 * request header's reply field names the
+		 * reply port the caller holds (0 = the
+		 * caller used the uipc_rpc wrapper, which
+		 * always sets one; a raw 0 here is a
+		 * no-reply request whose wait can only end
+		 * by deadline -- the engine treats it as
+		 * EINVAL, since an RPC without a reply
+		 * port is a caller bug, not a wait). */
+		if (cur_utask == TASK_NULL || !user_range_ok(a1, a2))
+			return (unsigned int)-1;
+		return sys_rpc_call(frame, a0, a1, a2, (int)a3);
+	case SYS_RPC_USER: {
+		/* IPC-4: a0=name string, a1=buf, a2=len,
+		 * a3=timeout_ms. Registry lookup first,
+		 * then the SYS_RPC engine. */
+		static char kname[16];
+		unsigned int dest;
+
+		if (cur_utask == TASK_NULL || !user_range_ok(a1, a2))
+			return (unsigned int)-1;
+		if (copy_path_user(a0, kname, sizeof(kname)) != 0)
+			return (unsigned int)-1;
+		dest = ipc_glue_registry(cur_utask, cur_progid,
+					 IPCP_LOOKUP, kname, 0u);
+		if ((int)dest < 0)
+			return dest;
+		return sys_rpc_call(frame, dest, a1, a2, (int)a3);
 	}
 	case SYS_RECV:
 		/* IPC-1: a0=port name a1=buf a2=max, a3=0
@@ -1753,17 +1804,22 @@ user_syscall(struct arm_trap_frame *frame)
 					     (void *)a1, a2);
 		return sys_recv_block(frame, a0, a1, a2, (int)a3);
 	case SYS_IPC_PORT: {
-		/* IPC-1: a0=sub. RV_* subs take the slot name
-		 * string in a1 and the port name in a2; the
-		 * plain subs take name in a1, qlimit in a2. */
+		/* IPC-1: a0=sub. Registry subs (>= 3) take
+		 * the name string in a1 and the port name
+		 * in a2; the plain subs take name in a1,
+		 * qlimit in a2. The caller's progid is the
+		 * kernel-assigned spawn identity (see
+		 * ipc_glue.h); it is passed, never trusted
+		 * from the caller. */
 		static char kname[16];
-		if (a0 >= IPCP_RV_PUBLISH) {
+		if (a0 >= IPCP_REGISTER) {
 			if (copy_path_user(a1, kname, sizeof(kname)) != 0)
 				return (unsigned int)-1;
-			return ipc_glue_port(cur_utask, a0, kname, a2, 0u);
+			return ipc_glue_port(cur_utask, cur_progid,
+					     a0, kname, a2, 0u);
 		}
-		return ipc_glue_port(cur_utask, a0, (const char *)0,
-				     a1, a2);
+		return ipc_glue_port(cur_utask, cur_progid, a0,
+				     (const char *)0, a1, a2);
 	}
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
@@ -2207,6 +2263,59 @@ sys_recv_block(struct arm_trap_frame *frame, unsigned int port,
 			continue;	/* completed in place */
 		return sched_resume_ret;	/* switched away */
 	}
+}
+
+/* IPC-4 RPC engine (SYS_RPC / SYS_RPC_USER share it;
+ * the USER form resolves the name first, then calls
+ * here with the send name). The request is in ubuf
+ * with hdr.reply naming a reply port the caller holds
+ * (the uipc_rpc wrapper always sets one; a raw call
+ * with reply 0 is EINVAL -- an RPC without a reply
+ * port is a caller bug, not a wait). Steps:
+ *   1. send via the glue (COPY_SEND, never
+ *      SEND_ONCE for a request); on success the peer
+ *      note is set exactly as SYS_SEND sets it, so
+ *      the IPC-3 EPEER path covers a server that
+ *      dies mid-RPC.
+ *   2. one-shot callers (no scheduler) get a single
+ *      poll: EEMPTY if no reply yet.
+ *   3. daemon callers wait with sys_recv_block on
+ *      the reply port, same buffer, same timeout
+ *      encoding (0 = poll, >0 = deadline ms, -1 =
+ *      no deadline). If the park switches away, the
+ *      syscall returns UIPC_EPARK and the ulib
+ *      wrapper continues the wait with a plain
+ *      uipc_recv on the reply port -- it NEVER
+ *      re-issues SYS_RPC, which would duplicate the
+ *      request. The wait record's original deadline
+ *      governs the re-dispatch, so continuing with
+ *      the original timeout is safe.
+ * A reply larger than the request buffer returns
+ * UIPC_E2BIG and the message stays queued (Mach
+ * semantics); the wrapper destroys its reply port
+ * on E2BIG, discarding that queued reply. */
+static unsigned int
+sys_rpc_call(struct arm_trap_frame *frame, unsigned int dest,
+	     unsigned int ubuf, unsigned int len, int timeout_ms)
+{
+	void *dest_obj = (void *)0;
+	unsigned int reply = 0u, rc;
+	unsigned int hdr_reply;
+
+	if (len < 24u)
+		return (unsigned int)UIPC_EINVAL;
+	hdr_reply = ((const unsigned int *)ubuf)[0];
+	if (hdr_reply == 0u)
+		return (unsigned int)UIPC_EINVAL;
+	rc = ipc_glue_send_ex(cur_utask, dest, (const void *)ubuf,
+			      len, 0u, &dest_obj, &reply);
+	if (rc != 0u)
+		return rc;
+	rpc_peer_note(dest_obj, reply, 0u);
+	if (!sched_active || sched_cur < 0)
+		return ipc_glue_recv(cur_utask, reply, (void *)ubuf,
+				     len);
+	return sys_recv_block(frame, reply, ubuf, len, timeout_ms);
 }
 
 static void

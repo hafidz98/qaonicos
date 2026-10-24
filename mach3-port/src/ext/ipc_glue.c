@@ -445,6 +445,13 @@ ipc_glue_teardown(task_t who, unsigned int *ports_out,
 		if (mach_port_destroy(space, name) == KERN_SUCCESS)
 			ports++;
 		sched_ipc_wake_peer((void *)port);
+		/* IPC-4: a destroyed receive port kills its
+		 * registry entry (dead, generation bumped),
+		 * so lookups during the respawn window
+		 * answer EDEST instead of minting a right
+		 * to a corpse. The object is pinned across
+		 * the destroy, so the comparison is safe. */
+		ipc_glue_registry_dead((void *)port);
 		ipc_object_release((ipc_object_t)port);
 	}
 	/* Pass 2: everything else (send, send-once,
@@ -468,32 +475,63 @@ ipc_glue_teardown(task_t who, unsigned int *ports_out,
 		*msgs_out = msgs;
 }
 
-/* ---------------- test rendezvous (IPC-1 only) ----------------
- * A fixed table of named slots holding ONE receive
- * right each, parked by a task that is about to exit.
- * The IPC test pair runs as sequential spawn children
- * (one child slot, parent parked), so a port's receive
- * right needs a home between runs: PUBLISH extracts it
- * (MOVE_RECEIVE) into a slot, RESOLVE mints a send name
- * for the parked port, CLAIM inserts the receive right
- * into the claimer's space under a fresh name.
+/* ---------------- kernel registry (IPC-4) ----------------
+ * name -> port + generation, kernel resident: the
+ * registry survives a registered daemon's death and
+ * answers lookups during its respawn window (as a
+ * truthful UIPC_EDEST for a dead owner, never a live
+ * right -- upstream ipc_port_make_send() asserts the
+ * port active, so minting a right to a dead port
+ * would halt the CPU).
  *
- * TEST-ONLY. There is deliberately no ownership check
- * on CLAIM (the claimer is a later instance of the
- * server program, a different task). IPC-4 replaces
- * this with the registry and its spawn-identity policy
- * (D-IPC-2); this table is deleted then, not extended.
+ * Ownership: REGISTER takes the receive right's
+ * object (a reference, like any table entry) and
+ * records the caller's kernel-assigned progid. A
+ * live entry may be replaced only by the same owner
+ * (EBUSY otherwise); a dead entry may be taken over
+ * by anyone (reserved names still gated first).
+ * Re-registration and death both bump the
+ * generation, so a stale send right is detectable
+ * (its generation predates the current one) and a
+ * stale LOOKUP result is never a live port.
+ *
+ * Reserved names (D-IPC-2): `tools` belongs to
+ * qabotd (daemon_images index 2); `link` is unbound
+ * until C6L-5 binds linkd's index, so any claim is
+ * refused until then. The check keys on progid, the
+ * kernel-assigned spawn identity -- never on a
+ * caller-supplied id -- and runs before any table
+ * mutation, so a refused claim has no side effect.
+ *
+ * Eviction: a new name into a full table evicts the
+ * oldest DEAD entry (documented: the evicted name's
+ * generation resets when it is next registered, since
+ * the entry is gone, not bumped). A table full of
+ * live entries returns EBUSY. This keeps dead
+ * entries from exhausting the table within a boot.
  */
-#define RV_SLOTS	4u
-#define RV_NAME_MAX	15u
+#define REG_SLOTS	8u
+#define REG_NAME_MAX	15u
+#define REG_OWNER_UNBOUND	(-2)
 
 static struct {
-	char		name[RV_NAME_MAX + 1u];
-	ipc_port_t	port;	/* held receive right; IP_NULL = empty */
-} rv_table[RV_SLOTS];
+	char		name[REG_NAME_MAX + 1u];
+	ipc_port_t	port;	/* IP_NULL = slot free */
+	int		owner;	/* kernel progid, -1 = one-shot */
+	unsigned int	generation;
+	int		alive;
+} reg_table[REG_SLOTS];
+
+static const struct {
+	const char	*name;
+	int		owner;
+} reg_reserved[] = {
+	{ "tools", 2 },			/* qabotd */
+	{ "link", REG_OWNER_UNBOUND },	/* bound at C6L-5 */
+};
 
 static int
-rv_streq(const char *a, const char *b)
+reg_streq(const char *a, const char *b)
 {
 	unsigned int i;
 	for (i = 0;; i++) {
@@ -505,116 +543,175 @@ rv_streq(const char *a, const char *b)
 }
 
 static int
-rv_find(const char *name)
+reg_find(const char *name)
 {
 	unsigned int i;
-	for (i = 0; i < RV_SLOTS; i++)
-		if (rv_table[i].port != IP_NULL &&
-		    rv_streq(rv_table[i].name, name))
+	for (i = 0; i < REG_SLOTS; i++)
+		if (reg_table[i].port != IP_NULL &&
+		    reg_streq(reg_table[i].name, name))
 			return (int)i;
 	return -1;
 }
 
+/* Reserved-name gate: 0 = allowed, UIPC_EPERM =
+ * refused. Runs before any mutation. */
 static unsigned int
-rv_publish(ipc_space_t space, const char *name, unsigned int portname)
+reg_reserved_check(const char *name, int progid)
 {
-	int slot;
 	unsigned int i;
-	ipc_object_t object;
-	mach_msg_type_name_t poly;
-	kern_return_t kr;
-
-	slot = rv_find(name);
-	if (slot >= 0)
-		return (unsigned int)UIPC_EBUSY;
-	/* Find a free slot BEFORE extracting: a failed
-	 * publish must not cost the caller its right. */
-	slot = -1;
-	for (i = 0; i < RV_SLOTS; i++)
-		if (rv_table[i].port == IP_NULL) {
-			slot = (int)i;
-			break;
-		}
-	if (slot < 0)
-		return (unsigned int)UIPC_EBUSY;
-	kr = mach_port_extract_right(space, (mach_port_t)portname,
-				     MACH_MSG_TYPE_MOVE_RECEIVE,
-				     &object, &poly);
-	if (kr == KERN_INVALID_NAME)
-		return (unsigned int)UIPC_EDEST;
-	if (kr != KERN_SUCCESS)
-		return (unsigned int)UIPC_EINVAL;
-	for (i = 0; i <= RV_NAME_MAX; i++) {
-		rv_table[slot].name[i] = name[i];
-		if (name[i] == '\0')
-			break;
+	for (i = 0; i < sizeof(reg_reserved) / sizeof(reg_reserved[0]);
+	     i++) {
+		if (!reg_streq(reg_reserved[i].name, name))
+			continue;
+		if (reg_reserved[i].owner == REG_OWNER_UNBOUND)
+			return (unsigned int)UIPC_EPERM;
+		if (progid != reg_reserved[i].owner)
+			return (unsigned int)UIPC_EPERM;
+		return 0;
 	}
-	rv_table[slot].port = (ipc_port_t)object;
 	return 0;
 }
 
-static unsigned int
-rv_resolve(ipc_space_t space, const char *name)
+void
+ipc_glue_registry_dead(void *obj)
 {
-	int slot;
-	ipc_port_t sright;
-	mach_port_t send_name;
-
-	slot = rv_find(name);
-	if (slot < 0)
-		return (unsigned int)UIPC_ENORV;
-	sright = ipc_port_make_send(rv_table[slot].port);
-	if (sright == IP_NULL)
-		return (unsigned int)UIPC_EDEST;
-	send_name = ipc_port_copyout_send(sright, space);
-	if (send_name == MACH_PORT_NULL)
-		return (unsigned int)UIPC_ENOMEM;
-	return (unsigned int)send_name;
-}
-
-static unsigned int
-rv_claim(ipc_space_t space, const char *name)
-{
-	int slot;
-	mach_port_t recv_name;
-	kern_return_t kr;
-
-	slot = rv_find(name);
-	if (slot < 0)
-		return (unsigned int)UIPC_ENORV;
-	/* Receiver-epoch reset. ipc_port_make_send (used
-	 * by RESOLVE) bumps the port's make-send count,
-	 * and ipc_right_copyout asserts the count is 0
-	 * before inserting a receive right anywhere --
-	 * a parked port that was ever resolved would
-	 * otherwise be unclaimable (and the assert halts
-	 * the CPU in this build). Upstream performs the
-	 * same reset in ipc_port_clear_receiver whenever
-	 * a receive right changes hands; the rendezvous
-	 * does it here, at the hand-over it owns. Send
-	 * rights already minted stay valid (they are
-	 * counted in ip_srights, untouched); no no-senders
-	 * notification is ever registered on a parked
-	 * port, so no consumer of the count is affected. */
-	ip_lock(rv_table[slot].port);
-	ipc_port_set_mscount(rv_table[slot].port, 0);
-	ip_unlock(rv_table[slot].port);
-	kr = ipc_object_copyout(space,
-				(ipc_object_t)rv_table[slot].port,
-				MACH_MSG_TYPE_PORT_RECEIVE, TRUE,
-				&recv_name);
-	if (kr == KERN_RESOURCE_SHORTAGE || kr == KERN_NO_SPACE)
-		return (unsigned int)UIPC_ENOMEM;
-	if (kr != KERN_SUCCESS)
-		return (unsigned int)UIPC_EINVAL;
-	rv_table[slot].port = IP_NULL;
-	rv_table[slot].name[0] = '\0';
-	return (unsigned int)recv_name;
+	unsigned int i;
+	for (i = 0; i < REG_SLOTS; i++) {
+		if (reg_table[i].port != IP_NULL &&
+		    reg_table[i].port == (ipc_port_t)obj &&
+		    reg_table[i].alive) {
+			reg_table[i].alive = 0;
+			reg_table[i].generation++;
+		}
+	}
 }
 
 unsigned int
-ipc_glue_port(task_t who, unsigned int sub, const char *kname,
-	      unsigned int x, unsigned int y)
+ipc_glue_registry(task_t who, int progid, unsigned int sub,
+		  const char *name, unsigned int portname)
+{
+	ipc_space_t space;
+	int slot;
+	unsigned int i;
+
+	if (name == (const char *)0 || name[0] == '\0')
+		return (unsigned int)UIPC_EINVAL;
+	if (!ipc_space_of(who, &space))
+		return (unsigned int)UIPC_EINVAL;
+	switch (sub) {
+	case IPCP_REGISTER: {
+		ipc_mqueue_t mqueue;
+		ipc_object_t object;
+		unsigned int rc;
+
+		rc = reg_reserved_check(name, progid);
+		if (rc != 0)
+			return rc;
+		/* Resolve the caller's receive right: copyin
+		 * takes a reference, which pins the object
+		 * across the register. A send name, a dead
+		 * name or a port set is not a receive
+		 * right and is refused. */
+		if (ipc_mqueue_copyin(space, (mach_port_t)portname,
+				      &mqueue, &object) !=
+		    MACH_MSG_SUCCESS)
+			return (unsigned int)UIPC_EDEST;
+		if (space_entry_type(space, portname) !=
+		    MACH_PORT_TYPE_RECEIVE) {
+			ipc_object_release(object);
+			return (unsigned int)UIPC_EINVAL;
+		}
+		slot = reg_find(name);
+		if (slot >= 0) {
+			if (reg_table[slot].alive &&
+			    reg_table[slot].owner != progid) {
+				ipc_object_release(object);
+				return (unsigned int)UIPC_EBUSY;
+			}
+			/* Same owner, or a dead entry taken
+			 * over: replace the port (a same-object
+			 * re-register keeps its ref) and bump. */
+			if (reg_table[slot].port !=
+			    (ipc_port_t)object) {
+				ipc_object_release(
+				    (ipc_object_t)reg_table[slot].port);
+				reg_table[slot].port =
+				    (ipc_port_t)object;
+			} else
+				ipc_object_release(object);
+			reg_table[slot].owner = progid;
+			reg_table[slot].alive = 1;
+			reg_table[slot].generation++;
+			return 0;
+		}
+		/* New name: a free slot, else evict the
+		 * oldest dead entry. */
+		slot = -1;
+		for (i = 0; i < REG_SLOTS; i++)
+			if (reg_table[i].port == IP_NULL) {
+				slot = (int)i;
+				break;
+			}
+		if (slot < 0)
+			for (i = 0; i < REG_SLOTS; i++)
+				if (!reg_table[i].alive) {
+					ipc_object_release(
+					    (ipc_object_t)reg_table[i].port);
+					reg_table[i].port = IP_NULL;
+					reg_table[i].name[0] = '\0';
+					slot = (int)i;
+					break;
+				}
+		if (slot < 0) {
+			ipc_object_release(object);
+			return (unsigned int)UIPC_EBUSY;
+		}
+		for (i = 0; i <= REG_NAME_MAX; i++) {
+			reg_table[slot].name[i] = name[i];
+			if (name[i] == '\0')
+				break;
+		}
+		reg_table[slot].port = (ipc_port_t)object;
+		reg_table[slot].owner = progid;
+		reg_table[slot].generation = 1u;
+		reg_table[slot].alive = 1;
+		return 0;
+	}
+	case IPCP_LOOKUP: {
+		ipc_port_t sright;
+		mach_port_t send_name;
+
+		slot = reg_find(name);
+		if (slot < 0)
+			return (unsigned int)UIPC_ENORV;
+		if (!reg_table[slot].alive)
+			return (unsigned int)UIPC_EDEST;
+		/* Liveness was just checked in trap
+		 * context (no other task can run while
+		 * this trap runs), so make_send cannot
+		 * hit its active assertion; the NULL
+		 * branch is defensive only. */
+		sright = ipc_port_make_send(reg_table[slot].port);
+		if (sright == IP_NULL)
+			return (unsigned int)UIPC_EDEST;
+		send_name = ipc_port_copyout_send(sright, space);
+		if (send_name == MACH_PORT_NULL)
+			return (unsigned int)UIPC_ENOMEM;
+		return (unsigned int)send_name;
+	}
+	case IPCP_REG_GEN:
+		slot = reg_find(name);
+		if (slot < 0)
+			return (unsigned int)UIPC_ENORV;
+		return reg_table[slot].generation;
+	default:
+		return (unsigned int)UIPC_EINVAL;
+	}
+}
+
+unsigned int
+ipc_glue_port(task_t who, int progid, unsigned int sub,
+	      const char *kname, unsigned int x, unsigned int y)
 {
 	ipc_space_t space;
 	kern_return_t kr;
@@ -668,6 +765,8 @@ ipc_glue_port(task_t who, unsigned int sub, const char *kname,
 		}
 		if (was_recv && object != (ipc_object_t)0)
 			sched_ipc_wake_peer((void *)object);
+		if (was_recv && object != (ipc_object_t)0)
+			ipc_glue_registry_dead((void *)object);
 		if (object != (ipc_object_t)0)
 			ipc_object_release(object);
 		return 0;
@@ -686,18 +785,12 @@ ipc_glue_port(task_t who, unsigned int sub, const char *kname,
 		if (kr != KERN_SUCCESS)
 			return (unsigned int)UIPC_EINVAL;
 		return 0;
-	case IPCP_RV_PUBLISH:
+	case IPCP_REGISTER:
+	case IPCP_LOOKUP:
+	case IPCP_REG_GEN:
 		if (kname == (const char *)0)
 			return (unsigned int)UIPC_EINVAL;
-		return rv_publish(space, kname, x);
-	case IPCP_RV_RESOLVE:
-		if (kname == (const char *)0)
-			return (unsigned int)UIPC_EINVAL;
-		return rv_resolve(space, kname);
-	case IPCP_RV_CLAIM:
-		if (kname == (const char *)0)
-			return (unsigned int)UIPC_EINVAL;
-		return rv_claim(space, kname);
+		return ipc_glue_registry(who, progid, sub, kname, x);
 	default:
 		return (unsigned int)UIPC_EINVAL;
 	}
