@@ -3,7 +3,7 @@
 # Luckfox Pico Mini B (RV1103B, 128 MB SPI NAND).
 #
 # Produces update-final.img from source in one run:
-#   1. build the QaonicOS kernel (kernel/build-md.sh)
+#   1. build the QaonicOS kernel (mach3-port/build-md.sh)
 #   2. ELF -> raw binary (U-Boot loads raw images, not ELF)
 #   3. idbloader.img via Rockchip rkbin boot_merger
 #      (DDR init + usbplug + SPL, SPI NAND continuous mode)
@@ -21,7 +21,7 @@
 # Env overrides:
 #   B0_SDK=~/workspace/b0-sdk   location of rkbin/SDK/artifacts
 #   OUT=$B0_SDK                 output directory
-#   SKIP_KERNEL_BUILD=1         reuse kernel/build/mach3.elf
+#   SKIP_KERNEL_BUILD=1         reuse mach3-port/build/mach3.elf
 set -e
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
@@ -46,12 +46,12 @@ mkdir -p "$OUT/pkg/Image"
 
 echo "[1/6] kernel"
 if [ -z "$SKIP_KERNEL_BUILD" ]; then
-	(cd kernel && ./build-md.sh >/dev/null)
+	(cd mach3-port && ./build-md.sh >/dev/null)
 fi
-[ -f kernel/build/mach3.elf ] || { echo "no mach3.elf" >&2; exit 1; }
+[ -f mach3-port/build/mach3.elf ] || { echo "no mach3.elf" >&2; exit 1; }
 
 echo "[2/6] kernel raw binary"
-llvm-objcopy-18 -O binary kernel/build/mach3.elf "$OUT/qaonic_kernel.bin"
+llvm-objcopy-18 -O binary mach3-port/build/mach3.elf "$OUT/qaonic_kernel.bin"
 KSIZE=$(stat -c%s "$OUT/qaonic_kernel.bin")
 echo "  qaonic_kernel.bin: $KSIZE bytes (boot partition $BOOT_PART_MAX)"
 [ "$KSIZE" -lt "$BOOT_PART_MAX" ] || {
