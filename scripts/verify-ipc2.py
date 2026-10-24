@@ -346,6 +346,21 @@ check("boot 2: GUI daemons launched",
       wait_from(pos, "dashboard daemons launched", 60))
 time.sleep(3)
 
+# The face opens on the setup QR while the device is
+# unprovisioned and settles on its home (eyes) screen
+# after a while; wait for the home screen so the
+# mid-park liveness check below samples the same state
+# in every run (an earlier version sampled blindly and
+# raced the QR screen).
+ec = 0
+for _try in range(30):
+    ec = eye_count(screendump("ipc2-nd-pre"))
+    if ec > 200:
+        break
+    time.sleep(3)
+print(f"  face eye pixels before the park: {ec}", flush=True)
+check("boot 2: face home screen reached (eyes visible)", ec > 200)
+
 pos = len(serial)
 st = web_cmd("run embed:uipknd")
 check("boot 2: web shell accepted run embed:uipknd", st == 200)
