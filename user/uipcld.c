@@ -29,7 +29,6 @@
 #include "ulib/uipc.h"
 
 #define RPC_TIMEOUT_MS	30000
-#define LOOKUP_TRIES	600	/* ~60 s at one yield each */
 
 static struct uipc_msg	msg;
 static char		marker[8];
@@ -135,23 +134,28 @@ echo_one(unsigned s)
 }
 
 /* Lookup "tools" with retries; returns the send name
- * (or exits 1 on timeout). The generation is printed
- * by the caller. */
+ * (or exits 1 on timeout). The retry is WALL-CLOCK
+ * based (60 s via sys_uptime): a bare yield count
+ * burns out in seconds when the scheduler round is
+ * fast, and the server may not exist yet when the
+ * client starts (it spawns after `gui` via the web
+ * shell). The generation is printed by the caller. */
 static int
 lookup_retry(void)
 {
-	int t, rc;
+	unsigned t0 = sys_uptime();
+	int rc;
 
-	for (t = 0; t < LOOKUP_TRIES; t++) {
+	for (;;) {
 		rc = uipc_lookup("tools");
 		if (rc >= 0)
 			return rc;
 		if (rc != UIPC_ENORV && rc != UIPC_EDEST)
 			fail("lookup", rc);
+		if (sys_uptime() - t0 >= 60000u)
+			fail("lookup timeout", -9);
 		(void)sys_yield();
 	}
-	fail("lookup timeout", -9);
-	return -9;	/* unreachable */
 }
 
 __attribute__((section(".text.start")))
@@ -192,18 +196,28 @@ _start(void)
 	}
 	u_put("UIPCLD: PASS echo=100/100\n");
 
-	/* Phase 2: structured dispatch. */
+	/* Phase 2: structured dispatch. The reply is a
+	 * 20-byte structured result, so the request is
+	 * padded to the same 20-byte body (44 total):
+	 * the RPC length is both the send length and
+	 * the reply budget, and a larger reply than
+	 * the budget returns E2BIG with the message
+	 * left queued. The server reads only the
+	 * first two words. */
 	{
 		unsigned *w = (unsigned *)msg.body;
 
 		msg.reply = 0u;
 		msg.dest = 0u;
 		msg.id = 0x3100;
-		msg.size = UIPC_HDR_SIZE + 8u;
+		msg.size = UIPC_HDR_SIZE + 20u;
 		w[0] = 0xD15u;
 		w[1] = 42u;
+		w[2] = 0u;
+		w[3] = 0u;
+		w[4] = 0u;
 		rc = uipc_rpc_user("tools", &msg,
-				   UIPC_HDR_SIZE + 8u, RPC_TIMEOUT_MS);
+				   UIPC_HDR_SIZE + 20u, RPC_TIMEOUT_MS);
 		if (rc != (int)(UIPC_HDR_SIZE + 20u))
 			fail("dispatch len", rc);
 		if (msg.id != 0x3100)

@@ -427,8 +427,22 @@ ipc_glue_teardown(task_t who, unsigned int *ports_out,
 
 		if (entry->ie_object == IP_NULL)
 			continue;
-		if (IE_BITS_TYPE(entry->ie_bits) !=
-		    MACH_PORT_TYPE_RECEIVE)
+		/* Mask, not equality: a send-right copyout
+		 * for a port the task already holds
+		 * receive for coalesces into the existing
+		 * entry (observed: sh's lookup of its own
+		 * registered name returned the receive
+		 * name itself), so the bits can read
+		 * RECEIVE|SEND. An entry holding receive
+		 * rights IS a receive right. The equality
+		 * test silently skipped such entries here
+		 * (no peer-wake, no registry death note)
+		 * and in the DESTROY hook and REGISTER
+		 * validation -- the IPC-4 regfull failure
+		 * was a live entry the destroy hook had
+		 * failed to mark dead. */
+		if ((IE_BITS_TYPE(entry->ie_bits) &
+		     MACH_PORT_TYPE_RECEIVE) == 0)
 			continue;
 		port = (ipc_port_t)entry->ie_object;
 		name = MACH_PORT_MAKEB(i, entry->ie_bits);
@@ -609,15 +623,24 @@ ipc_glue_registry(task_t who, int progid, unsigned int sub,
 			return rc;
 		/* Resolve the caller's receive right: copyin
 		 * takes a reference, which pins the object
-		 * across the register. A send name, a dead
-		 * name or a port set is not a receive
-		 * right and is refused. */
+		 * across the register, and returns the
+		 * port's message queue LOCKED (the copyin
+		 * contract: the lock is for a receive call
+		 * that follows). This register performs no
+		 * receive, so the queue is unlocked at once;
+		 * the reference alone pins the port. A send
+		 * name, a dead name or a port set is not a
+		 * receive right and is refused. */
 		if (ipc_mqueue_copyin(space, (mach_port_t)portname,
 				      &mqueue, &object) !=
 		    MACH_MSG_SUCCESS)
 			return (unsigned int)UIPC_EDEST;
-		if (space_entry_type(space, portname) !=
-		    MACH_PORT_TYPE_RECEIVE) {
+		imq_unlock(mqueue);
+		/* Mask test: see the teardown pass-1
+		 * comment -- a coalesced RECEIVE|SEND
+		 * entry still holds a receive right. */
+		if ((space_entry_type(space, portname) &
+		     MACH_PORT_TYPE_RECEIVE) == 0) {
 			ipc_object_release(object);
 			return (unsigned int)UIPC_EINVAL;
 		}
@@ -749,9 +772,16 @@ ipc_glue_port(task_t who, int progid, unsigned int sub,
 		if (ipc_mqueue_copyin(space, (mach_port_t)x,
 				      &mqueue, &object) ==
 		    MACH_MSG_SUCCESS)
+			/* Mask test: see the teardown
+			 * pass-1 comment. */
 			was_recv =
-			    (space_entry_type(space, x) ==
-			     MACH_PORT_TYPE_RECEIVE);
+			    ((space_entry_type(space, x) &
+			      MACH_PORT_TYPE_RECEIVE) != 0);
+		/* Copyin returns the queue locked; this
+		 * hook performs no receive, so unlock at
+		 * once (the reference pins the object). */
+		if (object != (ipc_object_t)0)
+			imq_unlock(mqueue);
 		kr = mach_port_destroy(space, (mach_port_t)x);
 		if (kr == KERN_INVALID_NAME) {
 			if (object != (ipc_object_t)0)

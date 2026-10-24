@@ -367,8 +367,36 @@ check("boot 2: no watchdog verdict during the flow",
       "watchdog:" not in seg2)
 check("boot 2: no kernel fault anywhere", "FAULT" not in seg2)
 
-st, body = web_cmd("put /data/iptoolsc-test 0")
-check("teardown: marker back to 0", st == 200 and "put: ok" in body)
+def web_shell_out(cmd, expect, timeout=30):
+    """Run cmd through the web shell and wait for expect in the
+    command's output. POST /shell only QUEUES the command (the
+    endpoint is async: the POST returns a "running" page and the
+    output arrives on a later GET refresh; a busy executor answers
+    "Shell sibuk" and drops the command). The old single-POST body
+    check could therefore never pass, and a busy submit lost the
+    teardown put entirely (run 1)."""
+    for _ in range(5):
+        st, body = web_cmd(cmd)
+        if st == 200 and "Shell sibuk" not in body:
+            break
+        time.sleep(2)
+    else:
+        return False
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            st, hd, body = req("GET", "/shell", cookie=cookie)
+        except Exception:
+            time.sleep(2)
+            continue
+        if st == 200 and expect in body:
+            return True
+        time.sleep(2)
+    return False
+
+
+check("teardown: marker back to 0",
+      web_shell_out("put /data/iptoolsc-test 0", "put: ok"))
 p.kill()
 time.sleep(1.0)
 

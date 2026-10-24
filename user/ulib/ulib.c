@@ -853,7 +853,19 @@ sys_spawn_wait(void)
  * defined in ulib/uipc.h; the numeric literals here mirror
  * them (uipc.h includes this header, not vice versa). */
 
-/* SYS_SEND (10): (dest, buf, len, flags) -> 0 or UIPC_E* */
+/* SYS_SEND (10): (dest, buf, len, flags) -> 0 or UIPC_E*.
+ * NOTE on the constraints: r0 is READ-WRITE -- it
+ * carries the argument in and the kernel's return
+ * value out (trap.c overwrites the frame's r0; r1-r3
+ * are restored). A pure input constraint for r0 lets
+ * the compiler reuse r0 across the call: the EPARK
+ * loop in uipc_recv() then re-issues the receive
+ * with port=-11 (the previous return value), which
+ * the glue rightly answers EDEST. That latent stub
+ * bug (invisible while IPC-2's build happened to
+ * reload the argument) is what the IPC-4 server
+ * probe caught; every IPC stub below models r0 as
+ * read-write for the same reason. */
 int
 sys_ipc_send(unsigned dest, const void *buf, unsigned len,
 	     unsigned flags)
@@ -862,15 +874,13 @@ sys_ipc_send(unsigned dest, const void *buf, unsigned len,
 	register unsigned _r1 __asm__("r1") = (unsigned)buf;
 	register unsigned _r2 __asm__("r2") = len;
 	register unsigned _r3 __asm__("r3") = flags;
-	int ret;
 	__asm__ volatile(
 		"mov r7, #10\n\t"
-		"svc #0\n\t"
-		"mov %0, r0"
-		: "=r" (ret)
-		: "r" (_r0), "r" (_r1), "r" (_r2), "r" (_r3)
+		"svc #0"
+		: "+r" (_r0)
+		: "r" (_r1), "r" (_r2), "r" (_r3)
 		: "r7", "lr", "memory", "cc");
-	return ret;
+	return (int)_r0;
 }
 
 /* SYS_RECV (11): (port, buf, max, timeout_ms) -> total
@@ -887,15 +897,13 @@ sys_ipc_recv(unsigned port, void *buf, unsigned max,
 	register unsigned _r1 __asm__("r1") = (unsigned)buf;
 	register unsigned _r2 __asm__("r2") = max;
 	register unsigned _r3 __asm__("r3") = (unsigned)timeout_ms;
-	int ret;
 	__asm__ volatile(
 		"mov r7, #11\n\t"
-		"svc #0\n\t"
-		"mov %0, r0"
-		: "=r" (ret)
-		: "r" (_r0), "r" (_r1), "r" (_r2), "r" (_r3)
+		"svc #0"
+		: "+r" (_r0)
+		: "r" (_r1), "r" (_r2), "r" (_r3)
 		: "r7", "lr", "memory", "cc");
-	return ret;
+	return (int)_r0;
 }
 
 /* SYS_RPC (12): (dest, buf, len, timeout_ms) -> reply
@@ -914,15 +922,13 @@ sys_ipc_rpc(unsigned dest, void *buf, unsigned len,
 	register unsigned _r1 __asm__("r1") = (unsigned)buf;
 	register unsigned _r2 __asm__("r2") = len;
 	register unsigned _r3 __asm__("r3") = (unsigned)timeout_ms;
-	int ret;
 	__asm__ volatile(
 		"mov r7, #12\n\t"
-		"svc #0\n\t"
-		"mov %0, r0"
-		: "=r" (ret)
-		: "r" (_r0), "r" (_r1), "r" (_r2), "r" (_r3)
+		"svc #0"
+		: "+r" (_r0)
+		: "r" (_r1), "r" (_r2), "r" (_r3)
 		: "r7", "lr", "memory", "cc");
-	return ret;
+	return (int)_r0;
 }
 
 /* SYS_RPC_USER (23): (name string, buf, len, timeout_ms)
@@ -936,15 +942,13 @@ sys_ipc_rpc_user(const char *name, void *buf, unsigned len,
 	register unsigned _r1 __asm__("r1") = (unsigned)buf;
 	register unsigned _r2 __asm__("r2") = len;
 	register unsigned _r3 __asm__("r3") = (unsigned)timeout_ms;
-	int ret;
 	__asm__ volatile(
 		"mov r7, #23\n\t"
-		"svc #0\n\t"
-		"mov %0, r0"
-		: "=r" (ret)
-		: "r" (_r0), "r" (_r1), "r" (_r2), "r" (_r3)
+		"svc #0"
+		: "+r" (_r0)
+		: "r" (_r1), "r" (_r2), "r" (_r3)
 		: "r7", "lr", "memory", "cc");
-	return ret;
+	return (int)_r0;
 }
 
 /* SYS_IPC_PORT (25): (sub, a1, a2) -> name/0 or UIPC_E* */
@@ -954,15 +958,13 @@ sys_ipc_port(unsigned sub, unsigned a1, unsigned a2)
 	register unsigned _r0 __asm__("r0") = sub;
 	register unsigned _r1 __asm__("r1") = a1;
 	register unsigned _r2 __asm__("r2") = a2;
-	int ret;
 	__asm__ volatile(
 		"mov r7, #25\n\t"
-		"svc #0\n\t"
-		"mov %0, r0"
-		: "=r" (ret)
-		: "r" (_r0), "r" (_r1), "r" (_r2)
+		"svc #0"
+		: "+r" (_r0)
+		: "r" (_r1), "r" (_r2)
 		: "r7", "lr", "memory", "cc");
-	return ret;
+	return (int)_r0;
 }
 
 /* Sub-ops: 0 ALLOC_RECV, 1 DESTROY, 2 SETQLIMIT,

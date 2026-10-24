@@ -1,0 +1,804 @@
+
+   QQQ   A   OOO  N   N I  CCC  OOO   SSS
+  Q   Q A A O   O NN  N I C    O   O S
+  Q   QAAAAAO   O N N N I C    O   O  SSS
+  Q  QQ A A O   O N  NN I C    O   O     S
+   QQQQ A A  OOO  N   N I  CCC  OOO  SSSS
+
+  QaonicOS - Mach 3.0 on ARMv7 (QEMU virt)
+  Booting...
+
+vm_page_bootstrap: 10322 free pages
+kmem_suballoc: vm_map_enter kr=0 addr=40735000
+kmem_suballoc: vm_map_enter kr=0 addr=41335000
+kmem_suballoc: vm_map_enter kr=0 addr=41b35000
+pmap_selftest: mapping 4KB page...
+pmap_selftest: PASS (4KB L2 mapping, TTBR0 switch, R/W)
+pmap_stress: 10 rounds x 64 pages (4 L2 tables)...
+pmap_stress: PASS (1930 ops, no stale mappings)
+ipc_selftest: port alloc/dealloc...
+ipc_selftest: PASS (kernel port alloc/dealloc)
+ipc_stress: allocating 400 ports...
+ipc_stress: zone count 8 -> 408
+ipc_stress: queueing 200 messages...
+ipc_stress: dequeuing and verifying...
+ipc_stress: PASS (400 ports, 200 msgs FIFO, no leak)
+blk_selftest: init...
+blk: dev 0: slot 29, 262144 sectors (128 MB)
+blk: dev 1: slot 30, 32768 sectors (16 MB)
+blk: dev 0 = internal (probed 2nd), dev 1 = SD (probed 1st)
+blk: ready, 2 device(s); SD present (dev 1)
+blk_selftest: write sector 32767...
+blk_selftest: read back...
+blk_selftest: PASS (write+read verify, 32768 sectors)
+[gpu] virtio-gpu @slot 0x1f (legacy)
+[gpu] hostfeat=0x39000002
+[gpu] siap: 240x240 XRGB8888 (resource 1, scanout 0)
+fat32: mounted /sd
+task_selftest: task_create...
+task_selftest: task+thread created OK
+task_selftest: thread start routine running
+task_selftest: PASS (task_create + thread_create + run)
+user_selftest: creating user task...
+user_selftest: entering user mode (clean)...
+hello from user mode
+user_selftest: clean exit ok
+user_selftest: entering user mode (fault)...
+fault-test: touching 0x0...
+user_selftest: PASS (user mode + syscall + fault isolation)
+sched_selftest: creating workers A and B...
+sched_selftest: workers created, switching to A...
+M6-DBG: A kss.lr=4001a088
+M6-DBG: B kss.lr=4001a1a0
+A0 [A->B] B0 [B->A] A1 [A->B] B1 [B->A] A2 [A->B] B2 [B->A] A3 [A->B] B3 [B->A] A4 [A->B] B4 [B->A] A5 [A->B] B5 [B->A] A6 [A->B] B6 [B->A] A7 [A->B] B7 [B->A] A done
+sched_selftest: PASS (cooperative interleave A/B)
+bootstate: boot #1086 fail=1 reason=4 safe=0
+init: QaonicOS user task starting (USR mode)
+init: /motd.txt + /.motd_ready ok
+init: /gpio.cmd + /sd.cmd + /fat.cmd ok
+init: sbrk ok
+init: done
+QaonicOS Mach3: motd dari init
+[ucat] ok
+motd.txt
+.motd_ready
+gpio.cmd
+.gpio_cmd_ready
+sd.cmd
+.sd_cmd_ready
+fat.cmd
+.fat_cmd_ready
+.ucat_done
+[uls] ok
+[uecho] verifikasi ok
+[umon] mulai
+[2J[H[1;2HQaonicOS System Monitor[1;58Huptime 1s[2;2H----------------------------------------------------------------------------[3;2HCPU  n/a (belum diukur di port ini)[4;2HMEM  [######################--------------------------------------] 38% 24944/65536 KB[5;2HDISK n/a (belum ada FS) /32768 sec total[6;2HNET  RX 0 KB  TX 0 KB[7;2H----------------------------------------------------------------------------[8;2HThreads (5)[9;4Hid  state     mode[10;4H0   DEAD      user[11;4H1   DEAD      user[12;4H2   DEAD      user[13;4H3   DEAD      user[14;4H4   RUNNABLE  user[24;1H[7m umon: q=keluar (mode live) | snapshot -> /umon.out                             [0m
+[umon] frame digambar
+[umon] /umon.out ditulis
+[umon] selesai (one-shot)
+[ugpio] ok
+[usd] ok
+[ufs] ok
+utimeset: TIME_SET/GET regression
+  set=0x6abf5a00
+  get=0x6abf5a00
+  set=0x6abba840
+  get=0x6abba840
+  set=0x12345678
+  get=0x12345678
+UTIMESET: PASS
+uaudiotest: ACODEC init + readback (D1)
+  audio_init -> 0x00000000
+  ANA_CTL0=0x00000010
+  ANA_CTL1=0x000000ee
+  ANA_CTL2=0x000000a0
+  ANA_CTL3=0x00000033
+  ANA_CTL6=0x000000ff
+UAUDIO: PASS
+uaudiocap: I2S RX capture test (D2, PIO)
+  audio_init -> 0x00000000
+  audio_start -> 0x00000000
+  audio_read -> 0x00001000
+  audio_stop -> 0x00000000
+UAUDIOCAP: PASS
+uaudiogain: mic gain + overrun test (D3)
+  gain 0x00000000
+  ANA_CTL2=0x00000050
+  gain 0x00000001
+  ANA_CTL2=0x000000f0
+  gain 0x00000002
+  ANA_CTL2=0x000000a0
+  overrun=0x00000000
+UAUDIOGAIN: PASS
+uvoice: VOICE.START + AUD uplink test (D4)
+  VOICE.START -> 0x00000000
+  frames sent=0x00000008
+  VOICE.STOP -> 0x00000008
+UVOICE: PASS
+upl330: PL330 microcode test (D2b)
+  pl330_init -> 0x00000000
+  pl330_rx -> 0x00000000
+  ucode len=0x0000001c
+  verify mask=0x00000000
+UPL330: PASS
+ULFS: PASS
+UBLOGTEST: count...=16 getall...[0][1][2][3][4][5][6][7][8][9][10][11][12][13][14][15]get0...rc=0
+UBLOGTEST: PASS
+
+==========================================
+  Welcome to QaonicOS -- first boot setup
+==========================================
+This device is not set up yet.
+  * Wi-Fi: connect via the companion app
+    (ESP32-C6 portal) when available.
+  * Local setup: run 'setup' in the shell
+    (setup name <x>, setup tz <+HHMM>,
+     then 'setup done').
+lfs: /data on blk region sectors 30702..32749
+UFIRST: first-boot (not provisioned)
+UTIMEGATE: PASS
+UUPDSIG: PASS
+ucred: B5.5 credential store test
+UCREDSTORE: PASS
+QABOT: harness v1 (mock provider) mulai
+QABOT: skenario S1 mulai
+[1460] task mulai: berapa uptime?
+[1460] provider: TOOL:get_info
+[1460] gate: get_info -> ALLOW (risiko aman)
+[1460] exec: get_info -> uptime_ms=1460 mem=26744/65536KB cpu=4294967295%
+[1460] provider: FINAL:uptime terbaca
+[1460] final: uptime terbaca
+[1460] task selesai: status=0 steps=2
+QABOT: S1 PASS
+QABOT: skenario S2 mulai
+[1460] task mulai: nyalakan gpio 5
+[1460] provider: TOOL:gpio_write pin=5 val=1
+[1460] gate: gpio_write -> CONFIRM (butuh konfirmasi)
+[1460] confirm: ya (mode uji)
+[1460] exec: gpio_write -> pin=5 val=1 ok
+[1460] provider: FINAL:gpio ditulis
+[1460] final: gpio ditulis
+[1460] task selesai: status=0 steps=2
+QABOT: S2 PASS
+QABOT: skenario S3 mulai
+[1460] task mulai: hapus semua
+[1460] provider: TOOL:self_destruct target=all
+[1460] gate: self_destruct -> BLOCK (tool tak dikenal: self_destruct)
+[1460] provider: FINAL:ditolak
+[1460] final: ditolak
+[1460] task selesai: status=0 steps=2
+QABOT: S3 PASS
+QABOT: 3/3 PASS
+user_launch_init: PASS (21/21 programs, 17/17 files)
+[net] virtio-net @slot 0x1c (legacy)
+[net] hostfeat=0x39bf8064
+[net] qmax=0x400
+[net] qalign=0x0
+[net] qmax=0x400
+[net] qalign=0x0
+[net] link status=0x1
+[net] MAC 52:54:00:12:34:56
+[net] siap
+[dbg] rx desc=0x404f8000 avail=0x404f8800 used=0x404f9000
+[dbg] tx desc=0x404fb000 avail=0x404fb800 used=0x404fc000 aidx=0x0 uidx=0x0
+[net] IP 10.0.2.15, HTTP server port 80 (/ dan /metrics)
+[net] ping -> 10.0.2.2
+[icmp] echo reply diterima!
+[net] PING 10.0.2.2 BERHASIL
+sched: daemon 'sh' terdaftar (progid 4)
+bootux: dev mode -- shell only; 'gui' starts the dashboard
+sched: masuk user mode ('sh')...
+console: owner -> 'sh' (0)
+
+QaonicOS ready. CLI mode.
+Type 'help' for commands.
+
+[selftest] spawn embed:uls...
+spawn: 'embed:uls' (4841 byte), parent=0 menunggu
+motd.txt
+.motd_ready
+gpio.cmd
+.gpio_cmd_ready
+sd.cmd
+.sd_cmd_ready
+fat.cmd
+.fat_cmd_ready
+.ucat_done
+.uls_done
+echo.txt
+.uecho_done
+umon.out
+.umon_done
+gpio.out
+.ugpio_done
+sd.out
+.usd_done
+fat.out
+.ufs_done
+[uls] ok
+sched: 'spawned' exit 0x0
+spawn: child exit 0x0, parent 0 dibangunkan
+[selftest] spawn exit=0 PASS
+qaon> bootctl
+boot #1086  fail_count=0  safe_mode=0  last_reason=4 (0=unknown 1=power 2=crash 3=watchdog 4=software)
+qaon> ipc lookup tools
+IPC: lookup tools rc=-9
+qaon> ipc register tools
+IPC: reg tools rc=-13 port=256
+qaon> ipc lookup tools
+IPC: lookup tools rc=-9
+qaon> ipc register link
+IPC: reg link rc=-13 port=512
+qaon> ipc register myname
+IPC: reg myname rc=0 port=768
+qaon> ipc lookup myname
+IPC: lookup myname send=768 gen=1
+qaon> ipc gen myname
+IPC: gen myname gen=1
+qaon> ipc qlimit 2
+IPC: qlimit rc=0
+qaon> ipc send 11
+IPC: send rc=0
+qaon> ipc send 12
+IPC: send rc=0
+qaon> ipc send 13
+IPC: send rc=-4
+qaon> ipc pollrecv
+IPC: pollrecv rc=32 id=11
+qaon> ipc pollrecv
+IPC: pollrecv rc=32 id=12
+qaon> ipc pollrecv
+IPC: pollrecv rc=-5
+qaon> ipc sendbig 14
+IPC: sendbig rc=-6
+qaon> ipc destroy
+IPC: destroy rc=0
+qaon> ipc send 15
+IPC: send rc=-3
+qaon> run embed:uipcregexit
+spawn: 'embed:uipcregexit' (4962 byte), parent=0 menunggu
+UIPCREGEXIT: registered gone
+reclaim: 'spawned' ipc teardown 1p 0m
+sched: 'spawned' exit 0x0
+spawn: child exit 0x0, parent 0 dibangunkan
+exit 0
+qaon> ipc lookup gone
+IPC: lookup gone rc=-3
+qaon> ipc gen gone
+IPC: gen gone gen=2
+qaon> run embed:uipcregfull
+spawn: 'embed:uipcregfull' (5549 byte), parent=0 menunggu
+UIPCREGFULL: ok 8/8
+UIPCREGFULL: ninth rc=-7
+UIPCREGFULL: PASS
+reclaim: 'spawned' ipc teardown 9p 0m
+sched: 'spawned' exit 0x0
+spawn: child exit 0x0, parent 0 dibangunkan
+exit 0
+qaon> bootctl
+boot #1086  fail_count=0  safe_mode=0  last_reason=4 (0=unknown 1=power 2=crash 3=watchdog 4=software)
+qaon> reboot
+reboot: software reset requested
+sys: SYS_RESET (software request)
+
+   QQQ   A   OOO  N   N I  CCC  OOO   SSS
+  Q   Q A A O   O NN  N I C    O   O S
+  Q   QAAAAAO   O N N N I C    O   O  SSS
+  Q  QQ A A O   O N  NN I C    O   O     S
+   QQQQ A A  OOO  N   N I  CCC  OOO  SSSS
+
+  QaonicOS - Mach 3.0 on ARMv7 (QEMU virt)
+  Booting...
+
+vm_page_bootstrap: 10322 free pages
+kmem_suballoc: vm_map_enter kr=0 addr=40735000
+kmem_suballoc: vm_map_enter kr=0 addr=41335000
+kmem_suballoc: vm_map_enter kr=0 addr=41b35000
+pmap_selftest: mapping 4KB page...
+pmap_selftest: PASS (4KB L2 mapping, TTBR0 switch, R/W)
+pmap_stress: 10 rounds x 64 pages (4 L2 tables)...
+pmap_stress: PASS (1930 ops, no stale mappings)
+ipc_selftest: port alloc/dealloc...
+ipc_selftest: PASS (kernel port alloc/dealloc)
+ipc_stress: allocating 400 ports...
+ipc_stress: zone count 8 -> 408
+ipc_stress: queueing 200 messages...
+ipc_stress: dequeuing and verifying...
+ipc_stress: PASS (400 ports, 200 msgs FIFO, no leak)
+blk_selftest: init...
+blk: dev 0: slot 29, 262144 sectors (128 MB)
+blk: dev 1: slot 30, 32768 sectors (16 MB)
+blk: dev 0 = internal (probed 2nd), dev 1 = SD (probed 1st)
+blk: ready, 2 device(s); SD present (dev 1)
+blk_selftest: write sector 32767...
+blk_selftest: read back...
+blk_selftest: PASS (write+read verify, 32768 sectors)
+[gpu] virtio-gpu @slot 0x1f (legacy)
+[gpu] hostfeat=0x39000002
+[gpu] siap: 240x240 XRGB8888 (resource 1, scanout 0)
+fat32: mounted /sd
+task_selftest: task_create...
+task_selftest: task+thread created OK
+task_selftest: thread start routine running
+task_selftest: PASS (task_create + thread_create + run)
+user_selftest: creating user task...
+user_selftest: entering user mode (clean)...
+hello from user mode
+user_selftest: clean exit ok
+user_selftest: entering user mode (fault)...
+fault-test: touching 0x0...
+user_selftest: PASS (user mode + syscall + fault isolation)
+sched_selftest: creating workers A and B...
+sched_selftest: workers created, switching to A...
+M6-DBG: A kss.lr=4001a088
+M6-DBG: B kss.lr=4001a1a0
+A0 [A->B] B0 [B->A] A1 [A->B] B1 [B->A] A2 [A->B] B2 [B->A] A3 [A->B] B3 [B->A] A4 [A->B] B4 [B->A] A5 [A->B] B5 [B->A] A6 [A->B] B6 [B->A] A7 [A->B] B7 [B->A] A done
+sched_selftest: PASS (cooperative interleave A/B)
+bootstate: boot #1087 fail=1 reason=4 safe=0
+init: QaonicOS user task starting (USR mode)
+init: /motd.txt + /.motd_ready ok
+init: /gpio.cmd + /sd.cmd + /fat.cmd ok
+init: sbrk ok
+init: done
+QaonicOS Mach3: motd dari init
+[ucat] ok
+motd.txt
+.motd_ready
+gpio.cmd
+.gpio_cmd_ready
+sd.cmd
+.sd_cmd_ready
+fat.cmd
+.fat_cmd_ready
+.ucat_done
+[uls] ok
+[uecho] verifikasi ok
+[umon] mulai
+[2J[H[1;2HQaonicOS System Monitor[1;58Huptime 1s[2;2H----------------------------------------------------------------------------[3;2HCPU  n/a (belum diukur di port ini)[4;2HMEM  [######################--------------------------------------] 38% 24944/65536 KB[5;2HDISK n/a (belum ada FS) /32768 sec total[6;2HNET  RX 0 KB  TX 0 KB[7;2H----------------------------------------------------------------------------[8;2HThreads (5)[9;4Hid  state     mode[10;4H0   DEAD      user[11;4H1   DEAD      user[12;4H2   DEAD      user[13;4H3   DEAD      user[14;4H4   RUNNABLE  user[24;1H[7m umon: q=keluar (mode live) | snapshot -> /umon.out                             [0m
+[umon] frame digambar
+[umon] /umon.out ditulis
+[umon] selesai (one-shot)
+[ugpio] ok
+[usd] ok
+[ufs] ok
+utimeset: TIME_SET/GET regression
+  set=0x6abf5a00
+  get=0x6abf5a00
+  set=0x6abba840
+  get=0x6abba840
+  set=0x12345678
+  get=0x12345678
+UTIMESET: PASS
+uaudiotest: ACODEC init + readback (D1)
+  audio_init -> 0x00000000
+  ANA_CTL0=0x00000010
+  ANA_CTL1=0x000000ee
+  ANA_CTL2=0x000000a0
+  ANA_CTL3=0x00000033
+  ANA_CTL6=0x000000ff
+UAUDIO: PASS
+uaudiocap: I2S RX capture test (D2, PIO)
+  audio_init -> 0x00000000
+  audio_start -> 0x00000000
+  audio_read -> 0x00001000
+  audio_stop -> 0x00000000
+UAUDIOCAP: PASS
+uaudiogain: mic gain + overrun test (D3)
+  gain 0x00000000
+  ANA_CTL2=0x00000050
+  gain 0x00000001
+  ANA_CTL2=0x000000f0
+  gain 0x00000002
+  ANA_CTL2=0x000000a0
+  overrun=0x00000000
+UAUDIOGAIN: PASS
+uvoice: VOICE.START + AUD uplink test (D4)
+  VOICE.START -> 0x00000000
+  frames sent=0x00000008
+  VOICE.STOP -> 0x00000008
+UVOICE: PASS
+upl330: PL330 microcode test (D2b)
+  pl330_init -> 0x00000000
+  pl330_rx -> 0x00000000
+  ucode len=0x0000001c
+  verify mask=0x00000000
+UPL330: PASS
+ULFS: PASS
+UBLOGTEST: count...=16 getall...[0][1][2][3][4][5][6][7][8][9][10][11][12][13][14][15]get0...rc=0
+UBLOGTEST: PASS
+
+==========================================
+  Welcome to QaonicOS -- first boot setup
+==========================================
+This device is not set up yet.
+  * Wi-Fi: connect via the companion app
+    (ESP32-C6 portal) when available.
+  * Local setup: run 'setup' in the shell
+    (setup name <x>, setup tz <+HHMM>,
+     then 'setup done').
+lfs: /data on blk region sectors 30702..32749
+UFIRST: first-boot (not provisioned)
+UTIMEGATE: PASS
+UUPDSIG: PASS
+ucred: B5.5 credential store test
+UCREDSTORE: PASS
+QABOT: harness v1 (mock provider) mulai
+QABOT: skenario S1 mulai
+[1510] task mulai: berapa uptime?
+[1510] provider: TOOL:get_info
+[1510] gate: get_info -> ALLOW (risiko aman)
+[1510] exec: get_info -> uptime_ms=1510 mem=26744/65536KB cpu=4294967295%
+[1510] provider: FINAL:uptime terbaca
+[1510] final: uptime terbaca
+[1510] task selesai: status=0 steps=2
+QABOT: S1 PASS
+QABOT: skenario S2 mulai
+[1520] task mulai: nyalakan gpio 5
+[1520] provider: TOOL:gpio_write pin=5 val=1
+[1520] gate: gpio_write -> CONFIRM (butuh konfirmasi)
+[1520] confirm: ya (mode uji)
+[1520] exec: gpio_write -> pin=5 val=1 ok
+[1520] provider: FINAL:gpio ditulis
+[1520] final: gpio ditulis
+[1520] task selesai: status=0 steps=2
+QABOT: S2 PASS
+QABOT: skenario S3 mulai
+[1520] task mulai: hapus semua
+[1520] provider: TOOL:self_destruct target=all
+[1520] gate: self_destruct -> BLOCK (tool tak dikenal: self_destruct)
+[1520] provider: FINAL:ditolak
+[1520] final: ditolak
+[1520] task selesai: status=0 steps=2
+QABOT: S3 PASS
+QABOT: 3/3 PASS
+user_launch_init: PASS (21/21 programs, 17/17 files)
+[net] virtio-net @slot 0x1c (legacy)
+[net] hostfeat=0x39bf8064
+[net] qmax=0x400
+[net] qalign=0x0
+[net] qmax=0x400
+[net] qalign=0x0
+[net] link status=0x1
+[net] MAC 52:54:00:12:34:56
+[net] siap
+[dbg] rx desc=0x404f8000 avail=0x404f8800 used=0x404f9000
+[dbg] tx desc=0x404fb000 avail=0x404fb800 used=0x404fc000 aidx=0x0 uidx=0x0
+[net] IP 10.0.2.15, HTTP server port 80 (/ dan /metrics)
+[net] ping -> 10.0.2.2
+[icmp] echo reply diterima!
+[net] PING 10.0.2.2 BERHASIL
+sched: daemon 'sh' terdaftar (progid 4)
+bootux: dev mode -- shell only; 'gui' starts the dashboard
+sched: masuk user mode ('sh')...
+console: owner -> 'sh' (0)
+
+QaonicOS ready. CLI mode.
+Type 'help' for commands.
+
+[selftest] spawn embed:uls...
+spawn: 'embed:uls' (4841 byte), parent=0 menunggu
+motd.txt
+.motd_ready
+gpio.cmd
+.gpio_cmd_ready
+sd.cmd
+.sd_cmd_ready
+fat.cmd
+.fat_cmd_ready
+.ucat_done
+.uls_done
+echo.txt
+.uecho_done
+umon.out
+.umon_done
+gpio.out
+.ugpio_done
+sd.out
+.usd_done
+fat.out
+.ufs_done
+[uls] ok
+sched: 'spawned' exit 0x0
+spawn: child exit 0x0, parent 0 dibangunkan
+[selftest] spawn exit=0 PASS
+qaon> [tcp] SYN -> SYN+ACK
+[tcp] ESTABLISHED
+[tcp] respons dikirim, FIN
+[tcp] FIN di-ack -> LISTEN
+[tcp] SYN -> SYN+ACK
+[tcp] ESTABLISHED
+[tcp] respons dikirim, FIN
+[tcp] FIN di-ack -> LISTEN
+put /data/iptoolsc-test 1
+put: ok (1 bytes)
+qaon> gui
+gui: starting dashboard (face)...
+qaon> sched: daemon 'face' terdaftar (progid 0)
+sched: daemon 'uiapp' terdaftar (progid 1)
+sched: daemon 'qabotd' terdaftar (progid 2)
+sched: daemon 'uipcld' terdaftar (progid 3)
+gui: dashboard daemons launched
+face: Qabot server starting (USR mode)
+face: display 240x240 ok
+face: setup mode, payload QAON1:102a5e191c3076d51c4e46c8817016c2:QaonicOS-Setup
+uiapp: starting (USR mode)
+qabotd: Qabot daemon persisten (Q4)
+qabotd: ketik prompt lalu Enter; baris kosong = diam.
+qabot> [tcp] SYN -> SYN+ACK
+[tcp] ESTABLISHED
+[tcp] respons dikirim, FIN
+spawn: 'embed:uiptoolssrv' (11424 byte), parent=0 menunggu
+UIPTOOLSSRV: registered tools
+UIPCLD: lookup tools gen=1
+UIPTOOLSSRV: echo 25
+UIPCLD: echo 25/100
+UIPTOOLSSRV: echo 50
+UIPCLD: echo 50/100
+UIPTOOLSSRV: echo 75
+UIPCLD: echo 75/100
+UIPTOOLSSRV: echo 100
+UIPCLD: echo 100/100
+UIPCLD: PASS echo=100/100
+UIPTOOLSSRV: dispatch OK
+UIPCLD: dispatch OK
+UIPTOOLSSRV: double2 rc=-3
+UIPCLD: double first id=12800
+UIPTOOLSSRV: wakes msg=103 etime=0
+reclaim: 'spawned' ipc teardown 2p 0m
+sched: 'spawned' exit 0x0
+spawn: child exit 0x0, parent 0 dibangunkan
+exit 0
+qaon> UIPCLD: die rc=-12
+UIPCLD: regen lookup rc=-3
+UIPCLD: regen gen=2
+[tcp] SYN -> SYN+ACK
+[tcp] ESTABLISHED
+[tcp] respons dikirim, FIN
+spawn: 'embed:uiptoolssrv' (11424 byte), parent=0 menunggu
+UIPTOOLSSRV: registered tools
+UIPCLD: lookup2 gen=3
+UIPCLD: PASS echo2=10/10
+UIPTOOLSSRV: wakes msg=11 etime=0
+reclaim: 'spawned' ipc teardown 1p 0m
+sched: 'spawned' exit 0x0
+spawn: child exit 0x0, parent 0 dibangunkan
+exit 0
+qaon> UIPCLD: DONE
+reclaim: 'uipcld' ipc teardown 2p 0m
+sched: 'uipcld' exit 0x0
+[tcp] SYN -> SYN+ACK
+[tcp] ESTABLISHED
+[tcp] respons dikirim, FIN
+[tcp] SYN -> SYN+ACK
+[tcp] ESTABLISHED
+[tcp] respons dikirim, FIN
+[tcp] FIN di-ack -> LISTEN
+put: ok (1 bytes)
+qaon> [tcp] SYN -> SYN+ACK
+[tcp] ESTABLISHED
+
+   QQQ   A   OOO  N   N I  CCC  OOO   SSS
+  Q   Q A A O   O NN  N I C    O   O S
+  Q   QAAAAAO   O N N N I C    O   O  SSS
+  Q  QQ A A O   O N  NN I C    O   O     S
+   QQQQ A A  OOO  N   N I  CCC  OOO  SSSS
+
+  QaonicOS - Mach 3.0 on ARMv7 (QEMU virt)
+  Booting...
+
+vm_page_bootstrap: 10322 free pages
+kmem_suballoc: vm_map_enter kr=0 addr=40735000
+kmem_suballoc: vm_map_enter kr=0 addr=41335000
+kmem_suballoc: vm_map_enter kr=0 addr=41b35000
+pmap_selftest: mapping 4KB page...
+pmap_selftest: PASS (4KB L2 mapping, TTBR0 switch, R/W)
+pmap_stress: 10 rounds x 64 pages (4 L2 tables)...
+pmap_stress: PASS (1930 ops, no stale mappings)
+ipc_selftest: port alloc/dealloc...
+ipc_selftest: PASS (kernel port alloc/dealloc)
+ipc_stress: allocating 400 ports...
+ipc_stress: zone count 8 -> 408
+ipc_stress: queueing 200 messages...
+ipc_stress: dequeuing and verifying...
+ipc_stress: PASS (400 ports, 200 msgs FIFO, no leak)
+blk_selftest: init...
+blk: dev 0: slot 29, 262144 sectors (128 MB)
+blk: dev 1: slot 30, 32768 sectors (16 MB)
+blk: dev 0 = internal (probed 2nd), dev 1 = SD (probed 1st)
+blk: ready, 2 device(s); SD present (dev 1)
+blk_selftest: write sector 32767...
+blk_selftest: read back...
+blk_selftest: PASS (write+read verify, 32768 sectors)
+[gpu] virtio-gpu @slot 0x1f (legacy)
+[gpu] hostfeat=0x39000002
+[gpu] siap: 240x240 XRGB8888 (resource 1, scanout 0)
+fat32: mounted /sd
+task_selftest: task_create...
+task_selftest: task+thread created OK
+task_selftest: thread start routine running
+task_selftest: PASS (task_create + thread_create + run)
+user_selftest: creating user task...
+user_selftest: entering user mode (clean)...
+hello from user mode
+user_selftest: clean exit ok
+user_selftest: entering user mode (fault)...
+fault-test: touching 0x0...
+user_selftest: PASS (user mode + syscall + fault isolation)
+sched_selftest: creating workers A and B...
+sched_selftest: workers created, switching to A...
+M6-DBG: A kss.lr=4001a088
+M6-DBG: B kss.lr=4001a1a0
+A0 [A->B] B0 [B->A] A1 [A->B] B1 [B->A] A2 [A->B] B2 [B->A] A3 [A->B] B3 [B->A] A4 [A->B] B4 [B->A] A5 [A->B] B5 [B->A] A6 [A->B] B6 [B->A] A7 [A->B] B7 [B->A] A done
+sched_selftest: PASS (cooperative interleave A/B)
+bootstate: boot #1088 fail=1 reason=4 safe=0
+init: QaonicOS user task starting (USR mode)
+init: /motd.txt + /.motd_ready ok
+init: /gpio.cmd + /sd.cmd + /fat.cmd ok
+init: sbrk ok
+init: done
+QaonicOS Mach3: motd dari init
+[ucat] ok
+motd.txt
+.motd_ready
+gpio.cmd
+.gpio_cmd_ready
+sd.cmd
+.sd_cmd_ready
+fat.cmd
+.fat_cmd_ready
+.ucat_done
+[uls] ok
+[uecho] verifikasi ok
+[umon] mulai
+[2J[H[1;2HQaonicOS System Monitor[1;58Huptime 1s[2;2H----------------------------------------------------------------------------[3;2HCPU  n/a (belum diukur di port ini)[4;2HMEM  [######################--------------------------------------] 38% 24944/65536 KB[5;2HDISK n/a (belum ada FS) /32768 sec total[6;2HNET  RX 0 KB  TX 0 KB[7;2H----------------------------------------------------------------------------[8;2HThreads (5)[9;4Hid  state     mode[10;4H0   DEAD      user[11;4H1   DEAD      user[12;4H2   DEAD      user[13;4H3   DEAD      user[14;4H4   RUNNABLE  user[24;1H[7m umon: q=keluar (mode live) | snapshot -> /umon.out                             [0m
+[umon] frame digambar
+[umon] /umon.out ditulis
+[umon] selesai (one-shot)
+[ugpio] ok
+[usd] ok
+[ufs] ok
+utimeset: TIME_SET/GET regression
+  set=0x6abf5a00
+  get=0x6abf5a00
+  set=0x6abba840
+  get=0x6abba840
+  set=0x12345678
+  get=0x12345678
+UTIMESET: PASS
+uaudiotest: ACODEC init + readback (D1)
+  audio_init -> 0x00000000
+  ANA_CTL0=0x00000010
+  ANA_CTL1=0x000000ee
+  ANA_CTL2=0x000000a0
+  ANA_CTL3=0x00000033
+  ANA_CTL6=0x000000ff
+UAUDIO: PASS
+uaudiocap: I2S RX capture test (D2, PIO)
+  audio_init -> 0x00000000
+  audio_start -> 0x00000000
+  audio_read -> 0x00001000
+  audio_stop -> 0x00000000
+UAUDIOCAP: PASS
+uaudiogain: mic gain + overrun test (D3)
+  gain 0x00000000
+  ANA_CTL2=0x00000050
+  gain 0x00000001
+  ANA_CTL2=0x000000f0
+  gain 0x00000002
+  ANA_CTL2=0x000000a0
+  overrun=0x00000000
+UAUDIOGAIN: PASS
+uvoice: VOICE.START + AUD uplink test (D4)
+  VOICE.START -> 0x00000000
+  frames sent=0x00000008
+  VOICE.STOP -> 0x00000008
+UVOICE: PASS
+upl330: PL330 microcode test (D2b)
+  pl330_init -> 0x00000000
+  pl330_rx -> 0x00000000
+  ucode len=0x0000001c
+  verify mask=0x00000000
+UPL330: PASS
+ULFS: PASS
+UBLOGTEST: count...=16 getall...[0][1][2][3][4][5][6][7][8][9][10][11][12][13][14][15]get0...rc=0
+UBLOGTEST: PASS
+
+==========================================
+  Welcome to QaonicOS -- first boot setup
+==========================================
+This device is not set up yet.
+  * Wi-Fi: connect via the companion app
+    (ESP32-C6 portal) when available.
+  * Local setup: run 'setup' in the shell
+    (setup name <x>, setup tz <+HHMM>,
+     then 'setup done').
+lfs: /data on blk region sectors 30702..32749
+UFIRST: first-boot (not provisioned)
+UTIMEGATE: PASS
+UUPDSIG: PASS
+ucred: B5.5 credential store test
+UCREDSTORE: PASS
+QABOT: harness v1 (mock provider) mulai
+QABOT: skenario S1 mulai
+[1700] task mulai: berapa uptime?
+[1700] provider: TOOL:get_info
+[1700] gate: get_info -> ALLOW (risiko aman)
+[1700] exec: get_info -> uptime_ms=1700 mem=26744/65536KB cpu=4294967295%
+[1700] provider: FINAL:uptime terbaca
+[1700] final: uptime terbaca
+[1700] task selesai: status=0 steps=2
+QABOT: S1 PASS
+QABOT: skenario S2 mulai
+[1710] task mulai: nyalakan gpio 5
+[1710] provider: TOOL:gpio_write pin=5 val=1
+[1710] gate: gpio_write -> CONFIRM (butuh konfirmasi)
+[1710] confirm: ya (mode uji)
+[1710] exec: gpio_write -> pin=5 val=1 ok
+[1710] provider: FINAL:gpio ditulis
+[1710] final: gpio ditulis
+[1710] task selesai: status=0 steps=2
+QABOT: S2 PASS
+QABOT: skenario S3 mulai
+[1720] task mulai: hapus semua
+[1720] provider: TOOL:self_destruct target=all
+[1720] gate: self_destruct -> BLOCK (tool tak dikenal: self_destruct)
+[1720] provider: FINAL:ditolak
+[1720] final: ditolak
+[1720] task selesai: status=0 steps=2
+QABOT: S3 PASS
+QABOT: 3/3 PASS
+user_launch_init: PASS (21/21 programs, 17/17 files)
+[net] virtio-net @slot 0x1c (legacy)
+[net] hostfeat=0x39bf8064
+[net] qmax=0x400
+[net] qalign=0x0
+[net] qmax=0x400
+[net] qalign=0x0
+[net] link status=0x1
+[net] MAC 52:54:00:12:34:56
+[net] siap
+[dbg] rx desc=0x404f8000 avail=0x404f8800 used=0x404f9000
+[dbg] tx desc=0x404fb000 avail=0x404fb800 used=0x404fc000 aidx=0x0 uidx=0x0
+[net] IP 10.0.2.15, HTTP server port 80 (/ dan /metrics)
+[net] ping -> 10.0.2.2
+[icmp] echo reply diterima!
+[net] PING 10.0.2.2 BERHASIL
+sched: daemon 'sh' terdaftar (progid 4)
+bootux: dev mode -- shell only; 'gui' starts the dashboard
+sched: masuk user mode ('sh')...
+console: owner -> 'sh' (0)
+
+QaonicOS ready. CLI mode.
+Type 'help' for commands.
+
+[selftest] spawn embed:uls...
+spawn: 'embed:uls' (4841 byte), parent=0 menunggu
+motd.txt
+.motd_ready
+gpio.cmd
+.gpio_cmd_ready
+sd.cmd
+.sd_cmd_ready
+fat.cmd
+.fat_cmd_ready
+.ucat_done
+.uls_done
+echo.txt
+.uecho_done
+umon.out
+.umon_done
+gpio.out
+.ugpio_done
+sd.out
+.usd_done
+fat.out
+.ufs_done
+[uls] ok
+sched: 'spawned' exit 0x0
+spawn: child exit 0x0, parent 0 dibangunkan
+[selftest] spawn exit=0 PASS
+qaon> bootctl
+boot #1088  fail_count=0  safe_mode=0  last_reason=4 (0=unknown 1=power 2=crash 3=watchdog 4=software)
+qaon> cat /data/iptoolsc-test
+0
+qaon> 
