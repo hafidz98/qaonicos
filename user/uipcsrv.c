@@ -86,7 +86,7 @@ body_len(unsigned s)
 		return 4u;
 	if (s == 50u)
 		return UIPC_BODY_MAX;
-	return 8u + (s * 37u) % 251u;
+	return 8u + ((s * 37u) % 62u) * 4u;	/* multiple of 4 */
 }
 
 static unsigned char

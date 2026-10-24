@@ -9,10 +9,11 @@
  * change both or neither.
  *
  * A message is a 24-byte header plus a flat byte body.
- * The header mirrors mach_msg_header_t field for field
- * so the glue can hand it to the real Mach copyin/
- * copyout machinery; userspace never sees Mach's bits
- * word.
+ * The header is the same SIZE as mach_msg_header_t but
+ * NOT the same layout: the glue translates it field by
+ * field into a real Mach header (bits/size/remote/
+ * local/seqno/id) for the copyin/copyout machinery;
+ * userspace never sees Mach's bits word.
  *
  *   send:  hdr.reply = name of a reply port in the
  *          SENDER's space whose receive right the
@@ -27,6 +28,13 @@
  *          uipc_reply(). hdr.dest = name of the port
  *          the message arrived on. hdr.size is the
  *          actual total size.
+ *
+ * Wire size: the glue rounds the total size up to a
+ * multiple of 4 (a Mach kmsg requirement) with zero
+ * padding, so a receiver can see up to 3 trailing zero
+ * bytes beyond the sender's size. Protocols that need
+ * the exact length carry it in-band; the test programs
+ * use multiple-of-4 body lengths throughout.
  *
  * All calls are poll-only in v0: nothing ever blocks.
  * A send to a full queue and a receive on an empty
