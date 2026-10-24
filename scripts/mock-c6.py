@@ -28,8 +28,20 @@ Deliberate differences from the in-process mock:
   response), --silent (accept but never answer),
   --drop-after N (truncate the Nth response mid-way and
   close the connection), --kill-after N (close after N
-  completed responses, no reply to the next request).
+  completed responses, no reply to the next request),
+  --junk-after N (C6L-4: after the Nth completed
+  ordinary response, inject one garbage line into the
+  stream and keep the connection open -- the next
+  guest command reads junk as its response and must
+  link-reset, never desync).
   Default: none (a clean peer).
+- C6L-4 test keys: KV.GET __badlen__ answers a
+  non-numeric length ("OK abc"); KV.GET __hugelen__
+  answers "OK 100000" and sends no body (the guest
+  must time out, never hang). AUD payloads starting
+  with "ULS4" + u16 BE sequence are sequence-checked
+  (aud_seq_gap counts gaps; expected resets on
+  VOICE.START); other payloads are counted only.
 
 Usage:
   python3 scripts/mock-c6.py [--port 18082]
@@ -52,7 +64,7 @@ Transcript lines (appended, flushed per line):
   FRAME BIN <len> echo|drop|bad-crc
 Stats JSON (rewritten after every completed request):
   sessions, commands, aud_ok, aud_bad, aud_outside,
-  nethttp_bytes, kv_sets, tool_dispatch,
+  aud_seq_gap, nethttp_bytes, kv_sets, tool_dispatch,
   dispatch_results, ws_echo, ws_drop.
 """
 import argparse
@@ -109,6 +121,7 @@ class Peer:
         self.stats_path = stats_path
         self.stats = {"sessions": 0, "commands": 0, "aud_ok": 0,
                       "aud_bad": 0, "aud_outside": 0,
+                      "aud_seq_gap": 0,
                       "nethttp_bytes": 0, "kv_sets": 0,
                       "tool_dispatch": 0, "dispatch_results": 0,
                       "ws_echo": 0, "ws_drop": 0}
@@ -127,6 +140,8 @@ class Peer:
         # Voice state.
         self.voice_active = False
         self.voice_frames = 0
+        self.voice_seq_expected = 0
+        self.junk_sent = False
         # Scan list.
         self.scan = list(args.scan)
         self.served = 0           # completed responses, this session
@@ -235,6 +250,12 @@ class Peer:
             return ok()
         if cmd == "KV.GET" and len(parts) >= 2:
             key = parts[1]
+            # C6L-4 test keys (never stored, never
+            # looked up): malformed / over-long length.
+            if key == "__badlen__":
+                return b"OK abc\n"
+            if key == "__hugelen__":
+                return b"OK 100000\n"
             if key not in self.kv:
                 return err("NOTFOUND")
             val = self.kv[key]
@@ -252,6 +273,7 @@ class Peer:
         # --- Voice ---
         if line == "VOICE.START 16000 16":
             self.voice_frames = 0
+            self.voice_seq_expected = 0
             self.voice_active = True
             return ok()
         if line == "VOICE.STOP":
@@ -397,6 +419,14 @@ class Peer:
             return None
         self.voice_frames += 1
         self.stats["aud_ok"] += 1
+        payload = frame[5:5 + ln]
+        if payload[:4] == b"ULS4" and ln >= 6:
+            seq = (payload[4] << 8) | payload[5]
+            if seq != self.voice_seq_expected:
+                self.stats["aud_seq_gap"] += 1
+                self.log("FRAME AUD %d seq gap got %d want %d"
+                         % (ln, seq, self.voice_seq_expected))
+            self.voice_seq_expected = seq + 1
         self.log("FRAME AUD %d ok" % ln)
         return None
 
@@ -626,6 +656,13 @@ class Peer:
             self.log("RESP %r" % resp)
             self.served += 1
             self.write_stats()
+            if (self.args.junk_after is not None
+                    and self.served >= self.args.junk_after
+                    and not self.junk_sent):
+                self.junk_sent = True
+                junk = b"GARBAGE\xff\n"
+                conn.sendall(junk)
+                self.log("RESP %r (junk)" % junk)
             if (self.args.kill_after is not None
                     and self.served >= self.args.kill_after):
                 return "killed"
@@ -656,6 +693,7 @@ def run():
     ap.add_argument("--silent", action="store_true")
     ap.add_argument("--drop-after", type=int, default=None)
     ap.add_argument("--kill-after", type=int, default=None)
+    ap.add_argument("--junk-after", type=int, default=None)
     ap.add_argument("--scan-list", default=None)
     args = ap.parse_args()
     args.scan = parse_scan(args.scan_list) if args.scan_list \
@@ -682,6 +720,7 @@ def run():
             session_no += 1
             peer.stats["sessions"] = session_no
             peer.served = 0
+            peer.junk_sent = False
             peer.write_stats()
             if transcript:
                 transcript.write("SESSION %d ACCEPT\n" % session_no)

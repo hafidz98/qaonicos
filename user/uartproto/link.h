@@ -66,4 +66,18 @@ struct uproto_backend *uproto_backend_current(void);
  * job, see the wire-freeze document. */
 #define	UPROTO_CMD_TIMEOUT_MS	2000u
 
+/* --- Bridge-backend-only API (C6L-4) ---
+ *
+ * Simulated baud pacing: the bridge paces all bytes
+ * it sends to the configured baud budget (10 bits
+ * per byte). Default 921600; 115200 demonstrates
+ * why v1 baud cannot carry voice. Switching profile
+ * resets the pacing budget. The pace counters are
+ * the observable for rate tests. No-ops unless the
+ * bridge backend is live (the values are
+ * bridge-local statics, read back regardless). */
+void	uproto_bridge_set_baud(unsigned baud);
+unsigned	uproto_bridge_pace_waits(void);
+unsigned	uproto_bridge_pace_wait_ms(void);
+
 #endif /* LINK_H */

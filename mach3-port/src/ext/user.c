@@ -118,6 +118,8 @@ extern unsigned int	ulinktest_img_len;
 extern unsigned char	ulinkbr_img[];	/* C6L-2: bridge test */
 extern unsigned char	ulink3_img[];	/* C6L-3: v2 completion test */
 extern unsigned int	ulink3_img_len;
+extern unsigned char	ulinkaud_img[];	/* C6L-4: AUD integrity test */
+extern unsigned int	ulinkaud_img_len;
 extern unsigned int	ulinkbr_img_len;
 extern unsigned char	upl330_img[];	/* D2b: PL330 microcode */
 extern unsigned int	upl330_img_len;
@@ -1349,6 +1351,15 @@ user_syscall(struct arm_trap_frame *frame)
 				 * needs the scheduler active. */
 				{ "embed:ulink3", ulink3_img,
 				  &ulink3_img_len, -1 },
+				/* C6L-4: AUD streaming integrity
+				 * + error semantics (see
+				 * docs/rencana-komunikasi-
+				 * c6/DEVLOG-C6L4). Spawn-only
+				 * like ulinkbr/ulink3: the
+				 * bridge leg needs the
+				 * scheduler active. */
+				{ "embed:ulinkaud", ulinkaud_img,
+				  &ulinkaud_img_len, -1 },
 			};
 			unsigned int hi, ei;
 			int matched = 0;

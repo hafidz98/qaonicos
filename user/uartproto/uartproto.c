@@ -37,6 +37,29 @@
 static struct uproto_backend *cur_be = &uproto_backend_mock;
 static int be_opened = 0;
 
+/* --- Link state, counters, failure flags (C6L-4) ---
+ *
+ * State: 0 UP, 1 DOWN. DOWN is set by any transport
+ * failure (timeout, dead link, bad CRC, oversize,
+ * malformed) and cleared by the next successful
+ * command; a peer ERR answer is NOT a transport
+ * failure and leaves the state alone. Counters are
+ * scalars (no struct copies: user code has no
+ * __aeabi_memcpy4). Per-exchange failure flags are
+ * cleared at each command entry (fail_begin) and set
+ * by the reader as it fails, so the wrapper can
+ * classify the failure exactly once. */
+static unsigned link_state = 0u;
+static unsigned link_reason = 0u;
+static unsigned cnt_ok = 0u, cnt_peer_err = 0u, cnt_timeout = 0u,
+    cnt_dead = 0u, cnt_crc = 0u, cnt_oversize = 0u,
+    cnt_malformed = 0u, cnt_resets = 0u, cnt_retries = 0u,
+    cnt_retry_denied = 0u, cnt_frames_sent = 0u,
+    cnt_frames_send_fail = 0u;
+static unsigned fl_dead = 0u, fl_crc_bad = 0u, fl_oversize = 0u,
+    fl_malformed = 0u, fl_peer_err = 0u;
+static unsigned last_was_transport = 0u;
+
 /* Byte-stream staging (declared here because
  * uproto_backend_select() clears it on reopen; the
  * reader itself follows below). */
@@ -72,6 +95,135 @@ uproto_backend_current(void)
 	return cur_be;
 }
 
+static void
+fail_begin(void)
+{
+	fl_dead = fl_crc_bad = fl_oversize = fl_malformed =
+	    fl_peer_err = 0u;
+	last_was_transport = 0u;
+}
+
+static void
+link_ok(void)
+{
+	link_state = 0u;
+	link_reason = 0u;
+	cnt_ok++;
+}
+
+static void
+link_peer_err(void)
+{
+	cnt_peer_err++;
+}
+
+/* Classify the current exchange's failure, mark the
+ * link DOWN, and reset the transport: close the
+ * backend and clear the byte staging, so the next
+ * command starts a clean exchange (auto-recover).
+ * Queued inbound units survive (application-level,
+ * see uproto_backend_select). */
+static void
+link_transport_fail(void)
+{
+	unsigned reason;
+
+	if (fl_oversize)
+		reason = UPROTO_LINK_REASON_OVERSIZE;
+	else if (fl_crc_bad)
+		reason = UPROTO_LINK_REASON_CRC;
+	else if (fl_dead)
+		reason = UPROTO_LINK_REASON_DEAD;
+	else if (fl_malformed)
+		reason = UPROTO_LINK_REASON_MALFORMED;
+	else
+		reason = UPROTO_LINK_REASON_TIMEOUT;
+	link_state = 1u;
+	link_reason = reason;
+	last_was_transport = 1u;
+	switch (reason) {
+	case UPROTO_LINK_REASON_TIMEOUT:
+		cnt_timeout++;
+		break;
+	case UPROTO_LINK_REASON_DEAD:
+		cnt_dead++;
+		break;
+	case UPROTO_LINK_REASON_CRC:
+		cnt_crc++;
+		break;
+	case UPROTO_LINK_REASON_OVERSIZE:
+		cnt_oversize++;
+		break;
+	default:
+		cnt_malformed++;
+		break;
+	}
+	cnt_resets++;
+	uproto_backend_select(cur_be);
+}
+
+/* Frame-send failure: the peer is unreachable, but no
+ * exchange is in flight, so close without clearing
+ * the staging (it may hold unparsed inbound bytes). */
+static void
+link_send_fail(void)
+{
+	link_state = 1u;
+	link_reason = UPROTO_LINK_REASON_DEAD;
+	last_was_transport = 1u;
+	cnt_dead++;
+	cnt_frames_send_fail++;
+	if (be_opened && cur_be->close)
+		cur_be->close();
+	be_opened = 0;
+}
+
+int
+uproto_link_state(void)
+{
+	return (int)link_state;
+}
+
+unsigned
+uproto_link_reason(void)
+{
+	return link_reason;
+}
+
+void
+uproto_link_counters(unsigned *ok, unsigned *peer_err,
+		     unsigned *timeout, unsigned *dead,
+		     unsigned *crc_bad, unsigned *oversize,
+		     unsigned *malformed, unsigned *resets,
+		     unsigned *retries, unsigned *retry_denied,
+		     unsigned *frames_sent, unsigned *frames_send_fail)
+{
+	if (ok)
+		*ok = cnt_ok;
+	if (peer_err)
+		*peer_err = cnt_peer_err;
+	if (timeout)
+		*timeout = cnt_timeout;
+	if (dead)
+		*dead = cnt_dead;
+	if (crc_bad)
+		*crc_bad = cnt_crc;
+	if (oversize)
+		*oversize = cnt_oversize;
+	if (malformed)
+		*malformed = cnt_malformed;
+	if (resets)
+		*resets = cnt_resets;
+	if (retries)
+		*retries = cnt_retries;
+	if (retry_denied)
+		*retry_denied = cnt_retry_denied;
+	if (frames_sent)
+		*frames_sent = cnt_frames_sent;
+	if (frames_send_fail)
+		*frames_send_fail = cnt_frames_send_fail;
+}
+
 static int
 be_ensure_open(void)
 {
@@ -97,8 +249,10 @@ rd_byte(unsigned timeout_ms)
 		if (rd_pos < rd_len)
 			return rd_buf[rd_pos++];
 		n = cur_be->read(rd_buf, sizeof(rd_buf));
-		if (n < 0)
+		if (n < 0) {
+			fl_dead = 1u;
 			return -1;
+		}
 		if (n > 0) {
 			rd_len = (unsigned)n;
 			rd_pos = 0;
@@ -211,8 +365,10 @@ read_unit(unsigned timeout_ms, unsigned *kind_out, unsigned *ftype_out,
 			if (lo < 0)
 				return -1;
 			len = ((unsigned)hi << 8) | (unsigned)lo;
-			if (len > LINK_MAX_PAYLOAD)
+			if (len > LINK_MAX_PAYLOAD) {
+				fl_oversize = 1u;
 				return -1;
+			}
 			for (i = 0; i < len; i++) {
 				c0 = next_byte(timeout_ms);
 				if (c0 < 0)
@@ -233,8 +389,10 @@ read_unit(unsigned timeout_ms, unsigned *kind_out, unsigned *ftype_out,
 			frame_tmp[4] = (unsigned char)(len & 0xffu);
 			expect = voice_crc16(frame_tmp,
 			    LINK_FRAME_HDR + len);
-			if (crc != expect)
+			if (crc != expect) {
+				fl_crc_bad = 1u;
 				return -1;
+			}
 			*kind_out = UNIT_FRAME;
 			*ftype_out = (unsigned)t;
 			*len_out = len;
@@ -410,8 +568,10 @@ next_resp_line(char *line, unsigned linecap)
 			return -1;
 		if (kind == UNIT_FRAME) {
 			if (ftype == LINK_FRAME_TYPE_EVT) {
-				if (ulen > UPROTO_INB_EVT_MAX)
+				if (ulen > UPROTO_INB_EVT_MAX) {
+					fl_oversize = 1u;
 					return -1;
+				}
 				/* Full queue drops + counts;
 				 * the command read continues. */
 				inb_push(UPROTO_INB_EVT, 0, 0,
@@ -432,10 +592,14 @@ next_resp_line(char *line, unsigned linecap)
 		    line[6] == 'C' && line[7] == 'H' &&
 		    line[8] == ' ') {
 			if (parse_dispatch_line(line, &id, tool,
-				sizeof(tool), &blen) != 0)
+				sizeof(tool), &blen) != 0) {
+				fl_malformed = 1u;
 				return -1;
-			if (blen > UPROTO_INB_DISPATCH_ARGS_MAX)
+			}
+			if (blen > UPROTO_INB_DISPATCH_ARGS_MAX) {
+				fl_oversize = 1u;
 				return -1;
+			}
 			if (rd_exact(args, blen) != 0)
 				return -1;
 			inb_push(UPROTO_INB_DISPATCH, id, tool,
@@ -496,19 +660,25 @@ read_text_resp(const char *cmd, char *resp, unsigned rsz)
 	if (next_resp_line(line, sizeof(line)) < 0)
 		return -1;
 	if (line[0] == 'E' && line[1] == 'R' && line[2] == 'R' &&
-	    (line[3] == ' ' || line[3] == 0))
+	    (line[3] == ' ' || line[3] == 0)) {
+		fl_peer_err = 1u;
 		return -1;
+	}
 	if (!(line[0] == 'O' && line[1] == 'K' &&
-	    (line[2] == ' ' || line[2] == 0)))
+	    (line[2] == ' ' || line[2] == 0))) {
+		fl_malformed = 1u;
 		return -1;
+	}
 	/* Copy first-line payload (after "OK "). */
 	i = (line[2] == ' ') ? 3 : 2;
 	while (line[i] && o + 1 < rsz)
 		resp[o++] = line[i++];
 	if (is_multiline(cmd)) {
 		n = parse_ok_count(line);
-		if (n < 0)
+		if (n < 0) {
+			fl_malformed = 1u;
 			return -1;
+		}
 		while (n-- > 0) {
 			if (next_resp_line(line, sizeof(line)) < 0)
 				return -1;
@@ -560,22 +730,42 @@ do_cmd(const char *txline, char *resp, unsigned rsz)
 {
 	char wire[TX_SZ + 1];
 	unsigned n;
+	int r;
 
-	if (be_ensure_open() != 0)
+	fail_begin();
+	if (be_ensure_open() != 0) {
+		fl_dead = 1u;
+		link_transport_fail();
 		return -1;
+	}
 	cpycat(wire, sizeof(wire), txline, 0, 0);
 	n = slen(wire);
-	if (n + 1 > sizeof(wire))
+	if (n + 1 > sizeof(wire)) {
+		fl_malformed = 1u;
+		link_transport_fail();
 		return -1;
+	}
 	wire[n++] = '\n';
-	if (cur_be->write((unsigned char *)wire, n) != 0)
+	if (cur_be->write((unsigned char *)wire, n) != 0) {
+		fl_dead = 1u;
+		link_transport_fail();
 		return -1;
+	}
 	/* No staged-byte drop here (C6L-3): trailing
 	 * bytes in staging may be queued inbound units;
 	 * the unit reader consumes them in order. A
 	 * failed exchange recovers by backend reopen,
 	 * which clears the staging. */
-	return read_text_resp(txline, resp, rsz);
+	r = read_text_resp(txline, resp, rsz);
+	if (r == 0) {
+		link_ok();
+		return 0;
+	}
+	if (fl_peer_err)
+		link_peer_err();
+	else
+		link_transport_fail();
+	return -1;
 }
 
 int
@@ -604,6 +794,78 @@ uproto_cmd2(const char *cmd, const char *a1, const char *a2,
 	return do_cmd(tx, resp, rsz);
 }
 
+/* --- Retry policy (C6L-4) ---
+ *
+ * Plain wrappers NEVER retry: a retry after a
+ * transport failure re-sends the request, which is
+ * only safe for idempotent commands. The policy
+ * lives here, in the link layer, because the link
+ * layer is what sees transport failures (timeout /
+ * reset) and what parses the command token; the
+ * caller only declares idempotence it actually
+ * knows (KV.SET with an unchanged value).
+ *
+ * Rules (see uartproto.h): at most ONE retry, only
+ * after a TRANSPORT failure (a peer ERR answer is
+ * never retried -- the peer answered, re-sending
+ * cannot help); only allowlisted idempotent line
+ * commands; KV.SET only with idem != 0; everything
+ * else (WIFI.PASS, TOOL.DISPATCH, VOICE.*, NET.WS.*,
+ * DISPATCH.RESULT, BLE.NAME, WIFI.CONNECT, and any
+ * unknown token) is never retried. KV.GET has no
+ * line-helper retry: its length-prefixed body must
+ * be read by uproto_kv_get, not by do_cmd. */
+static int
+tok_is(const char *cmd, const char *tok)
+{
+	unsigned i;
+
+	for (i = 0; tok[i]; i++)
+		if (cmd[i] != tok[i])
+			return 0;
+	return cmd[i] == 0 || cmd[i] == ' ';
+}
+
+int
+uproto_retry_policy(const char *cmd, int idem)
+{
+	static const char *allow[] = {
+		"WIFI.SCAN", "WIFI.LIST", "WIFI.STATUS", "WIFI.DISC",
+		"BLE.STATUS", "BLE.ON", "BLE.OFF",
+		"TIME.GET", "FIDO.LIST",
+	};
+	unsigned i;
+
+	if (!cmd)
+		return 0;
+	if (tok_is(cmd, "KV.SET"))
+		return idem ? 1 : 0;
+	for (i = 0; i < sizeof(allow) / sizeof(allow[0]); i++)
+		if (tok_is(cmd, allow[i]))
+			return 1;
+	return 0;
+}
+
+int
+uproto_cmd_retry(const char *cmd, char *resp, unsigned rsz, int idem)
+{
+	char tx[TX_SZ];
+
+	if (!cmd)
+		return -1;
+	cpycat(tx, sizeof(tx), cmd, 0, 0);
+	if (do_cmd(tx, resp, rsz) == 0)
+		return 0;
+	if (!last_was_transport)
+		return -1;
+	if (!uproto_retry_policy(cmd, idem)) {
+		cnt_retry_denied++;
+		return -1;
+	}
+	cnt_retries++;
+	return do_cmd(tx, resp, rsz);
+}
+
 /* --- KV: length-prefixed values --- */
 
 static void
@@ -628,30 +890,73 @@ uproto_kv_set(const char *key, const char *val, unsigned vlen)
 	char line[TX_SZ], num[12], resp[16];
 	unsigned n, i;
 
+	fail_begin();
 	if (!key || !key[0] || vlen > UPROTO_KV_VAL_MAX)
 		return -1;
-	if (be_ensure_open() != 0)
+	if (be_ensure_open() != 0) {
+		fl_dead = 1u;
+		link_transport_fail();
 		return -1;
+	}
 	put_dec(num, vlen);
 	cpycat(line, sizeof(line), "KV.SET", key, num);
 	n = slen(line);
-	if (n + 1 + vlen > sizeof(wire))
+	if (n + 1 + vlen > sizeof(wire)) {
+		fl_malformed = 1u;
+		link_transport_fail();
 		return -1;
+	}
 	for (i = 0; i < n; i++)
 		wire[i] = line[i];
 	wire[n++] = '\n';
 	for (i = 0; i < vlen; i++)
 		wire[n++] = val[i];
-	if (cur_be->write((unsigned char *)wire, n) != 0)
+	if (cur_be->write((unsigned char *)wire, n) != 0) {
+		fl_dead = 1u;
+		link_transport_fail();
 		return -1;
+	}
 	/* Unit-aware single-line OK/ERR response (queued
 	 * inbound units on the way are kept). */
-	if (next_resp_line(resp, sizeof(resp)) < 0)
+	if (next_resp_line(resp, sizeof(resp)) < 0) {
+		link_transport_fail();
 		return -1;
+	}
 	if (resp[0] == 'O' && resp[1] == 'K' &&
-	    (resp[2] == ' ' || resp[2] == 0))
+	    (resp[2] == ' ' || resp[2] == 0)) {
+		link_ok();
 		return 0;
+	}
+	if (resp[0] == 'E' && resp[1] == 'R' && resp[2] == 'R') {
+		link_peer_err();
+		return -1;
+	}
+	fl_malformed = 1u;
+	link_transport_fail();
 	return -1;
+}
+
+/* KV.SET with the C6L-4 retry policy: at most one
+ * retry, only after a transport failure, only when
+ * the caller asserts the value is unchanged
+ * (idem != 0). A changed value is never retried:
+ * the first attempt may have landed while its
+ * response was lost, and a second SET would be a
+ * second, different write, not a retry. */
+int
+uproto_kv_set_retry(const char *key, const char *val, unsigned vlen,
+		    int idem)
+{
+	if (uproto_kv_set(key, val, vlen) == 0)
+		return 0;
+	if (!last_was_transport)
+		return -1;
+	if (!uproto_retry_policy("KV.SET", idem)) {
+		cnt_retry_denied++;
+		return -1;
+	}
+	cnt_retries++;
+	return uproto_kv_set(key, val, vlen);
 }
 
 int
@@ -662,26 +967,43 @@ uproto_kv_get(const char *key, char *val, unsigned vsz,
 	unsigned len = 0, take;
 	int n;
 
+	fail_begin();
 	if (!key || !key[0] || !val || vsz == 0)
 		return -1;
-	if (be_ensure_open() != 0)
+	if (be_ensure_open() != 0) {
+		fl_dead = 1u;
+		link_transport_fail();
 		return -1;
+	}
 	cpycat(line, sizeof(line), "KV.GET", key, 0);
 	{
 		unsigned n = slen(line);
-		if (n + 1 > sizeof(line))
+		if (n + 1 > sizeof(line)) {
+			fl_malformed = 1u;
+			link_transport_fail();
 			return -1;
+		}
 		line[n++] = '\n';
-		if (cur_be->write((unsigned char *)line, n) != 0)
+		if (cur_be->write((unsigned char *)line, n) != 0) {
+			fl_dead = 1u;
+			link_transport_fail();
 			return -1;
+		}
 	}
-	if (next_resp_line(hdr, sizeof(hdr)) < 0)
+	if (next_resp_line(hdr, sizeof(hdr)) < 0) {
+		link_transport_fail();
 		return -1;
-	if (hdr[0] == 'E' && hdr[1] == 'R' && hdr[2] == 'R')
+	}
+	if (hdr[0] == 'E' && hdr[1] == 'R' && hdr[2] == 'R') {
+		link_peer_err();
 		return -1;
+	}
 	n = parse_ok_count(hdr);
-	if (n < 0)
+	if (n < 0) {
+		fl_malformed = 1u;
+		link_transport_fail();
 		return -1;
+	}
 	len = (unsigned)n;
 	if (vlen_out)
 		*vlen_out = len;
@@ -689,22 +1011,28 @@ uproto_kv_get(const char *key, char *val, unsigned vsz,
 	 * caller's buffer but always consume the full body
 	 * so the stream stays synchronised. */
 	take = (len < vsz) ? len : vsz - 1u;
-	if (rd_exact((unsigned char *)val, take) != 0)
+	if (rd_exact((unsigned char *)val, take) != 0) {
+		link_transport_fail();
 		return -1;
+	}
 	if (len > take) {
 		unsigned char sink[32];
 		unsigned left = len - take;
 		while (left > 0) {
 			unsigned chunk = (left < sizeof(sink)) ?
 			    left : sizeof(sink);
-			if (rd_exact(sink, chunk) != 0)
+			if (rd_exact(sink, chunk) != 0) {
+				link_transport_fail();
 				return -1;
+			}
 			left -= chunk;
 		}
 		val[take] = 0;
+		link_ok();
 		return -2;
 	}
 	val[take] = 0;
+	link_ok();
 	return 0;
 }
 
@@ -733,44 +1061,67 @@ uproto_nethttp_get(const char *url, unsigned char *body, unsigned cap,
 	unsigned len = 0u, take;
 	int n;
 
+	fail_begin();
 	if (!url || !url[0] || !body || cap == 0)
 		return -1;
-	if (be_ensure_open() != 0)
+	if (be_ensure_open() != 0) {
+		fl_dead = 1u;
+		link_transport_fail();
 		return -1;
+	}
 	cpycat(line, sizeof(line), "NET.HTTP GET", url, 0);
 	{
 		unsigned n = slen(line);
-		if (n + 1 > sizeof(line))
+		if (n + 1 > sizeof(line)) {
+			fl_malformed = 1u;
+			link_transport_fail();
 			return -1;
+		}
 		line[n++] = '\n';
-		if (cur_be->write((unsigned char *)line, n) != 0)
+		if (cur_be->write((unsigned char *)line, n) != 0) {
+			fl_dead = 1u;
+			link_transport_fail();
 			return -1;
+		}
 	}
-	if (next_resp_line(hdr, sizeof(hdr)) < 0)
+	if (next_resp_line(hdr, sizeof(hdr)) < 0) {
+		link_transport_fail();
 		return -1;
-	if (hdr[0] == 'E' && hdr[1] == 'R' && hdr[2] == 'R')
+	}
+	if (hdr[0] == 'E' && hdr[1] == 'R' && hdr[2] == 'R') {
+		link_peer_err();
 		return -1;
+	}
 	n = parse_ok_count(hdr);
-	if (n < 0)
+	if (n < 0) {
+		fl_malformed = 1u;
+		link_transport_fail();
 		return -1;
+	}
 	len = (unsigned)n;
 	if (len_out)
 		*len_out = len;
 	take = (len < cap) ? len : cap;
-	if (rd_exact(body, take) != 0)
+	if (rd_exact(body, take) != 0) {
+		link_transport_fail();
 		return -1;
+	}
 	if (len > take) {
 		unsigned char sink[32];
 		unsigned left = len - take;
 		while (left > 0) {
 			unsigned chunk = (left < sizeof(sink)) ?
 			    left : sizeof(sink);
-			if (rd_exact(sink, chunk) != 0)
+			if (rd_exact(sink, chunk) != 0) {
+				link_transport_fail();
 				return -1;
+			}
 			left -= chunk;
 		}
+		link_ok();
 		return -2;
 	}
+	link_ok();
 	return 0;
 }
 
@@ -829,11 +1180,15 @@ static int
 send_bin_frame(unsigned type, const unsigned char *payload, unsigned len)
 {
 	unsigned crc, flen, i;
+	int r;
 
 	if (len > LINK_MAX_PAYLOAD)
 		return -1;
-	if (be_ensure_open() != 0)
+	fail_begin();
+	if (be_ensure_open() != 0) {
+		link_send_fail();
 		return -1;
+	}
 	frame_tmp[0] = LINK_FRAME_MAGIC0;
 	frame_tmp[1] = LINK_FRAME_MAGIC1;
 	frame_tmp[2] = (unsigned char)type;
@@ -847,7 +1202,13 @@ send_bin_frame(unsigned type, const unsigned char *payload, unsigned len)
 	frame_tmp[LINK_FRAME_HDR + len + 1u] =
 	    (unsigned char)(crc & 0xffu);
 	flen = LINK_FRAME_HDR + len + LINK_FRAME_CRC;
-	return cur_be->send_frame(frame_tmp, flen);
+	r = cur_be->send_frame(frame_tmp, flen);
+	if (r != 0) {
+		link_send_fail();
+		return -1;
+	}
+	cnt_frames_sent++;
+	return 0;
 }
 
 int
@@ -874,10 +1235,14 @@ poll_one(struct uproto_inb *inb)
 	if (r <= 0)
 		return r;
 	if (kind == UNIT_FRAME) {
-		if (ftype != LINK_FRAME_TYPE_EVT)
+		if (ftype != LINK_FRAME_TYPE_EVT) {
+			fl_malformed = 1u;
 			return -1;
-		if (ulen > UPROTO_INB_EVT_MAX)
+		}
+		if (ulen > UPROTO_INB_EVT_MAX) {
+			fl_oversize = 1u;
 			return -1;
+		}
 		inb->kind = UPROTO_INB_EVT;
 		inb->id = 0;
 		inb->tool[0] = 0;
@@ -887,10 +1252,14 @@ poll_one(struct uproto_inb *inb)
 		return 1;
 	}
 	/* TEXT: only a DISPATCH line is a unit here. */
-	if (parse_dispatch_line(line, &id, tool, sizeof(tool), &blen) != 0)
+	if (parse_dispatch_line(line, &id, tool, sizeof(tool), &blen) != 0) {
+		fl_malformed = 1u;
 		return -1;
-	if (blen > UPROTO_INB_DISPATCH_ARGS_MAX)
+	}
+	if (blen > UPROTO_INB_DISPATCH_ARGS_MAX) {
+		fl_oversize = 1u;
 		return -1;
+	}
 	if (rd_exact(args, blen) != 0)
 		return -1;
 	inb->kind = UPROTO_INB_DISPATCH;
@@ -909,10 +1278,14 @@ uproto_poll_inbound(struct uproto_inb *inb, unsigned budget_ms)
 {
 	unsigned t0;
 
+	fail_begin();
 	if (!inb)
 		return -1;
-	if (be_ensure_open() != 0)
+	if (be_ensure_open() != 0) {
+		fl_dead = 1u;
+		link_transport_fail();
 		return -1;
+	}
 	t0 = sys_uptime();
 	for (;;) {
 		int r;
@@ -920,10 +1293,14 @@ uproto_poll_inbound(struct uproto_inb *inb, unsigned budget_ms)
 		if (inb_pop(inb))
 			return 1;
 		r = poll_one(inb);
-		if (r > 0)
+		if (r > 0) {
+			link_ok();
 			return 1;
-		if (r < 0)
+		}
+		if (r < 0) {
+			link_transport_fail();
 			return -1;
+		}
 		if (sys_uptime() - t0 >= budget_ms)
 			return 0;
 		sys_yield();
@@ -982,6 +1359,7 @@ uproto_tool_dispatch(const char *tool, const char *args_json,
 	unsigned alen, len, take, i;
 	int n;
 
+	fail_begin();
 	if (!tool || !tool[0] || !args_json || !result || rsz == 0)
 		return -1;
 	alen = slen(args_json);
@@ -991,16 +1369,20 @@ uproto_tool_dispatch(const char *tool, const char *args_json,
 	cpycat(line, sizeof(line), "TOOL.DISPATCH", tool, num);
 	if (write_line_body(line, (const unsigned char *)args_json,
 		alen) != 0) {
+		fl_dead = 1u;
+		link_transport_fail();
 		set_err(err, esz, "WIRE");
 		return -1;
 	}
 	if (next_resp_line(hdr, sizeof(hdr)) < 0) {
+		link_transport_fail();
 		set_err(err, esz, "WIRE");
 		return -1;
 	}
 	if (hdr[0] == 'E' && hdr[1] == 'R' && hdr[2] == 'R' &&
 	    hdr[3] == ' ') {
 		/* Peer ERR: copy the code (e.g. NOTOOL). */
+		link_peer_err();
 		i = 4;
 		n = 0;
 		while (hdr[i] && hdr[i] != ' ' && (unsigned)n + 1 < esz) {
@@ -1015,12 +1397,15 @@ uproto_tool_dispatch(const char *tool, const char *args_json,
 	}
 	n = parse_ok_count(hdr);
 	if (n < 0) {
+		fl_malformed = 1u;
+		link_transport_fail();
 		set_err(err, esz, "WIRE");
 		return -1;
 	}
 	len = (unsigned)n;
 	take = (len < rsz) ? len : rsz - 1u;
 	if (rd_exact((unsigned char *)result, take) != 0) {
+		link_transport_fail();
 		set_err(err, esz, "WIRE");
 		return -1;
 	}
@@ -1034,6 +1419,7 @@ uproto_tool_dispatch(const char *tool, const char *args_json,
 			unsigned chunk = (left < sizeof(sink)) ?
 			    left : sizeof(sink);
 			if (rd_exact(sink, chunk) != 0) {
+				link_transport_fail();
 				set_err(err, esz, "WIRE");
 				return -1;
 			}
@@ -1044,6 +1430,7 @@ uproto_tool_dispatch(const char *tool, const char *args_json,
 		return -1;
 	}
 	result[take] = 0;
+	link_ok();
 	return 0;
 }
 
@@ -1053,6 +1440,7 @@ uproto_dispatch_result(unsigned id, const char *result_json)
 	char line[96], num[12], idbuf[12], resp[64];
 	unsigned rlen;
 
+	fail_begin();
 	if (!result_json)
 		return -1;
 	rlen = slen(result_json);
@@ -1062,13 +1450,26 @@ uproto_dispatch_result(unsigned id, const char *result_json)
 	put_dec(num, rlen);
 	cpycat(line, sizeof(line), "DISPATCH.RESULT", idbuf, num);
 	if (write_line_body(line, (const unsigned char *)result_json,
-		rlen) != 0)
+		rlen) != 0) {
+		fl_dead = 1u;
+		link_transport_fail();
 		return -1;
-	if (next_resp_line(resp, sizeof(resp)) < 0)
+	}
+	if (next_resp_line(resp, sizeof(resp)) < 0) {
+		link_transport_fail();
 		return -1;
+	}
 	if (resp[0] == 'O' && resp[1] == 'K' &&
-	    (resp[2] == ' ' || resp[2] == 0))
+	    (resp[2] == ' ' || resp[2] == 0)) {
+		link_ok();
 		return 0;
+	}
+	if (resp[0] == 'E' && resp[1] == 'R' && resp[2] == 'R')
+		link_peer_err();
+	else {
+		fl_malformed = 1u;
+		link_transport_fail();
+	}
 	return -1;
 }
 
@@ -1111,13 +1512,16 @@ uproto_ws_recv(unsigned char *buf, unsigned cap, unsigned *len_out)
 	char tool[UPROTO_INB_TOOL_MAX + 1];
 	unsigned char args[UPROTO_INB_DISPATCH_ARGS_MAX];
 
+	fail_begin();
 	if (!buf || cap == 0)
 		return -1;
 	for (;;) {
 		int r = read_unit(UPROTO_CMD_TIMEOUT_MS, &kind, &ftype,
 		    &ulen, line, sizeof(line));
-		if (r <= 0)
+		if (r <= 0) {
+			link_transport_fail();
 			return -1;
+		}
 		if (kind == UNIT_FRAME) {
 			if (ftype == LINK_FRAME_TYPE_BIN) {
 				unsigned take = (ulen < cap) ? ulen : cap;
@@ -1126,27 +1530,41 @@ uproto_ws_recv(unsigned char *buf, unsigned cap, unsigned *len_out)
 					buf[i] = frame_tmp[LINK_FRAME_HDR + i];
 				if (len_out)
 					*len_out = ulen;
+				link_ok();
 				return (ulen > take) ? -2 : 0;
 			}
 			if (ftype == LINK_FRAME_TYPE_EVT) {
-				if (ulen > UPROTO_INB_EVT_MAX)
+				if (ulen > UPROTO_INB_EVT_MAX) {
+					fl_oversize = 1u;
+					link_transport_fail();
 					return -1;
+				}
 				inb_push(UPROTO_INB_EVT, 0, 0,
 				    frame_tmp + LINK_FRAME_HDR, ulen);
 				continue;
 			}
+			fl_malformed = 1u;
+			link_transport_fail();
 			return -1;
 		}
 		/* TEXT during a WS wait: a DISPATCH line
 		 * queues (its body is consumed here);
 		 * anything else is a link-reset error. */
 		if (parse_dispatch_line(line, &id, tool, sizeof(tool),
-			&blen) != 0)
+			&blen) != 0) {
+			fl_malformed = 1u;
+			link_transport_fail();
 			return -1;
-		if (blen > UPROTO_INB_DISPATCH_ARGS_MAX)
+		}
+		if (blen > UPROTO_INB_DISPATCH_ARGS_MAX) {
+			fl_oversize = 1u;
+			link_transport_fail();
 			return -1;
-		if (rd_exact(args, blen) != 0)
+		}
+		if (rd_exact(args, blen) != 0) {
+			link_transport_fail();
 			return -1;
+		}
 		inb_push(UPROTO_INB_DISPATCH, id, tool, args, blen);
 	}
 }

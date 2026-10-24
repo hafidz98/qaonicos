@@ -211,6 +211,78 @@ int	uproto_ws_recv(unsigned char *buf, unsigned cap,
 /* Close a WS session. Returns 0/-1. */
 int	uproto_ws_close(unsigned sid);
 
+/* --- Link state, counters, retry policy (C6L-4) ---
+ *
+ * Error semantics, as implemented (not just
+ * documented): every command wrapper classifies its
+ * outcome exactly once. A peer ERR answer counts as
+ * a peer error and leaves the link state alone (the
+ * peer answered; the link is fine). Any transport
+ * failure -- timeout (silence or stall past
+ * UPROTO_CMD_TIMEOUT_MS), dead link (peer FIN/RST),
+ * bad frame CRC, oversize declared length, malformed
+ * line -- marks the link DOWN with its reason and
+ * resets the transport (backend close + byte
+ * staging cleared; queued inbound units survive).
+ * The next command lazily reopens the backend: that
+ * is the auto-recover. DOWN clears on the next
+ * successful command. Frame-send failure marks DOWN
+ * (DEAD) and closes the backend without clearing
+ * staging (no exchange is in flight).
+ *
+ * Retry policy: plain wrappers NEVER retry. The
+ * _retry variants retry at most ONCE, only after a
+ * TRANSPORT failure (never after a peer ERR), and
+ * only for idempotent commands, per
+ * uproto_retry_policy(): the allowlisted line
+ * commands (WIFI.SCAN/LIST/STATUS/DISC, BLE.STATUS/
+ * ON/OFF, TIME.GET, FIDO.LIST) unconditionally, and
+ * KV.SET only when the caller asserts idem != 0
+ * (same value re-written). WIFI.PASS, KV.SET with a
+ * changed value, TOOL.DISPATCH, VOICE.*, NET.WS.*,
+ * DISPATCH.RESULT, BLE.NAME, WIFI.CONNECT, and
+ * unknown tokens are NEVER retried. KV.GET has no
+ * retry variant: its length-prefixed body must be
+ * read by uproto_kv_get, never by the line reader.
+ * Counters are the observable: retries performed
+ * vs denied, per-reason failure counts, resets. */
+#define	UPROTO_LINK_UP		0
+#define	UPROTO_LINK_DOWN	1
+#define	UPROTO_LINK_REASON_NONE		0u
+#define	UPROTO_LINK_REASON_TIMEOUT	1u
+#define	UPROTO_LINK_REASON_DEAD		2u
+#define	UPROTO_LINK_REASON_CRC		3u
+#define	UPROTO_LINK_REASON_OVERSIZE	4u
+#define	UPROTO_LINK_REASON_MALFORMED	5u
+
+/* 0 = UP, 1 = DOWN. */
+int	uproto_link_state(void);
+/* Reason of the current DOWN state (NONE when UP). */
+unsigned	uproto_link_reason(void);
+/* All counters, in this order; any pointer may be
+ * NULL to skip that counter. */
+void	uproto_link_counters(unsigned *ok, unsigned *peer_err,
+			     unsigned *timeout, unsigned *dead,
+			     unsigned *crc_bad, unsigned *oversize,
+			     unsigned *malformed, unsigned *resets,
+			     unsigned *retries, unsigned *retry_denied,
+			     unsigned *frames_sent,
+			     unsigned *frames_send_fail);
+/* 1 if cmd may be retried after a transport failure
+ * (idem matters only for KV.SET), else 0. Pure
+ * classifier: no I/O, safe for linkd (C6L-5) to reuse. */
+int	uproto_retry_policy(const char *cmd, int idem);
+/* Line command with the retry policy (see above).
+ * cmd is one line without '\n'. Returns 0/-1 like
+ * uproto_cmd. */
+int	uproto_cmd_retry(const char *cmd, char *resp, unsigned rsz,
+			 int idem);
+/* KV.SET with the retry policy (idem != 0 asserts
+ * the value is unchanged). Returns 0/-1 like
+ * uproto_kv_set. */
+int	uproto_kv_set_retry(const char *key, const char *val,
+			    unsigned vlen, int idem);
+
 /* --- Test-only mock inspection (C6L-3) ---
  * Implemented by the in-process mock backend only
  * (mock_comcu.c). The guest test reads back the
