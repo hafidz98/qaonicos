@@ -6,23 +6,24 @@ page describes the ABI's shape and its documented surface.
 
 !!! danger "Staleness warning — read this first"
     The canonical list, [`docs/SYSCALL-ABI.md`](../docs/SYSCALL-ABI.md),
-    is **28 syscalls stale** (foundation audit item #14): it
-    documents the Fase B–D surface in detail, but the extension
-    syscalls added by later tracks (78–107) were never backfilled
-    into it. The backfill is a known, scheduled backlog item —
-    **not done yet**. Below, Table 1 reproduces what
-    SYSCALL-ABI.md documents; Table 2 lists the in-use numbers
-    documented across track plans and dev logs instead. When in
-    doubt, the kernel source (`mach3-port/src/ext/user.c`) is the
+    documents the Fase B–D surface in detail and, since IPC-5,
+    the full IPC surface (10/11/12/23/25) — but the extension
+    syscalls in Table 2 below (78–105) were never backfilled
+    into it (foundation audit item #14). The backfill of
+    Table 2 is a known, scheduled backlog item — **not done
+    yet**. Below, Table 1 reproduces what SYSCALL-ABI.md
+    documents; Table 2 lists the in-use numbers documented
+    across track plans and dev logs instead. When in doubt,
+    the kernel source (`mach3-port/src/ext/user.c`) is the
     truth. **Do not invent rows**: a number not in either table
     is not known to exist.
 
 > **Key facts**
 >
-> - **Convention (ARM, EABI-like):** number in `r7`, args in `r0`–`r5`, return in `r0`, trap via `svc #0`. Errors are negative: −1 general failure, −2 ENOSYS (unknown number).
+> - **Convention (ARM, EABI-like):** number in `r7`, args in `r0`–`r5`, return in `r0`, trap via `svc #0`. Errors are negative: −1 general failure, −2 ENOSYS (unknown number); the IPC surface adds its own `UIPC_E*` table (−3..−13, see SYSCALL-ABI.md).
 > - **User memory layout:** code at `0x100000` (embedded image, own task per program), stack page at `0x110000`, sbrk heap `0x120000`–`0x130000` (64 KB). Buffer validation is VA-range checking, not page-table walking (honest limitation, audit #7).
-> - **Shape:** poll-shaped, non-blocking (R9) — consumers poll and yield; there are no blocking syscalls.
-> - **Reserved:** 10–12 and 23 are held for Mach-style IPC that has never been implemented (see decision D-ARCH-4 on the [boundary page](kernel-userspace-boundary.md)).
+> - **Shape:** poll-shaped, with one sanctioned blocking form (R9 + D-IPC-1) — consumers poll and yield; blocking `SYS_RECV` parks a daemon on an empty port with a mandatory deadline, as the scheduler's third switch point.
+> - **IPC (live since IPC-1..IPC-5):** 10 SEND, 11 RECV, 12 RPC, 23 RPC_USER, 25 IPC_PORT (ALLOC_RECV / DESTROY / SETQLIMIT / REGISTER / LOOKUP / REG_GEN); inline body cap 4096 B, default qlimit 5, max 16; kernel registry (8 entries, generations, reserved names `tools` and `link`); `uipc.h` v1 frozen (see decision D-ARCH-4 on the [boundary page](kernel-userspace-boundary.md)).
 
 ## Table 1 — documented in SYSCALL-ABI.md
 
@@ -38,6 +39,7 @@ page describes the ABI's shape and its documented surface.
 | 69–70 | Wall clock | `SYS_TIME_SET` / `SYS_TIME_GET` (Unix seconds UTC; `0` = never set) |
 | 71–72 | UDP | `SYS_UDP_SEND` / `SYS_UDP_RECV` (≤512 B datagrams, single RX slot, non-blocking) |
 | 73–77 | TCP client | `SYS_TCP_CONNECT/STATUS/SEND/RECV/CLOSE` — **one** client connection at a time; send is stop-and-wait per segment; recv returns 0 = "not yet" |
+| 10–12, 23, 25 | IPC (IPC-1..5) | `SYS_SEND` (10), `SYS_RECV` (11, poll or blocking with deadline), `SYS_RPC` (12), `SYS_RPC_USER` (23), `SYS_IPC_PORT` (25: ALLOC_RECV / DESTROY / SETQLIMIT / REGISTER / LOOKUP / REG_GEN). Inline cap 4096 B; registry + generations + reserved names; `uipc.h` v1 frozen |
 | 106–107 | Power (FND-1) | `SYS_RESET` / `SYS_POWEROFF` via PSCI; the kernel stamps reason 4 + bootlog event 12 before acting |
 
 `struct qaon_stat` (via 57): uptime (real), memory used/total
@@ -81,10 +83,11 @@ New numbers are appended, never recycled; a new kernel-resident
 surface must pass the admission rule R14 first
 ([boundary page](kernel-userspace-boundary.md)). When you add a
 syscall, the ABI doc update belongs in the same change — the
-28-row backlog exists precisely because that rule was not always
+Table 2 backlog exists precisely because that rule was not always
 followed.
 
 Sources:
-[`docs/SYSCALL-ABI.md`](../docs/SYSCALL-ABI.md) (canonical, stale as warned),
+[`docs/SYSCALL-ABI.md`](../docs/SYSCALL-ABI.md) (canonical; IPC
+surface backfilled IPC-5, Table 2 still pending),
 [`docs/riset-fondasi-tanpa-board/RINGKASAN.md`](../docs/riset-fondasi-tanpa-board/RINGKASAN.md) (audit #14),
 [`docs/ARSITEKTUR.md`](../docs/ARSITEKTUR.md) (§2 inventory).

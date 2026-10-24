@@ -30,13 +30,18 @@ document does not pretend otherwise:
   (§1.2), the port kept Mach's VM: `setup_uprog_task()`
   creates a real Mach task + thread per program, and
   memory isolation is genuinely Mach's. Everything else
-  Mach is famous for is bypassed: the `thread_t` is
-  created and never scheduled, the Mach scheduler and
-  Mach IPC ports play no part in the product path, and
-  the IPC syscall numbers (10–12, 23) have sat reserved
-  and unused since Fase B (`docs/SYSCALL-ABI.md`).
+  Mach is famous for was bypassed at first: the `thread_t`
+  is created and never scheduled, and the Mach scheduler
+  plays no part in the product path. The IPC half of
+  that sentence stopped being true in the IPC track
+  (IPC-1..IPC-5, 2026-10-24): the IPC syscall numbers
+  (10 SEND, 11 RECV, 12 RPC, 23 RPC_USER, 25 IPC_PORT)
+  are live, backed by the real upstream `ipc/`
+  machinery through the extension-layer glue
+  (`mach3-port/src/ext/ipc_glue.c`) — see §1's IPC
+  note below and `docs/SYSCALL-ABI.md`.
 - **A kernel extension layer** (`mach3-port/src/ext/`,
-  centred on the 2,270-line `user.c`) owns everything
+  centred on the 3,475-line `user.c` (at IPC-5) owns everything
   product-shaped in the kernel: the syscall dispatch,
   a hand-rolled cooperative scheduler, the daemon table,
   the hardware arbiters, and a set of resident services
@@ -53,21 +58,35 @@ document does not pretend otherwise:
   only from two points — the `SYS_YIELD` handler
   (`sched_yield_switch`) and the exit paths
   (`sched_exit_switch`).
-- **Syscalls are the only crossing.** There is no other
-  channel: no shared memory ABI, no message passing.
-  What other systems call "IPC" here is *shared kernel
+- **Syscalls are the only crossing.** There is no
+  shared-memory ABI. Message passing exists as a
+  second, sanctioned mechanism since the IPC track
+  (IPC-1..IPC-5): real Mach ports behind syscalls
+  10/11/12/23/25, with a kernel registry and RPC
+  (`docs/SYSCALL-ABI.md`, `user/ulib/uipc.h` v1 frozen).
+  The older per-service pattern — *shared kernel
   globals behind a syscall surface* (the display token,
-  the web-shell bridge, the bootstate record).
-- **The ABI is poll-shaped by design.** Consumers poll
+  the web-shell bridge, the bootstate record) — remains
+  the mechanism for every service that already uses it.
+- **The ABI is poll-shaped by design, with one
+  sanctioned blocking form.** Consumers poll
   (`SYS_TCP_RECV` returns 0 = try again) and yield.
-  There are no blocking syscalls, and the threading
-  research rejected adding them (its option D).
+  The exception, added by IPC-2 (owner decision
+  D-IPC-1), is blocking `SYS_RECV`: a daemon may park
+  on an empty port with a mandatory deadline, as the
+  scheduler's third switch point (beside `SYS_YIELD`
+  and the exit paths). The threading research's
+  rejection of blocking (its option D) therefore stands
+  for the general case and is overruled for this one
+  form, by owner decision, with watchdog semantics
+  (parked waiters are exempt-but-observed).
 - **Execution-context fact that drives §4.1:**
   `net_pump()` — one iteration of the whole network
-  server (RX + TCP timers) — has exactly two call sites,
-  `user.c:1566` and `user.c:1665`, both scheduler switch
-  points. `netmain.c` states the context in its own
-  header: called from `sched_yield_switch`, in SVC trap
+  server (RX + TCP timers) — runs from the
+  scheduler's switch points (yield, exit, and since
+  IPC-2 the IPC-wait prologue). `netmain.c` states
+  the context in its own header: called from
+  `sched_yield_switch`, in SVC trap
   context, interrupts off, driver purely polled. Inside
   `net_pump`, `tcp.c` accumulates a request and calls
   `http_handle()` (`http.c`). **The HTTP server —
@@ -81,7 +100,9 @@ in a userspace program is isolated (`user_fault` kills
 the one task — FND-2 is completing that story); a fault
 in a kernel resident is a kernel fault, full stop. And
 the kernel image is inside the boot-partition budget —
-the UI research measured ~287 KB of headroom — so every
+re-measured each track (932,724 B headroom at IPC-5;
+the UI research's ~287 KB figure counted bss and was
+retracted at IPC-1) — so every
 kernel resident also spends a scarce, shared resource.
 
 ## 2. Placement inventory (today)
@@ -209,7 +230,9 @@ tooling (`user/embed.py`, `user/pad-bss.py`) never ships.
   resident that can only ever be tested on hardware is
   a liability by default.
 - **R13 — The image budget.** The kernel is linked into
-  a boot partition with ~287 KB of measured headroom.
+  a boot partition whose headroom is re-measured each
+  track (932,724 B at IPC-5; the old ~287 KB figure
+  counted bss and was retracted at IPC-1).
   Every resident spends it. Size is an architectural
   argument, not an afterthought.
 
@@ -334,14 +357,19 @@ kernel itself is a client (the credential store and
 provisioning config live in it, and the boot path
 touches it before daemons exist — R5), and the
 alternative — a filesystem server daemon — needs a
-request/reply IPC channel that does not exist (§1;
-D-ARCH-4). Its clients are already mediated by a
+request/reply IPC channel that did not exist when
+this was written (§1; D-ARCH-4). Its clients are
+already mediated by a
 syscall surface (93–97), the port layer cleanly splits
 backend (RAM today, NAND on hardware) from the
 vendored FS logic, and its failure modes are data
 errors, not control-flow corruption of other programs.
-**Verdict: KEEP.** Revisit only if D-ARCH-4 ever
-reverses and real IPC lands.
+**Verdict: KEEP.** D-ARCH-4 has since reversed and
+real IPC exists (IPC-1..IPC-5), so a filesystem
+server is now *possible* — but the verdict stands on
+the R5 ground alone, and no FS-server decomposition
+is planned; it would be a deliberate project, not a
+consequence of IPC existing.
 
 ### 4.4 Credential store + AES-GCM (`credstore.c`, `aesgcm.c`) — KEEP
 

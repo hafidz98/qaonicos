@@ -9,10 +9,10 @@ placement rules live in
 
 > **Key facts**
 >
-> - **Only crossing:** the syscall ABI (`svc #0`); no shared-memory ABI, no Mach IPC in the product path.
-> - **Scheduling:** cooperative — daemons switch only at `SYS_YIELD` and at exit; the network stack is pumped from those same two switch points.
+> - **Only crossing:** the syscall ABI (`svc #0`); no shared-memory ABI. Message passing (Mach IPC, syscalls 10/11/12/23/25) is a second, sanctioned mechanism since IPC-1..IPC-5.
+> - **Scheduling:** cooperative — daemons switch at `SYS_YIELD`, at exit, and (since IPC-2) at a blocking `SYS_RECV` park; the network stack is pumped from the switch points.
 > - **Program set:** daemons `face` (0), `uiapp` (1), `qabotd` (2), `sh` (3), plus sequential boot one-shots; all embedded in the kernel image.
-> - **Boot partition headroom:** ~287 KB over the measured image — size is an architectural constraint, not an afterthought.
+> - **Boot partition headroom:** re-measured each track (the old ~287 KB figure was retracted at IPC-1 — it counted bss); see the latest track close-out log for the current figure.
 > - **Modes:** user mode boots straight to the GUI; dev mode boots to the shell and starts the GUI on demand (syscall 102).
 
 ## Layers
@@ -47,11 +47,12 @@ graph TB
 
 What Mach actually provides today is **memory isolation**: each
 program gets a real Mach task and runs at PL0; a fault kills that
-one task. The `thread_t` objects are created but never scheduled,
-and the IPC syscall numbers (10–12, 23) have sat reserved and
-unused since Fase B — services are reached through syscalls over
-shared kernel state, not through ports. Naming this honestly
-matters: it is why the boundary rules
+one task. The `thread_t` objects are created but never scheduled.
+The IPC syscall numbers (10–12, 23, plus 25) are live since the
+IPC track (IPC-1..IPC-5): services are reached through syscalls
+over shared kernel state *and*, where a second mechanism fits,
+through Mach ports (registry + RPC, `uipc.h` v1 frozen). Naming
+this honestly matters: it is why the boundary rules
 ([R1–R14](kernel-userspace-boundary.md)) exist.
 
 ## Component map (digest)
@@ -121,7 +122,7 @@ outside any filesystem (see [Boot & Resilience](boot-resilience.md)).
    only to the holder and the queue is flushed on every transfer.
    Details: [Display, UI & Face](display-ui-face.md).
 2. **Network pump + web UI** — no network thread: `net_pump()` runs
-   one server iteration from the scheduler's two switch points, so
+   one server iteration from the scheduler's switch points (yield, exit, IPC-wait prologue), so
    HTTP handlers execute in kernel context today (the flagship
    placement debt, [boundary page](kernel-userspace-boundary.md)).
 3. **Agent runtime** — qabotd's ReAct loop passes every tool call

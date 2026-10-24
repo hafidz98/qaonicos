@@ -45,7 +45,7 @@ Details: [Networking & the C6 Link](networking-c6.md).
 ## UI track (UI) — after C6L
 
 LVGL inside uiapp only; UI-1 is a measure-first go/no-go against
-the ~287 KB boot-partition headroom. UI-2 shell/status/menu proof,
+the re-measured boot-partition headroom (932,724 B at IPC-5). UI-2 shell/status/menu proof,
 UI-3 Settings subtree, UI-4 Monitor + Power, UI-5 text edit +
 polish, UI-6 cleanup + size audit + full battery.
 Details: [Display, UI & Face](display-ui-face.md).
