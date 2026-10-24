@@ -101,4 +101,125 @@ int	uproto_voice_stop(void);
 /* Send one AUD frame (PCM16 LE payload). Returns 0/-1. */
 int	uproto_aud_frame(const unsigned char *pcm, unsigned len);
 
+/* --- Inbound units: EVT + peer-initiated DISPATCH (C6L-3, wire
+ * v1.2, see docs/rencana-komunikasi-c6/WIRE-FREEZE-V1.2.md) ---
+ *
+ * The stream mixes text lines and binary frames. EVT frames
+ * (type 0x03) and peer DISPATCH lines can arrive at any time
+ * -- between commands, or in the middle of a multi-line
+ * response -- and the link layer queues them instead of
+ * losing them: a queued unit survives a backend reopen
+ * (units are application-level, not transport state), and
+ * the consumer drains them with uproto_poll_inbound().
+ * BIN data frames are NOT queued: WS data must be
+ * consumed promptly by uproto_ws_recv(); a BIN frame
+ * arriving during a text wait is a link-reset error.
+ * A text line that is not a DISPATCH during a poll is
+ * likewise a link-reset error (strict request/response:
+ * the peer never sends unsolicited text).
+ *
+ * Queue bounds (v1.2): 4 units. A unit arriving at a full
+ * queue is dropped and counted (uproto_inb_dropped());
+ * the in-flight command is never failed for a full
+ * queue. EVT payloads are capped at 256 bytes, DISPATCH
+ * argument bodies at 512 bytes; anything larger is a
+ * link-reset error at parse time. */
+#define	UPROTO_INB_EVT		1u
+#define	UPROTO_INB_DISPATCH	2u
+#define	UPROTO_INB_EVT_MAX	256u
+#define	UPROTO_INB_DISPATCH_ARGS_MAX	512u
+#define	UPROTO_INB_TOOL_MAX	31u
+
+struct uproto_inb {
+	unsigned	kind;	/* EVT or DISPATCH */
+	unsigned	id;	/* DISPATCH only */
+	char		tool[UPROTO_INB_TOOL_MAX + 1];
+				/* DISPATCH only */
+	unsigned char	payload[UPROTO_INB_DISPATCH_ARGS_MAX];
+				/* EVT line, or DISPATCH args JSON */
+	unsigned	len;	/* payload length */
+};
+
+/* Return the next inbound unit, draining the queue
+ * first, then waiting up to budget_ms of silence for a
+ * fresh unit. Returns 1 (unit filled), 0 (nothing
+ * within budget), -1 (link error: bad CRC, oversize
+ * unit, stray text, dead link). Yields between
+ * attempts so the network pump and the watchdog stay
+ * fed. The caller owns the unit's meaning: EVT payload
+ * is an event line ("WIFI.DROPPED"); DISPATCH is a
+ * tool call the consumer must answer with
+ * uproto_dispatch_result(). */
+int	uproto_poll_inbound(struct uproto_inb *inb, unsigned budget_ms);
+
+/* Drop all queued inbound units (fresh phase). Does
+ * NOT touch the byte stream or the backend. */
+void	uproto_inb_flush(void);
+
+/* Number of inbound units dropped at a full queue
+ * since boot (0 in normal operation). */
+unsigned	uproto_inb_dropped(void);
+
+/* --- TOOL.DISPATCH: guest-originated tool call (C6L-3) ---
+ *
+ * Wire: TOOL.DISPATCH <tool> <len>\n<args-json> ->
+ *   "OK <len>\n<result-json>" or "ERR <CODE>".
+ * The result body is JSON: {"ok":true,"result":...} on
+ * tool success, {"ok":false,"error":"..."} on tool
+ * failure (the dispatch itself succeeded). Unknown
+ * tool is a wire error, not a JSON error: ERR NOTOOL.
+ * args_json is capped at 128 bytes (the peers' body
+ * cap for dispatch commands); result must fit rsz
+ * (over-long results are consumed and reported as
+ * TRUNC, never delivered partial).
+ * Returns 0 (result filled, NUL-terminated), -1 (wire
+ * error/timeout/TRUNC; err = "TIMEOUT"/"WIRE"/
+ * "TRUNC" when esz allows), -2 (peer ERR; err = the
+ * wire code, e.g. "NOTOOL"/"ARG"). */
+int	uproto_tool_dispatch(const char *tool, const char *args_json,
+			     char *result, unsigned rsz,
+			     char *err, unsigned esz);
+
+/* --- Peer-initiated DISPATCH: answer (C6L-3) ---
+ *
+ * Wire: DISPATCH.RESULT <id> <len>\n<result-json> ->
+ * "OK". The result JSON uses the same shape as a
+ * TOOL.DISPATCH result body. Returns 0/-1. */
+int	uproto_dispatch_result(unsigned id, const char *result_json);
+
+/* --- NET.WS: websocket-style framing over the data plane
+ * (C6L-3, framing only; no product consumer yet) ---
+ *
+ * Wire: NET.WS.OPEN <url> -> "OK <sid>" (one session
+ * at a time; a second OPEN while one is open is
+ * ERR BUSY). Data rides BIN frames (type 0x02),
+ * payload = the raw message (<= 1024 bytes); the
+ * peer echoes the payload verbatim while the session
+ * is open. NET.WS.CLOSE <sid> -> "OK" (no session or
+ * wrong sid is ERR NOCONN). A BIN frame sent with no
+ * open session is dropped by the peer (frames get no
+ * response); the guest send reports -1. */
+int	uproto_ws_open(const char *url, unsigned *sid_out);
+/* Send one WS data message. Returns 0/-1. */
+int	uproto_ws_send(const unsigned char *msg, unsigned len);
+/* Receive one WS data message (echo). Returns 0 when
+ * the whole message fit, -2 when truncated into buf
+ * (*len_out = the peer's full length; the full frame
+ * was consumed), -1 on error/timeout. */
+int	uproto_ws_recv(unsigned char *buf, unsigned cap,
+		       unsigned *len_out);
+/* Close a WS session. Returns 0/-1. */
+int	uproto_ws_close(unsigned sid);
+
+/* --- Test-only mock inspection (C6L-3) ---
+ * Implemented by the in-process mock backend only
+ * (mock_comcu.c). The guest test reads back the
+ * DISPATCH.RESULT receipts the mock captured, to
+ * prove the peer received the guest's answers. */
+unsigned	mock_comcu_script_result_count(void);
+/* idx-th receipt: id + result JSON (NUL-terminated).
+ * Returns 0/-1 (no such receipt). */
+int	mock_comcu_script_result(unsigned idx, unsigned *id_out,
+				 char *buf, unsigned cap);
+
 #endif /* UARTPROTO_H */
