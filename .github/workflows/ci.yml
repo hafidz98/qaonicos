@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [core]
+    branches: [core, 'dev/**']
   pull_request:
-    branches: [core]
+    branches: [core, qabot/q2-tls-provider]
 
 jobs:
   build-and-boot-test:

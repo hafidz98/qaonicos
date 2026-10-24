@@ -33,6 +33,11 @@ Muse (a separate agent); the owner is Hafidz.
   `scripts/verify-fnd2.py`, `scripts/verify-fnd3.py`).
 - Never commit credentials, API keys, tokens, or `.env`
   files.
+- The owner's PC has ~5 GB free storage: do NOT install
+  toolchains/QEMU/ESP-IDF or build the kernel locally.
+  Push your branch — GitHub Actions builds it (CI runs on
+  `dev/**` pushes and PRs); link the green run in your PR.
+  Keep exactly one clone; use worktrees, not extra clones.
 - Write a dev log for your phase
   (`docs/<track>/DEVLOG-<phase>.md`), as the existing
   tracks do.

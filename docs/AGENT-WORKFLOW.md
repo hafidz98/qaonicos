@@ -70,6 +70,24 @@ Labels: `fnd`, `c6l`, `ui`, `hw`, `docs`, `agent-pc`
 (Foundations, C6 Link, UI, Hardware). The board view is
 GitHub Issues/Projects filtered by these.
 
+## Builds run in GitHub Actions (owner PC storage rule)
+
+The owner's PC has ~5 GB of free storage. Therefore:
+
+- **No local builds of the kernel/toolchain kind on the PC.**
+  Do not install QEMU, cross toolchains, ESP-IDF, or any
+  multi-GB SDK there, and do not keep local build outputs.
+- The implementer pushes its `dev/<phase>` branch; **GitHub
+  Actions builds it** (`.github/workflows/ci.yml` triggers
+  on pushes to `dev/**` and on PRs to the working branch:
+  kernel + userspace build, QEMU boot, self-tests). The PR
+  must link the green Actions run as its build evidence.
+- One clone on the PC; per-task checkouts are `git worktree`s
+  of it (shared object store), never extra clones.
+- Trivial local checks stay local (e.g. `python --help`,
+  `--dry-run` modes, syntax checks) — anything that needs a
+  toolchain goes to Actions or to the lead's VM battery.
+
 ## Rules that bind the implementer
 
 - English for commits, code comments, docs (standing owner
