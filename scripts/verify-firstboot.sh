@@ -115,10 +115,11 @@ out = sess.cmd("setup")
 txt = out.decode("utf-8", "replace") if out else ""
 if "NOT provisioned" in txt:
     fails.append("boot2: setup status should be provisioned")
-# Name persistence across boots is NOT checked: in QEMU the
-# littlefs backend is RAM (resets per boot). On hardware it is
-# NAND-backed and persists (B1-HW). The provisioned flag lives
-# on the blk state sector and does persist -- checked above.
+# Name persistence across boots IS checked since FND-4:
+# the QEMU littlefs backend is a persistent blk region,
+# so the name saved in boot 1 must still be there.
+if b"myqaon" not in (out or b""):
+    fails.append("boot2: setup status does not show saved name")
 out = sess.cmd("setup reset")
 if b"cleared" not in (out or b""):
     fails.append("boot2: setup reset failed")

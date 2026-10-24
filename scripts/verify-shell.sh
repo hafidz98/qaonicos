@@ -117,8 +117,13 @@ results.append(cmd("time", "20"))
 results.append(cmd("ls", "/sd:"))
 results.append(cmd("cat /motd.txt", "QaonicOS"))
 results.append(cmd("qfetch", "QaonicOS (Mach 3.0)"))
-results.append(cmd("ls /data", "hello.txt"))
+# FND-4 hygiene: this used to expect "hello.txt" in the
+# listing, but that file was the B1 self-test's canary
+# leaking into /data (the self-test formatted the same RAM
+# disk /data mounted). The self-test now runs on its own
+# RAM disk; seed a real file first, then list for it.
 results.append(cmd("put /data/note.txt hello qaonic", "put: ok"))
+results.append(cmd("ls /data", "note.txt"))
 results.append(cmd("cat /data/note.txt", "hello qaonic"))
 
 s.close()

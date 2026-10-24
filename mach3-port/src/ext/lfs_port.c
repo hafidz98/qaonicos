@@ -1,16 +1,37 @@
 /*
  * mach3-port/src/ext/lfs_port.c -- littlefs port for QaonicOS (B1).
  *
- * Backend: RAM block device (1 MB = 256 blocks x 4096 B) so the
- * filesystem logic + power-cut behaviour are testable in QEMU
- * without NAND hardware. The block callbacks are isolated: the
- * SPI NAND backend (B1-HW) replaces lfsbd_* without touching the
- * littlefs glue above it.
+ * Two block-device backends behind the lfsbd_* callbacks:
  *
- * Power-cut simulation: lfsbd_cut_after(n) drops all programming
- * after n more bytes, mimicking power loss mid-write. The test
- * then discards the lfs state (no unmount/sync) and remounts:
- * littlefs must mount cleanly with old-or-new data, never garbage.
+ *   RAM (B1): 1 MB array (256 blocks x 4096 B) with a power-cut
+ *   simulator -- lfsbd_cut_after(n) drops all programming after
+ *   n more bytes, mimicking power loss mid-write; the test then
+ *   discards the lfs state (no unmount/sync) and remounts:
+ *   littlefs must mount cleanly with old-or-new data, never
+ *   garbage. The B1 self-test (lfs_run_test) always runs on
+ *   this backend, so it can never erase the real /data.
+ *
+ *   BLK (FND-4): a reserved region of blk dev 0, so /data
+ *   survives QEMU restarts and the provisioning / credential /
+ *   onboarding flows can be regression-tested across boots.
+ *   Region layout (sectors of 512 B, tail-anchored exactly
+ *   like bootstate's own reservations):
+ *     [total-2066, total-18)  this region: 2048 sectors
+ *                             = 256 blocks x 4096 B (same
+ *                             geometry as the RAM backend)
+ *     [total-18,  total-2)    bootlog ring (16 sectors)
+ *     total-2                 bootstate state sector
+ *     total-1                 blk selftest scratch
+ *   On the standard 16 MiB image (32768 sectors) the region
+ *   is sectors 30702..32749. NAND semantics are preserved
+ *   (erase -> 0xFF, prog only clears bits) so littlefs sees
+ *   the same rules as on hardware; the B1-HW NAND backend
+ *   (draft/sfc_nand.c, NAND blocks 320..999) later replaces
+ *   the blk half without touching the littlefs glue.
+ *
+ * /data mounts on BLK by default; if the blk device is
+ * absent or too small, the port falls back to RAM with a
+ * boot-time warning (a no-disk boot keeps a working /data).
  *
  * Self-test stages (bitmask returned by lfs_run_test):
  *   bit0 format+mount ok
@@ -212,11 +233,26 @@ free(void *p)
 	}
 }
 
-/* --- RAM block device --- */
+/* --- block-device backends (RAM + persistent blk) --- */
 #define LFSBD_BLOCK_SIZE	4096u
 #define LFSBD_BLOCK_COUNT	256u
 #define LFSBD_SIZE		(LFSBD_BLOCK_SIZE * LFSBD_BLOCK_COUNT)
 
+extern int printf(const char *, ...);
+extern int blk_read_sector(unsigned int sector, unsigned char *data);
+extern int blk_write_sector(unsigned int sector,
+    const unsigned char *data);
+extern unsigned int blk_total_sectors(void);
+
+/* Backend ids for lfsbd_kind. */
+#define LFSBD_RAM	0
+#define LFSBD_BLK	1
+
+/* The /data default is the persistent backend (FND-4); the
+ * self-test pins RAM for itself (see lfs_run_test). */
+static int lfsbd_kind = LFSBD_BLK;
+
+/* --- RAM backend --- */
 static unsigned char lfsbd_disk[LFSBD_SIZE];
 static int lfsbd_live;		/* 0 = power "off" (progs dropped) */
 static long lfsbd_cut_budget;	/* bytes left before the cut; -1 = never */
@@ -231,7 +267,7 @@ lfsbd_erase_all(void)
 }
 
 static int
-lfsbd_read(const struct lfs_config *c, lfs_block_t block,
+ram_read(const struct lfs_config *c, lfs_block_t block,
     lfs_off_t off, void *buffer, lfs_size_t size)
 {
 	unsigned char *dst = buffer;
@@ -245,7 +281,7 @@ lfsbd_read(const struct lfs_config *c, lfs_block_t block,
 }
 
 static int
-lfsbd_prog(const struct lfs_config *c, lfs_block_t block,
+ram_prog(const struct lfs_config *c, lfs_block_t block,
     lfs_off_t off, const void *buffer, lfs_size_t size)
 {
 	const unsigned char *src = buffer;
@@ -269,7 +305,7 @@ lfsbd_prog(const struct lfs_config *c, lfs_block_t block,
 }
 
 static int
-lfsbd_erase(const struct lfs_config *c, lfs_block_t block)
+ram_erase(const struct lfs_config *c, lfs_block_t block)
 {
 	unsigned int i, addr;
 
@@ -280,6 +316,163 @@ lfsbd_erase(const struct lfs_config *c, lfs_block_t block)
 	for (i = 0; i < LFSBD_BLOCK_SIZE; i++)
 		lfsbd_disk[addr + i] = 0xff;
 	return 0;
+}
+
+/* --- blk backend (FND-4): reserved region of blk dev 0 --- */
+#define LFSB_SECTOR_SIZE	512u
+#define LFSB_SECT_PER_BLOCK	(LFSBD_BLOCK_SIZE / LFSB_SECTOR_SIZE)
+#define LFSB_REGION_SECTORS	(LFSBD_BLOCK_COUNT * LFSB_SECT_PER_BLOCK)
+/* Tail reservations owned by others (see bootstate.c/blk.c):
+ * 16 bootlog sectors + 1 state sector + 1 selftest scratch. */
+#define LFSB_TAIL_SECTORS	18u
+
+static unsigned char lfsb_sec[LFSB_SECTOR_SIZE]
+    __attribute__((aligned(16)));
+
+/* First sector of the littlefs region on blk dev 0. */
+static unsigned int
+lfsb_base(void)
+{
+	return blk_total_sectors() - LFSB_TAIL_SECTORS -
+	    LFSB_REGION_SECTORS;
+}
+
+/* The blk device must exist and be big enough to hold the
+ * region plus the tail reservations (with slack below the
+ * region for whatever a future layout puts at the head). */
+static int
+lfsb_ok(void)
+{
+	return blk_total_sectors() >=
+	    LFSB_REGION_SECTORS + LFSB_TAIL_SECTORS + 64u;
+}
+
+/* Bootstate's B2.8 lesson applies here too: blk requests can
+ * time out transiently under host CPU contention, so all
+ * region I/O goes through 3-attempt wrappers. */
+static int
+lfsb_read_sec(unsigned int sec, unsigned char *buf)
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+		if (blk_read_sector(sec, buf) == 0)
+			return 0;
+	return -1;
+}
+
+static int
+lfsb_write_sec(unsigned int sec, const unsigned char *buf)
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+		if (blk_write_sector(sec, buf) == 0)
+			return 0;
+	return -1;
+}
+
+static int
+blk_read_bd(const struct lfs_config *c, lfs_block_t block,
+    lfs_off_t off, void *buffer, lfs_size_t size)
+{
+	unsigned char *dst = buffer;
+	unsigned int addr, done = 0;
+
+	(void)c;
+	addr = lfsb_base() * LFSB_SECTOR_SIZE +
+	    block * LFSBD_BLOCK_SIZE + off;
+	while (done < size) {
+		unsigned int sec = (addr + done) / LFSB_SECTOR_SIZE;
+		unsigned int soff = (addr + done) % LFSB_SECTOR_SIZE;
+		unsigned int n = LFSB_SECTOR_SIZE - soff;
+		unsigned int i;
+
+		if (n > size - done)
+			n = size - done;
+		if (lfsb_read_sec(sec, lfsb_sec) != 0)
+			return -5;	/* LFS_ERR_IO */
+		for (i = 0; i < n; i++)
+			dst[done + i] = lfsb_sec[soff + i];
+		done += n;
+	}
+	return 0;
+}
+
+static int
+blk_prog_bd(const struct lfs_config *c, lfs_block_t block,
+    lfs_off_t off, const void *buffer, lfs_size_t size)
+{
+	const unsigned char *src = buffer;
+	unsigned int addr, done = 0;
+
+	(void)c;
+	addr = lfsb_base() * LFSB_SECTOR_SIZE +
+	    block * LFSBD_BLOCK_SIZE + off;
+	while (done < size) {
+		unsigned int sec = (addr + done) / LFSB_SECTOR_SIZE;
+		unsigned int soff = (addr + done) % LFSB_SECTOR_SIZE;
+		unsigned int n = LFSB_SECTOR_SIZE - soff;
+		unsigned int i;
+
+		if (n > size - done)
+			n = size - done;
+		if (lfsb_read_sec(sec, lfsb_sec) != 0)
+			return -5;	/* LFS_ERR_IO */
+		/* NAND semantics: prog can only clear bits. The
+		 * medium is a disk image, so this is a
+		 * read-modify-write that ANDs the new data in --
+		 * littlefs must never observe a 0 -> 1 transition
+		 * without an erase, exactly as on NAND. */
+		for (i = 0; i < n; i++)
+			lfsb_sec[soff + i] &= src[done + i];
+		if (lfsb_write_sec(sec, lfsb_sec) != 0)
+			return -5;	/* LFS_ERR_IO */
+		done += n;
+	}
+	return 0;
+}
+
+static int
+blk_erase_bd(const struct lfs_config *c, lfs_block_t block)
+{
+	unsigned int i, sec;
+
+	(void)c;
+	for (i = 0; i < LFSB_SECTOR_SIZE; i++)
+		lfsb_sec[i] = 0xff;
+	sec = lfsb_base() + block * LFSB_SECT_PER_BLOCK;
+	for (i = 0; i < LFSB_SECT_PER_BLOCK; i++)
+		if (lfsb_write_sec(sec + i, lfsb_sec) != 0)
+			return -5;	/* LFS_ERR_IO */
+	return 0;
+}
+
+/* --- dispatchers: the callbacks littlefs is configured with --- */
+static int
+lfsbd_read(const struct lfs_config *c, lfs_block_t block,
+    lfs_off_t off, void *buffer, lfs_size_t size)
+{
+	if (lfsbd_kind == LFSBD_BLK)
+		return blk_read_bd(c, block, off, buffer, size);
+	return ram_read(c, block, off, buffer, size);
+}
+
+static int
+lfsbd_prog(const struct lfs_config *c, lfs_block_t block,
+    lfs_off_t off, const void *buffer, lfs_size_t size)
+{
+	if (lfsbd_kind == LFSBD_BLK)
+		return blk_prog_bd(c, block, off, buffer, size);
+	return ram_prog(c, block, off, buffer, size);
+}
+
+static int
+lfsbd_erase(const struct lfs_config *c, lfs_block_t block)
+{
+	if (lfsbd_kind == LFSBD_BLK)
+		return blk_erase_bd(c, block);
+	return ram_erase(c, block);
 }
 
 static int
@@ -385,6 +578,19 @@ lfs_run_test(void)
 	int mask = 0;
 	int err;
 
+	/* FND-4: the self-test always runs on the RAM backend --
+	 * it formats its medium and simulates power cuts on it,
+	 * so it must never touch the persistent /data region.
+	 * If /data is mounted, unmount it first: its state is
+	 * on blk, and the next lfs_port_mount() re-picks the
+	 * default backend and remounts it. (Pre-FND-4 the test
+	 * formatted the same RAM disk /data later mounted; that
+	 * coupling is gone.) */
+	if (lfs_mounted) {
+		lfs_unmount(&lfs_vfs);
+		lfs_mounted = 0;
+	}
+	lfsbd_kind = LFSBD_RAM;
 	lfs_cfg_init();
 	lfsbd_erase_all();
 	lfsbd_live = 1;
@@ -451,6 +657,17 @@ lfs_port_mount(void)
 
 	if (lfs_mounted)
 		return 0;
+	/* FND-4: /data defaults to the persistent blk backend;
+	 * fall back to RAM (with a warning) when the blk device
+	 * is absent or too small for the reserved region, so a
+	 * no-disk boot still gets a working /data. */
+	lfsbd_kind = LFSBD_BLK;
+	if (!lfsb_ok()) {
+		printf("lfs: blk absent/small (%u sectors) -- "
+		    "/data on RAM backend (volatile)\n",
+		    blk_total_sectors());
+		lfsbd_kind = LFSBD_RAM;
+	}
 	lfs_cfg_init();
 	lfsbd_live = 1;
 	lfsbd_cut_budget = -1;
@@ -464,6 +681,11 @@ lfs_port_mount(void)
 			return -1;
 	}
 	lfs_mounted = 1;
+	if (lfsbd_kind == LFSBD_BLK)
+		printf("lfs: /data on blk region sectors %u..%u\n",
+		    lfsb_base(), lfsb_base() + LFSB_REGION_SECTORS - 1u);
+	else
+		printf("lfs: /data on RAM backend\n");
 	return 0;
 }
 
