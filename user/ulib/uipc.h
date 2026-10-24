@@ -106,9 +106,11 @@
  *     -11 EPARK (internal, never to userspace),
  *     -12 EPEER, -13 EPERM.
  *   - reserved names: `tools` (owner: qabotd, the
- *     daemon_images index 2) and `link` (unbound
- *     until C6L-5 binds linkd's index; any claim
- *     refused until then). All other names are open.
+ *     daemon_images index 2) and `link` (owner:
+ *     linkd, the daemon_images index 4, bound at
+ *     C6L-5; any other claim refused). All other
+ *     names are open. COMMENT-ONLY update at
+ *     C6L-5: no constant or layout changed.
  *   - queue sizing and port-set fan-in are IPC-5.
  */
 #ifndef QAON_UIPC_H

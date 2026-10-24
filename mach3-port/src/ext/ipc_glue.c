@@ -541,7 +541,7 @@ static const struct {
 	int		owner;
 } reg_reserved[] = {
 	{ "tools", 2 },			/* qabotd */
-	{ "link", REG_OWNER_UNBOUND },	/* bound at C6L-5 */
+	{ "link", 4 },			/* C6L-5: linkd (daemon_images index 4) */
 };
 
 static int

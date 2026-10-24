@@ -121,6 +121,12 @@ extern unsigned int	ulink3_img_len;
 extern unsigned char	ulinkaud_img[];	/* C6L-4: AUD integrity test */
 extern unsigned int	ulinkaud_img_len;
 extern unsigned int	ulinkbr_img_len;
+extern unsigned char	ulink5_img[];	/* C6L-5: linkd client test */
+extern unsigned int	ulink5_img_len;
+extern unsigned char	ulinktools_img[];	/* C6L-5: stub tools server */
+extern unsigned int	ulinktools_img_len;
+extern unsigned char	ulink5die_img[];	/* C6L-5: client-death probe */
+extern unsigned int	ulink5die_img_len;
 extern unsigned char	upl330_img[];	/* D2b: PL330 microcode */
 extern unsigned int	upl330_img_len;
 extern unsigned char	ulfs_img[];	/* B1: littlefs test */
@@ -155,6 +161,10 @@ extern unsigned char	qabotd_img[];	/* Q4: daemon persisten Qabot */
 extern unsigned int	qabotd_img_len;
 extern unsigned char	uipcld_img[];	/* IPC-4: concurrent client daemon (test-only) */
 extern unsigned int	uipcld_img_len;
+extern unsigned char	linkd_img[];	/* C6L-5: link daemon (owns the transport) */
+extern unsigned int	linkd_img_len;
+extern unsigned char	ulink5d_img[];	/* C6L-5: second client daemon (test-only) */
+extern unsigned int	ulink5d_img_len;
 extern unsigned char	qabot_img[];	/* Qabot harness Q1: ReAct + mock */
 extern unsigned int	qabot_img_len;
 
@@ -440,7 +450,7 @@ struct user_ctx {
 	unsigned int	spsr;
 };
 
-#define	NDAEMON		6u	/* face, uiapp, qabotd, uipcld (IPC-4), sh (Q9), + slot spawn (Q9) */
+#define	NDAEMON		8u	/* face, uiapp, qabotd, uipcld (IPC-4), linkd (C6L-5), ulink5d (C6L-5), sh (Q9), + slot spawn (Q9) */
 #define	PROG_FACE	0
 #define	PROG_UIAPP	1
 #define	PROG_NTP	2	/* App A4: sinkron jam (tak pegang display) */
@@ -1360,6 +1370,23 @@ user_syscall(struct arm_trap_frame *frame)
 				 * scheduler active. */
 				{ "embed:ulinkaud", ulinkaud_img,
 				  &ulinkaud_img_len, -1 },
+				/* C6L-5: linkd client test
+				 * (see docs/rencana-komunikasi-
+				 * c6/DEVLOG-C6L5). Spawn-only
+				 * like ulinkbr/ulink3/ulinkaud. */
+				{ "embed:ulink5", ulink5_img,
+				  &ulink5_img_len, -1 },
+				/* C6L-5: stub tools server
+				 * (progid 2, the qabotd index,
+				 * so it may claim the reserved
+				 * name `tools`; must never run
+				 * together with uiptoolssrv). */
+				{ "embed:ulinktools", ulinktools_img,
+				  &ulinktools_img_len, 2 },
+				/* C6L-5: client-death probe
+				 * (raw SEND + immediate exit). */
+				{ "embed:ulink5die", ulink5die_img,
+				  &ulink5die_img_len, -1 },
 			};
 			unsigned int hi, ei;
 			int matched = 0;
@@ -2663,9 +2690,9 @@ sched_register_daemon(const char *name, task_t task, pmap_t pmap,
 	case 0:	/* face */
 	case 1:	/* uiapp */
 		d->wd_warn_at = 1000u; d->wd_hang_at = 2000u; break;
-	case 4:	/* sh (last daemon_images entry; see below) */
+	case 6:	/* sh (last daemon_images entry; see below) */
 		d->wd_warn_at = 6000u; d->wd_hang_at = 12000u; break;
-	default: /* qabotd + uipcld + any future daemon */
+	default: /* qabotd + uipcld + linkd + ulink5d + any future daemon */
 		d->wd_warn_at = 1500u; d->wd_hang_at = 3000u; break;
 	}
 	if (nuprog < UPROG_MAX) {
@@ -3068,7 +3095,16 @@ static struct uprog_image daemon_images[] = {
 							 * == "1"; INSERTED BEFORE sh -- sh must stay last,
 							 * see SH_IMAGE_IDX below; the 15/30 s default
 							 * watchdog class above applies to it) */
-	{ "sh", sh_img, &sh_img_len, 1u },	/* progid 4: shell qaon> (Q9) */
+	{ "linkd", linkd_img, &linkd_img_len, 2u },	/* progid 4: C6L-5 link daemon -- single transport
+							 * owner, IPC server on reserved name `link`;
+							 * INSERTED BEFORE sh like uipcld (default
+							 * 15/30 s watchdog class; it parks/yields
+							 * every turn, see user/linkd.c) */
+	{ "ulink5d", ulink5d_img, &ulink5d_img_len, 1u },	/* progid 5: C6L-5 second client daemon (test-only,
+							 * marker-gated: dormant without /data/link5-test
+							 * == "1"; INSERTED BEFORE sh; default watchdog
+							 * class) */
+	{ "sh", sh_img, &sh_img_len, 1u },	/* progid 6: shell qaon> (Q9) */
 	/* { "utcpkeep", utcpkeep_img, &utcpkeep_img_len, 1u }, */	/* F1: nonaktif (tcc 1 koneksi) */
 	/* { "utlskeep", utlskeep_img, &utlskeep_img_len, 1u }, */	/* F1: nonaktif (investigasi selesai) */
 

@@ -65,7 +65,7 @@ clang $UCFLAGS -c "$USR/udiv.c" -o "$BUILD/udiv.o" >>"$LOG" 2>&1 || \
 # shellcheck disable=SC2086
 clang $UCFLAGS -c "$USR/hello.c" -o "$BUILD/hello.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/hello.c (see $LOG)"; exit 1; }
-for prog in init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest uaudiocap uaudiogain upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud; do
+for prog in init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest uaudiocap uaudiogain upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud ulinktools ulink5die; do
     # shellcheck disable=SC2086
     clang $UCFLAGS -c "$USR/$prog.c" -o "$BUILD/$prog.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/$prog.c (see $LOG)"; exit 1; }
@@ -140,7 +140,7 @@ for f in main ui ui_draw scr_menu scr_mon scr_settings scr_power scr_wifi scr_bl
     clang $UCFLAGS2 -c "$USR/uiapp/$f.c" -o "$BUILD/uiapp_$f.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/uiapp/$f.c (see $LOG)"; exit 1; }
 done
-for f in uartproto mock_comcu bridge; do
+for f in uartproto mock_comcu bridge linkcli; do
     # shellcheck disable=SC2086
     clang $UCFLAGS2 -c "$USR/uartproto/$f.c" -o "$BUILD/uartproto_$f.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/uartproto/$f.c (see $LOG)"; exit 1; }
@@ -157,7 +157,7 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     "$BUILD/uiapp_scr_power.o" "$BUILD/uiapp_scr_wifi.o" \
     "$BUILD/uiapp_scr_ble.o" "$BUILD/uiapp_scr_llm.o" \
     "$BUILD/uiapp_scr_passkey.o" "$BUILD/uiapp_scr_textedit.o" \
-    "$BUILD/uartproto_uartproto.o" "$BUILD/uartproto_mock_comcu.o" \
+    "$BUILD/uartproto_linkcli.o" \
     "$BUILD/cfg.o" \
     "$BUILD/ulib.o" "$BUILD/udiv.o" \
     >>"$LOG" 2>&1 || \
@@ -175,6 +175,10 @@ python3 "$USR/pad-bss.py" "$BUILD/uiapp.bin" "$BUILD/uiapp.elf" \
 # grows uiapp.bin to ~69 KB; the cap is a build-time guard
 # only (the loader takes the real image size), and the
 # 4 MiB boot partition still has ~940 KB headroom.
+# C6L-5: uiapp migrates to the linkd client stub
+# (linkcli) -- the direct layer + mock leave the uiapp
+# link, so uiapp.bin shrinks; the 98304 cap stays as an
+# upper bound (measured shrinkage in DEVLOG-C6L5).
 python3 "$USR/embed.py" "$BUILD/uiapp.bin" "$GEN/uiapp_img.c" "uiapp_img" 98304 >>"$LOG" 2>&1 || \
     { echo "FAIL embed uiapp_img"; exit 1; }
 echo "USER: uiapp.elf entry=$ENTRY ok"
@@ -312,6 +316,88 @@ python3 "$USR/pad-bss.py" "$BUILD/ulinkaud.bin" "$BUILD/ulinkaud.elf" \
 python3 "$USR/embed.py" "$BUILD/ulinkaud.bin" "$GEN/ulinkaud_img.c" "ulinkaud_img" 65536 >>"$LOG" 2>&1 || \
     { echo "FAIL embed ulinkaud_img"; exit 1; }
 echo "USER: ulinkaud.elf entry=$ENTRY ok"
+
+# --- 1d1e. user program linkd (C6L-5): the link daemon --
+# single transport owner + IPC server on `link`.
+# Links the direct layer (uartproto + mock + bridge):
+# it IS the layer now, for every other daemon.
+echo "BUILD user program linkd"
+# shellcheck disable=SC2086
+clang $UCFLAGS -I"$USR" -c "$USR/linkd.c" -o "$BUILD/linkd.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/linkd.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/linkd.elf" "$BUILD/linkd.o" \
+    "$BUILD/uartproto_uartproto.o" "$BUILD/uartproto_mock_comcu.o" \
+    "$BUILD/uartproto_bridge.o" \
+    "$BUILD/cfg.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/linkd.elf (see $LOG)"; exit 1; }
+ENTRY=$("$LLVM_READELF" -h "$BUILD/linkd.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: linkd entry $ENTRY != 0x100000"; exit 1; }
+"$LLVM_OBJCOPY" -O binary "$BUILD/linkd.elf" "$BUILD/linkd.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/linkd.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/linkd.bin" "$BUILD/linkd.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/linkd.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/linkd.bin" "$GEN/linkd_img.c" "linkd_img" 65536 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed linkd_img"; exit 1; }
+echo "USER: linkd.elf entry=$ENTRY ok"
+
+# --- 1d1f. user program ulink5d (C6L-5): second client daemon
+# (test-only, marker-gated). Talks to linkd via the stub.
+echo "BUILD user program ulink5d"
+# shellcheck disable=SC2086
+clang $UCFLAGS -I"$USR" -c "$USR/ulink5d.c" -o "$BUILD/ulink5d.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/ulink5d.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/ulink5d.elf" "$BUILD/ulink5d.o" \
+    "$BUILD/uartproto_linkcli.o" \
+    "$BUILD/cfg.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/ulink5d.elf (see $LOG)"; exit 1; }
+ENTRY=$("$LLVM_READELF" -h "$BUILD/ulink5d.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: ulink5d entry $ENTRY != 0x100000"; exit 1; }
+"$LLVM_OBJCOPY" -O binary "$BUILD/ulink5d.elf" "$BUILD/ulink5d.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/ulink5d.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/ulink5d.bin" "$BUILD/ulink5d.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/ulink5d.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/ulink5d.bin" "$GEN/ulink5d_img.c" "ulink5d_img" 65536 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed ulink5d_img"; exit 1; }
+echo "USER: ulink5d.elf entry=$ENTRY ok"
+
+# --- 1d1g. user program ulink5 (C6L-5): linkd client test
+# (spawn-only, like ulinkbr/ulink3/ulinkaud). Talks to
+# linkd via the stub only.
+echo "BUILD user program ulink5"
+# shellcheck disable=SC2086
+clang $UCFLAGS -I"$USR" -c "$USR/ulink5.c" -o "$BUILD/ulink5.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/ulink5.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/ulink5.elf" "$BUILD/ulink5.o" \
+    "$BUILD/uartproto_linkcli.o" \
+    "$BUILD/cfg.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/ulink5.elf (see $LOG)"; exit 1; }
+ENTRY=$("$LLVM_READELF" -h "$BUILD/ulink5.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: ulink5 entry $ENTRY != 0x100000"; exit 1; }
+"$LLVM_OBJCOPY" -O binary "$BUILD/ulink5.elf" "$BUILD/ulink5.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/ulink5.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/ulink5.bin" "$BUILD/ulink5.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/ulink5.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/ulink5.bin" "$GEN/ulink5_img.c" "ulink5_img" 65536 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed ulink5_img"; exit 1; }
+echo "USER: ulink5.elf entry=$ENTRY ok"
 
 # --- 1d. user program ntp (App A4): daemon sinkron jam via NTP. ---
 echo "BUILD user program ntp"
@@ -602,7 +688,7 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice ulinktest ulinkbr ulink3 ulinkaud upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice ulinktest ulinkbr ulink3 ulinkaud linkd ulink5d ulink5 ulinktools ulink5die upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }
