@@ -4,14 +4,13 @@
 Three boots on the shared dev disk.
 
 Boot 1 (dev mode, typed serial -- sh owns the console):
-  - The IPC-2 pair (embed:uipksrv / embed:uipkcli) runs
-    the IPC-1 store-and-forward protocol on the BLOCKING
-    receive: 100 sequenced messages round-trip with
-    byte-exact payloads. The client's setup run opens
-    with a deadline probe (500 ms on a silent port ->
-    UIPC_ETIME, guest-clock elapsed in range); every
-    server drain run ends with a park probe (400 ms on
-    the emptied queue -> UIPC_ETIME).
+  - NOTE (IPC-4): the IPC-2 pair (embed:uipksrv /
+    embed:uipkcli) that ran here depended on the IPC-1
+    test rendezvous, which IPC-4 deleted; its
+    assertions moved to scripts/verify-ipc4.py (same
+    100-message byte-exact round-trip, now concurrent
+    between the uipcld daemon and the uiptoolssrv
+    server). This script keeps the park probes below.
   - Long park: embed:uipkpark parks 65 s on a silent
     port. sh is WAITING on the spawn and the child is
     WAITING on IPC: the all-parked state. Expected: no
@@ -236,40 +235,16 @@ ev14_base = base_log.count("ev=14")
 print(f"  bootlog baseline: ev13={ev13_base} ev14={ev14_base}",
       flush=True)
 
-srv_pass = False
-cli_pass = False
-seg = run_prog("uipksrv")
-check("srv setup run exits 0", "exit 0\n" in seg)
-check("srv setup: port published via rendezvous",
-      "UIPKSRV: setup port published" in seg)
-
-seg = run_prog("uipkcli")
-check("cli setup run exits 0", "exit 0\n" in seg)
-check("cli deadline probe: 500 ms park -> ETIME in range",
-      "UIPKCLI: deadline-probe ETIME elapsed=" in seg and " OK" in seg)
-check("cli setup: batch 0 sent (15 requests queued)",
-      "UIPKCLI: progress sent=15 got=0" in seg)
-
-for rnd in range(10):
-    if srv_pass and cli_pass:
-        break
-    if not srv_pass:
-        seg = run_prog("uipksrv")
-        check(f"srv drain round {rnd} exits 0", "exit 0\n" in seg)
-        if "UIPKSRV: PASS served=100/100" in seg:
-            srv_pass = True
-    if not cli_pass:
-        seg = run_prog("uipkcli")
-        check(f"cli round {rnd} exits 0", "exit 0\n" in seg)
-        if "UIPKCLI: PASS replies=100/100" in seg:
-            cli_pass = True
-
-check("server served 100/100 (blocking recv)", srv_pass)
-check("client verified 100/100 replies (blocking recv)", cli_pass)
-check("server park probes ran inside the flow (ETIME on empty)",
-      txt().count("UIPKSRV: park-probe ETIME elapsed=") >= 3)
-check("no FAIL marker from either test program",
-      "UIPKSRV: FAIL" not in txt() and "UIPKCLI: FAIL" not in txt())
+# NOTE (IPC-4): the uipksrv/uipkcli blocking-recv
+# round-trip pair lived here; it depended on the IPC-1
+# test rendezvous, which IPC-4 deleted. Its assertions
+# (100-message byte-exact round-trip over blocking
+# receive, deadline probes, park probes) moved to
+# scripts/verify-ipc4.py, where the same shapes run
+# concurrently between the uipcld daemon and the
+# uiptoolssrv server. This script keeps the park
+# probes (uipkpark/uipknd use no rendezvous), the
+# FND-3 adjacency check, and the boot-3 ev=17 check.
 
 # ---- Long park: the all-parked case ----
 pos = len(serial)

@@ -429,7 +429,7 @@ struct user_ctx {
 	unsigned int	spsr;
 };
 
-#define	NDAEMON		6u	/* face, uiapp, qabotd, sh (Q9), utcpkeep (F1), + slot spawn (Q9) */
+#define	NDAEMON		6u	/* face, uiapp, qabotd, uipcld (IPC-4), sh (Q9), + slot spawn (Q9) */
 #define	PROG_FACE	0
 #define	PROG_UIAPP	1
 #define	PROG_NTP	2	/* App A4: sinkron jam (tak pegang display) */
@@ -1210,20 +1210,22 @@ user_syscall(struct arm_trap_frame *frame)
 			/* Test hooks: "embed:<name>" spawns an embedded
 			 * image without depending on FAT (Q9 pattern).
 			 *   embed:uls     Q9 spawn self-test program.
-			 *   embed:uipcsrv / embed:uipccli  IPC-1
-			 *     round-trip test pair.
-			 *   embed:uipksrv / embed:uipkcli  IPC-2
-			 *     blocking-recv round-trip pair;
-			 *     embed:uipkpark (65 s deadline park)
+			 *   embed:uipkpark (65 s deadline park)
 			 *     and embed:uipknd (no-deadline park)
-			 *     are IPC-2's park probes.
-			 *   embed:uipcdsetup / embed:uipcdclean /
-			 *     embed:uipcdfault / embed:uipcdwedge /
-			 *     embed:uipcdrain  IPC-3 lifecycle legs
-			 *     (driven from sh via the test-only
-			 *     `ipc` builtins: a spawn child cannot
-			 *     spawn, so no driver program can
-			 *     parent them).
+			 *     are IPC-2's park probes (kept: they
+			 *     do not use the deleted rendezvous).
+			 *   embed:uiptoolssrv  IPC-4 mock `tools`
+			 *     server. Its progid override (2, the
+			 *     qabotd daemon_images index) exists
+			 *     ONLY in this hook: the registry's
+			 *     reserved-name policy is progid-keyed,
+			 *     so a test server that must claim
+			 *     `tools` has to carry the owner progid
+			 *     (same precedent as ufaultd's
+			 *     PROG_UIAPP override below).
+			 *   embed:uipcregexit / embed:uipcregfull
+			 *     IPC-4 registry legs (anti-rendezvous
+			 *     + table-full probes).
 			 *   embed:ufault  FND-2: takes the console, faults.
 			 *   embed:ufaultd FND-2: becomes the display
 			 *     holder, then faults. Its progid override
@@ -1235,23 +1237,19 @@ user_syscall(struct arm_trap_frame *frame)
 			extern unsigned char	uls_img[], ufault_img[],
 						ufaultd_img[], uyield_img[],
 						uhangd_img[], uspin_img[],
-						uhangc_img[], uipcsrv_img[],
-						uipccli_img[], uipksrv_img[],
-						uipkcli_img[], uipkpark_img[],
+						uhangc_img[], uipkpark_img[],
 						uipknd_img[],
-						uipcdsetup_img[], uipcdclean_img[],
-						uipcdfault_img[], uipcdwedge_img[],
-						uipcdrain_img[];
+						uiptoolssrv_img[],
+						uipcregexit_img[],
+						uipcregfull_img[];
 			extern unsigned int	uls_img_len, ufault_img_len,
 						ufaultd_img_len, uyield_img_len,
 						uhangd_img_len, uspin_img_len,
-						uhangc_img_len, uipcsrv_img_len,
-						uipccli_img_len, uipksrv_img_len,
-						uipkcli_img_len, uipkpark_img_len,
+						uhangc_img_len, uipkpark_img_len,
 						uipknd_img_len,
-						uipcdsetup_img_len, uipcdclean_img_len,
-						uipcdfault_img_len, uipcdwedge_img_len,
-						uipcdrain_img_len;
+						uiptoolssrv_img_len,
+						uipcregexit_img_len,
+						uipcregfull_img_len;
 			static const struct {
 				const char	*name;
 				unsigned char	*img;
@@ -1275,33 +1273,21 @@ user_syscall(struct arm_trap_frame *frame)
 				  &uspin_img_len, -1 },
 				{ "embed:uhangc", uhangc_img,
 				  &uhangc_img_len, -1 },
-				/* IPC-1: Mach IPC round-trip pair
-				 * (see docs/rencana-ipc). */
-				{ "embed:uipcsrv", uipcsrv_img,
-				  &uipcsrv_img_len, -1 },
-				{ "embed:uipccli", uipccli_img,
-				  &uipccli_img_len, -1 },
-				/* IPC-2: blocking-recv pair + park
-				 * probes (see docs/rencana-ipc). */
-				{ "embed:uipksrv", uipksrv_img,
-				  &uipksrv_img_len, -1 },
-				{ "embed:uipkcli", uipkcli_img,
-				  &uipkcli_img_len, -1 },
+				/* IPC-2: park probes (see docs/rencana-ipc). */
 				{ "embed:uipkpark", uipkpark_img,
 				  &uipkpark_img_len, -1 },
 				{ "embed:uipknd", uipknd_img,
 				  &uipknd_img_len, -1 },
-				/* IPC-3: lifecycle legs (see docs/rencana-ipc). */
-				{ "embed:uipcdsetup", uipcdsetup_img,
-				  &uipcdsetup_img_len, -1 },
-				{ "embed:uipcdclean", uipcdclean_img,
-				  &uipcdclean_img_len, -1 },
-				{ "embed:uipcdfault", uipcdfault_img,
-				  &uipcdfault_img_len, -1 },
-				{ "embed:uipcdwedge", uipcdwedge_img,
-				  &uipcdwedge_img_len, -1 },
-				{ "embed:uipcdrain", uipcdrain_img,
-				  &uipcdrain_img_len, -1 },
+				/* IPC-4: mock tools server (progid 2,
+				 * the qabotd index, so it may claim
+				 * the reserved name `tools`) +
+				 * registry legs (see docs/rencana-ipc). */
+				{ "embed:uiptoolssrv", uiptoolssrv_img,
+				  &uiptoolssrv_img_len, 2 },
+				{ "embed:uipcregexit", uipcregexit_img,
+				  &uipcregexit_img_len, -1 },
+				{ "embed:uipcregfull", uipcregfull_img,
+				  &uipcregfull_img_len, -1 },
 			};
 			unsigned int hi, ei;
 			int matched = 0;
@@ -2525,9 +2511,9 @@ sched_register_daemon(const char *name, task_t task, pmap_t pmap,
 	case 0:	/* face */
 	case 1:	/* uiapp */
 		d->wd_warn_at = 1000u; d->wd_hang_at = 2000u; break;
-	case 3:	/* sh */
+	case 4:	/* sh (last daemon_images entry; see below) */
 		d->wd_warn_at = 6000u; d->wd_hang_at = 12000u; break;
-	default: /* qabotd + any future daemon */
+	default: /* qabotd + uipcld + any future daemon */
 		d->wd_warn_at = 1500u; d->wd_hang_at = 3000u; break;
 	}
 	if (nuprog < UPROG_MAX) {
@@ -2924,7 +2910,12 @@ static struct uprog_image daemon_images[] = {
 	/* { "utcpcli", utcpcli_img, &utcpcli_img_len, 1u }, */	/* Nonaktif: tcc hanya 1 koneksi (race dengan utlscli). Aktifkan untuk uji Q2a saja. */
 	/* { "utlscli", utlscli_img, &utlscli_img_len, 8u }, */	/* Nonaktif Q2c/F2: tcc 1 koneksi; aktifkan sementara untuk uji TLS */
 	{ "qabotd", qabotd_img, &qabotd_img_len, 8u },	/* progid 2: Qabot daemon persisten (Q4) */
-	{ "sh", sh_img, &sh_img_len, 1u },	/* progid 3: shell qaon> (Q9) */
+	{ "uipcld", uipcld_img, &uipcld_img_len, 1u },	/* progid 3: IPC-4 concurrent client daemon (test-only,
+							 * marker-gated: dormant without /data/iptoolsc-test
+							 * == "1"; INSERTED BEFORE sh -- sh must stay last,
+							 * see SH_IMAGE_IDX below; the 15/30 s default
+							 * watchdog class above applies to it) */
+	{ "sh", sh_img, &sh_img_len, 1u },	/* progid 4: shell qaon> (Q9) */
 	/* { "utcpkeep", utcpkeep_img, &utcpkeep_img_len, 1u }, */	/* F1: nonaktif (tcc 1 koneksi) */
 	/* { "utlskeep", utlskeep_img, &utlskeep_img_len, 1u }, */	/* F1: nonaktif (investigasi selesai) */
 

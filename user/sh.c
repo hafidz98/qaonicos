@@ -713,13 +713,26 @@ bi_key(void)
 
 
 /* ipc: IPC-3 harness builtins (dev/test only). sh is the
- * one persistent userspace task, so it holds send names
- * across spawn runs -- a spawn child cannot (it cannot
- * spawn, and its space dies with it). Subcommands:
- *   ipc resolve <slot>  resolve the test rendezvous
- *                       slot, hold the send name
+/* ipc: IPC-4 harness builtins (dev/test only). sh is the
+ * one persistent userspace task, so it holds send and
+ * receive names across spawn runs -- a spawn child
+ * cannot (it cannot spawn, and its space dies with
+ * it). Subcommands:
+ *   ipc register <name> alloc a receive port, bind the
+ *                       name, hold the port
+ *   ipc lookup <name>   look the name up, hold the
+ *                       send name, print send + gen
+ *   ipc gen <name>      print the name's generation
+ *   ipc qlimit <n>      setqlimit on the held port
+ *   ipc destroy         destroy the held receive port
  *   ipc send <id>       send an 8-byte message (body
  *                       A5 5A 00..) to the held name
+ *   ipc sendbig <id>    send an oversize message
+ *                       (4124 B total) to the held
+ *                       name; the glue rejects it
+ *                       before copying, so the small
+ *                       buffer is safe
+ *   ipc pollrecv        poll the held receive port
  *   ipc req <id>        alloc a reply port, send a
  *                       reply-carrying request to the
  *                       held name, hold the reply port
@@ -727,9 +740,12 @@ bi_key(void)
  *                       reply port (unsigned ms only:
  *                       a stranded park would hang
  *                       the console owner)
+ *   ipc rpc <name> <id> RPC to a registry name (5 s
+ *                       deadline) via uipc_rpc_user
  * Each prints one greppable "IPC: ..." line. */
 static unsigned	ipc_hold;
 static unsigned	ipc_reply;
+static unsigned	ipc_recv_hold;
 static unsigned	ipc_buf[10];
 
 static void
@@ -748,30 +764,122 @@ bi_ipc(void)
 	int rc;
 
 	if (sh_argc < 2) {
-		sh_puts("usage: ipc resolve <slot>|send <id>|req <id>|park <ms>\n");
+		sh_puts("usage: ipc register|lookup|gen|qlimit|destroy|send|sendbig|pollrecv|req|park|rpc ...\n");
 		return;
 	}
-	if (sh_streq(sh_argv[1], "resolve")) {
+	if (sh_streq(sh_argv[1], "register")) {
 		if (sh_argc < 3) {
-			sh_puts("usage: ipc resolve <slot>\n");
+			sh_puts("usage: ipc register <name>\n");
 			return;
 		}
-		rc = uipc_test_resolve(sh_argv[2]);
-		if (rc >= 0)
-			ipc_hold = (unsigned)rc;
-		sh_puts("IPC: hold ");
+		rc = uipc_port_alloc();
+		if (rc < 0) {
+			sh_puts("IPC: reg ");
+			sh_puts(sh_argv[2]);
+			sh_puts(" rc=");
+			ipc_puti(rc);
+			sh_puts("\n");
+			return;
+		}
+		ipc_recv_hold = (unsigned)rc;
+		rc = uipc_register(sh_argv[2], ipc_recv_hold);
+		sh_puts("IPC: reg ");
+		sh_puts(sh_argv[2]);
+		sh_puts(" rc=");
+		ipc_puti(rc);
+		sh_puts(" port=");
+		sh_putu(ipc_recv_hold);
+		sh_puts("\n");
+		return;
+	}
+	if (sh_streq(sh_argv[1], "lookup")) {
+		int gen;
+
+		if (sh_argc < 3) {
+			sh_puts("usage: ipc lookup <name>\n");
+			return;
+		}
+		rc = uipc_lookup(sh_argv[2]);
+		if (rc < 0) {
+			sh_puts("IPC: lookup ");
+			sh_puts(sh_argv[2]);
+			sh_puts(" rc=");
+			ipc_puti(rc);
+			sh_puts("\n");
+			return;
+		}
+		ipc_hold = (unsigned)rc;
+		gen = uipc_reg_gen(sh_argv[2]);
+		sh_puts("IPC: lookup ");
+		sh_puts(sh_argv[2]);
+		sh_puts(" send=");
+		sh_putu(ipc_hold);
+		sh_puts(" gen=");
+		ipc_puti(gen);
+		sh_puts("\n");
+		return;
+	}
+	if (sh_streq(sh_argv[1], "gen")) {
+		if (sh_argc < 3) {
+			sh_puts("usage: ipc gen <name>\n");
+			return;
+		}
+		rc = uipc_reg_gen(sh_argv[2]);
+		sh_puts("IPC: gen ");
+		sh_puts(sh_argv[2]);
+		if (rc < 0) {
+			sh_puts(" rc=");
+			ipc_puti(rc);
+		} else {
+			sh_puts(" gen=");
+			sh_putu((unsigned)rc);
+		}
+		sh_puts("\n");
+		return;
+	}
+	if (sh_streq(sh_argv[1], "qlimit")) {
+		if (sh_argc < 3) {
+			sh_puts("usage: ipc qlimit <n>\n");
+			return;
+		}
+		rc = uipc_port_setqlimit(ipc_recv_hold,
+					 sh_atou(sh_argv[2]));
+		sh_puts("IPC: qlimit rc=");
 		ipc_puti(rc);
 		sh_puts("\n");
 		return;
 	}
-	if (sh_streq(sh_argv[1], "send") || sh_streq(sh_argv[1], "req")) {
-		unsigned id, reply = 0u;
+	if (sh_streq(sh_argv[1], "destroy")) {
+		rc = uipc_port_destroy(ipc_recv_hold);
+		sh_puts("IPC: destroy rc=");
+		ipc_puti(rc);
+		sh_puts("\n");
+		return;
+	}
+	if (sh_streq(sh_argv[1], "pollrecv")) {
+		rc = uipc_recv_poll(ipc_recv_hold,
+				    (struct uipc_msg *)ipc_buf,
+				    sizeof(ipc_buf));
+		sh_puts("IPC: pollrecv rc=");
+		ipc_puti(rc);
+		if (rc >= 0) {
+			sh_puts(" id=");
+			sh_putu(ipc_buf[2]);
+		}
+		sh_puts("\n");
+		return;
+	}
+	if (sh_streq(sh_argv[1], "send") || sh_streq(sh_argv[1], "req") ||
+	    sh_streq(sh_argv[1], "sendbig")) {
+		unsigned id, reply = 0u, len = UIPC_HDR_SIZE + 8u;
 
 		if (sh_argc < 3) {
-			sh_puts("usage: ipc send|req <id>\n");
+			sh_puts("usage: ipc send|sendbig|req <id>\n");
 			return;
 		}
 		id = sh_atou(sh_argv[2]);
+		if (sh_streq(sh_argv[1], "sendbig"))
+			len = UIPC_HDR_SIZE + 4100u; /* over the cap */
 		if (sh_streq(sh_argv[1], "req")) {
 			rc = uipc_port_alloc();
 			if (rc < 0) {
@@ -786,17 +894,19 @@ bi_ipc(void)
 		ipc_buf[0] = reply;
 		ipc_buf[1] = 0u;
 		ipc_buf[2] = id;
-		ipc_buf[3] = UIPC_HDR_SIZE + 8u;
+		ipc_buf[3] = len;
 		ipc_buf[4] = 0u;
 		ipc_buf[5] = 0u;
 		ipc_buf[6] = 0x5AA5u;
 		ipc_buf[7] = 0u;
 		rc = uipc_send(ipc_hold, (const struct uipc_msg *)ipc_buf,
-			       UIPC_HDR_SIZE + 8u);
+			       len);
 		if (sh_streq(sh_argv[1], "req")) {
 			sh_puts("IPC: req reply=");
 			sh_putu(ipc_reply);
 			sh_puts(" rc=");
+		} else if (sh_streq(sh_argv[1], "sendbig")) {
+			sh_puts("IPC: sendbig rc=");
 		} else
 			sh_puts("IPC: send rc=");
 		ipc_puti(rc);
@@ -825,7 +935,37 @@ bi_ipc(void)
 		sh_puts("\n");
 		return;
 	}
-	sh_puts("usage: ipc resolve <slot>|send <id>|req <id>|park <ms>\n");
+	if (sh_streq(sh_argv[1], "rpc")) {
+		unsigned id;
+
+		if (sh_argc < 4) {
+			sh_puts("usage: ipc rpc <name> <id>\n");
+			return;
+		}
+		id = sh_atou(sh_argv[3]);
+		ipc_buf[0] = 0u;
+		ipc_buf[1] = 0u;
+		ipc_buf[2] = id;
+		ipc_buf[3] = UIPC_HDR_SIZE + 8u;
+		ipc_buf[4] = 0u;
+		ipc_buf[5] = 0u;
+		ipc_buf[6] = 0x5AA5u;
+		ipc_buf[7] = 0u;
+		rc = uipc_rpc_user(sh_argv[2],
+				   (struct uipc_msg *)ipc_buf,
+				   UIPC_HDR_SIZE + 8u, 5000);
+		sh_puts("IPC: rpc ");
+		sh_puts(sh_argv[2]);
+		sh_puts(" rc=");
+		ipc_puti(rc);
+		if (rc >= 0) {
+			sh_puts(" id=");
+			sh_putu(ipc_buf[2]);
+		}
+		sh_puts("\n");
+		return;
+	}
+	sh_puts("usage: ipc register|lookup|gen|qlimit|destroy|send|sendbig|pollrecv|req|park|rpc ...\n");
 }
 
 /* reboot / poweroff: FND-1 (SYS_RESET / SYS_POWEROFF). The
