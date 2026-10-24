@@ -37,7 +37,7 @@ for s in (MON, SER):
 qemu = subprocess.Popen([
     "qemu-system-arm", "-M", "virt", "-cpu", "cortex-a7", "-m", "64",
     "-L", tcroot + "/usr/share/qemu",
-    "-kernel", ROOT + "/kernel/build/mach3.elf",
+    "-kernel", ROOT + "/mach3-port/build/mach3.elf",
     "-drive", f"file={ROOT}/disk-images/mach3-blk.img,if=none,id=hd0,format=raw",
     "-device", "virtio-blk-device,drive=hd0",
     "-drive", f"file={ROOT}/disk-images/sd128.img,if=none,id=hd1,format=raw",

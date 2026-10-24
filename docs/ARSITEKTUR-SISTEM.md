@@ -69,7 +69,7 @@ graph TB
     end
     subgraph K["Kernel — Mach 3 + extension layer"]
         CORE["Mach 3 core (frozen)<br/>VM · tasks · traps · pmap"]
-        EXT["Extension layer kernel/kernel/arm/<br/>sched_switch · arbiters · blk/FAT · net stack<br/>HTTP+webui · littlefs · bootstate/bootlog<br/>credstore · updverify · drivers"]
+        EXT["Extension layer mach3-port/src/ext/<br/>sched_switch · arbiters · blk/FAT · net stack<br/>HTTP+webui · littlefs · bootstate/bootlog<br/>credstore · updverify · drivers"]
     end
     subgraph U["Userspace — embedded images, PL0, cooperative"]
         FACE["face (daemon 0)<br/>Qabot home · QR setup"]

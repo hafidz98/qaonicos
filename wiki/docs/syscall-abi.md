@@ -13,7 +13,7 @@ page describes the ABI's shape and its documented surface.
     **not done yet**. Below, Table 1 reproduces what
     SYSCALL-ABI.md documents; Table 2 lists the in-use numbers
     documented across track plans and dev logs instead. When in
-    doubt, the kernel source (`kernel/kernel/arm/user.c`) is the
+    doubt, the kernel source (`mach3-port/src/ext/user.c`) is the
     truth. **Do not invent rows**: a number not in either table
     is not known to exist.
 

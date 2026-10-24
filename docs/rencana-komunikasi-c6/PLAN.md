@@ -53,7 +53,7 @@ the policy gate in `user/qabot/loop.c` + `policy.c`
 never runs). Contract: a dispatched call is executed **only**
 through that same gate — the link never calls tool functions
 directly. qabotd does not link uartproto today
-(kernel/build-md.sh), so the hand-off (link -> qabotd) is
+(mach3-port/build-md.sh), so the hand-off (link -> qabotd) is
 new surface, designed in C6L-3.
 
 ### face (provisioning, ONB-3/4)
@@ -68,7 +68,7 @@ recorded so C6L phases keep the API shape face will need
 
 ### webui / settings (KV vs credential store)
 Two secret stores exist today: the kernel credential store
-(B5.5, SYS_CRED 104, `kernel/kernel/arm/credstore.c`), used
+(B5.5, SYS_CRED 104, `mach3-port/src/ext/credstore.c`), used
 by web settings for the API key; and KV.* via the mock,
 used by `user/uiapp/scr_llm.c` for llm_provider/llm_model/
 llm_key — persisted on the RV1103's SD card in QEMU, but
@@ -223,7 +223,7 @@ qabotd (and later face) — the shape the hardware build
 will ship.
 Scope:
 - New daemon image `linkd` (daemon table grows: NDAEMON
-  and daemon_images in kernel/kernel/arm/user.c are
+  and daemon_images in mach3-port/src/ext/user.c are
   touched deliberately, with the load-order caveat those
   tables carry); consumers reach it via a small client
   stub with the same `uproto_*` signatures.

@@ -2,7 +2,7 @@
 # run-qemu.sh - Boot kernel Mach 3 QaonicOS di QEMU.
 # Target dev: -M virt -cpu cortex-a7 -m 64 (RV1103 hardware asli = Fase D).
 #
-# Build dulu: cd kernel && ./build-md.sh
+# Build dulu: cd mach3-port && ./build-md.sh
 # Lalu: ./scripts/run-qemu.sh   (hentikan dengan Ctrl-A X)
 #
 # Fase D: dua virtio-blk (hd0 = storage internal, hd1 = kartu SD 128MB
@@ -38,7 +38,7 @@ python3 tools/mkfat32.py create "$SDIMG" 128 >/dev/null
 # shellcheck disable=SC2086
 exec qemu-system-arm -M virt -cpu cortex-a7 -m 64 -nographic \
     $QEMU_L \
-    -kernel "$QAONIC_ROOT/kernel/build/mach3.elf" \
+    -kernel "$QAONIC_ROOT/mach3-port/build/mach3.elf" \
     -drive file="$IMG",if=none,id=hd0,format=raw \
     -device virtio-blk-device,drive=hd0 \
     -drive file="$SDIMG",if=none,id=hd1,format=raw \

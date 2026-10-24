@@ -21,7 +21,7 @@ the audit appendix.
   ONB1 19-check, ONB2, plus the ULFS / UVOICE / UCREDSTORE
   one-shots), a dev log in this directory, and a commit.
 - Kernel changes stay inside the Mach 3 extension layer
-  (`kernel/kernel/arm/`), never in the Mach core.
+  (`mach3-port/src/ext/`), never in the Mach core.
 - New syscalls take the next free numbers and are added to
   `docs/SYSCALL-ABI.md` in the same commit (the doc is
   already 28 syscalls stale — audit #14; keeping it current

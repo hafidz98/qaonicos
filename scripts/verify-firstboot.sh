@@ -30,7 +30,7 @@ def boot():
     p = subprocess.Popen([
         "qemu-system-arm", "-M", "virt", "-cpu", "cortex-a7", "-m", "64",
         "-nographic", "-L", qemu_dir,
-        "-kernel", root + "/kernel/build/mach3.elf",
+        "-kernel", root + "/mach3-port/build/mach3.elf",
         "-drive", f"file={root}/disk-images/mach3-blk.img,if=none,id=hd0,format=raw",
         "-device", "virtio-blk-device,drive=hd0",
         "-drive", f"file={root}/disk-images/sd128.img,if=none,id=hd1,format=raw",

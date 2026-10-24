@@ -64,7 +64,7 @@
 #define QAON_UNKNOWN	0xFFFFFFFFu
 
 /* Statistik sistem (Fase C).  Layout DISALIN MANUAL dari
- * kernel/kernel/arm/user.c — sizeof = 36. */
+ * mach3-port/src/ext/user.c — sizeof = 36. */
 struct qaon_stat {
 	unsigned int	uptime_ms;
 	unsigned int	cpu_pct;

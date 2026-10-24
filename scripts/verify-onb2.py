@@ -4,7 +4,7 @@ setup done -> finale screen screendump."""
 import socket, subprocess, os, sys, time, threading
 
 tc = os.path.expanduser("~/workspace/toolchain")
-ROOT = "/home/hatch/workspace/qaonic_os"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SER = "/tmp/onb2-ser.sock"
 MON = "/tmp/onb2-mon.sock"
 for s in (SER, MON):
@@ -19,7 +19,7 @@ env["LD_LIBRARY_PATH"] = (tc + "/usr/lib/x86_64-linux-gnu:" +
 env["QEMU_MODULE_DIR"] = tc + "/usr/lib/x86_64-linux-gnu/qemu"
 p = subprocess.Popen([
     "qemu-system-arm", "-M", "virt", "-cpu", "cortex-a7", "-m", "64",
-    "-L", tc + "/usr/share/qemu", "-kernel", ROOT + "/kernel/build/mach3.elf",
+    "-L", tc + "/usr/share/qemu", "-kernel", ROOT + "/mach3-port/build/mach3.elf",
     "-device", "virtio-gpu-device", "-display", "none",
     "-monitor", f"unix:{MON},server,nowait",
     "-serial", f"unix:{SER},server,nowait",

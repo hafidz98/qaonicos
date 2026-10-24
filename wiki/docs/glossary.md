@@ -8,7 +8,7 @@ definition, the page that owns the topic is linked.
 | **Daemon** | A persistent userspace program in the fixed set: `face` (progid 0), `uiapp` (1), `qabotd` (2), `sh` (3). Daemons are embedded in the kernel image and launched by the kernel; they are *not* Mach IPC servers. |
 | **One-shot** | A userspace program that runs to completion: boot selftests, `ufirst`, feature probes (`u*.c`). One-shots double as the regression battery, and their PASS is the boot healthy-mark input. |
 | **Progid** | The daemon/program index used by kernel arbiters (display token, console owner, face-request ownership). `0`=face, `1`=uiapp, `2`=qabotd, `3`=sh. |
-| **Extension layer** | The hand-written product layer inside the kernel (`kernel/kernel/arm/`): syscall dispatch, cooperative scheduler, arbiters, and resident services (net stack, HTTP, littlefs, bootstate, credstore). Sits on the frozen Mach 3 core. |
+| **Extension layer** | The hand-written product layer inside the kernel (`mach3-port/src/ext/`): syscall dispatch, cooperative scheduler, arbiters, and resident services (net stack, HTTP, littlefs, bootstate, credstore). Sits on the frozen Mach 3 core. |
 | **Net pump** | `net_pump()` — one iteration of the whole network server (RX + TCP timers + one HTTP request), called only from the scheduler's two switch points. If daemons stop yielding, the pump starves. |
 | **Cooperative scheduling** | Daemons switch only at `SYS_YIELD` and at exit. No preemption; quantum preemption (THR-3) is gated on a measured jitter need. |
 | **Display token** | The kernel-held single-owner right to draw and receive input events. Face holds it by default; uiapp receives it via GRANT and returns it via RELEASE. See [Display, UI & Face](display-ui-face.md). |

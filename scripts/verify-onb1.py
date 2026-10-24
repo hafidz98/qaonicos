@@ -1,6 +1,6 @@
 import http.client, os, socket, subprocess, time, urllib.parse
 
-ROOT = "/home/hatch/workspace/qaonic_os"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tc = os.path.expanduser("~/workspace/toolchain")
 env = dict(os.environ)
 env["PATH"] = tc + "/usr/bin:" + env.get("PATH", "")
@@ -16,7 +16,7 @@ for s in (SER,):
 p = subprocess.Popen([
     "qemu-system-arm", "-M", "virt", "-cpu", "cortex-a7", "-m", "64",
     "-L", tc + "/usr/share/qemu",
-    "-kernel", ROOT + "/kernel/build/mach3.elf",
+    "-kernel", ROOT + "/mach3-port/build/mach3.elf",
     "-drive", f"file={ROOT}/disk-images/mach3-blk.img,if=none,id=hd0,format=raw",
     "-device", "virtio-blk-device,drive=hd0",
     "-drive", f"file={ROOT}/disk-images/sd128.img,if=none,id=hd1,format=raw",

@@ -10,7 +10,7 @@ planned work will land.
 > **Key facts**
 >
 > - Mach 3 is kept for **VM only**: real tasks, real PL0 isolation; Mach threads are created but never scheduled, and Mach IPC is unused in the product path.
-> - Everything product-shaped in the kernel sits in the **extension layer** (`kernel/kernel/arm/`, centred on the 2,270-line `user.c`).
+> - Everything product-shaped in the kernel sits in the **extension layer** (`mach3-port/src/ext/`, centred on the 2,270-line `user.c`).
 > - "IPC" in QaonicOS means **shared kernel globals behind a syscall surface** (display token, web-shell bridge, bootstate record) — there is no message passing.
 > - The ABI is **poll-shaped**: no blocking syscalls, by design.
 > - Consequence that drives everything: a userspace fault kills one program; a kernel-resident fault is a kernel fault — and every resident also spends the ~287 KB boot-partition headroom.

@@ -1,4 +1,4 @@
-kernel/build/
+mach3-port/build/
 *.elf
 *.o
 *.bin

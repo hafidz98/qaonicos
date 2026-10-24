@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate kernel/kernel/arm/splash_text.h: pre-rendered text
+"""Generate mach3-port/src/ext/splash_text.h: pre-rendered text
 bitmaps (alpha) for the kernel boot splash.
 
 The kernel has no font engine; the wordmark and stage labels are
@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, "kernel", "kernel", "arm", "splash_text.h")
+OUT = os.path.join(ROOT, "mach3-port", "src", "ext", "splash_text.h")
 BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 REG = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 

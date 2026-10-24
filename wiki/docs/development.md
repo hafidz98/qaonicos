@@ -7,7 +7,7 @@ verification artifact.
 
 > **Key facts**
 >
-> - **Build:** `cd kernel && ./build-md.sh` → per-file OK summary + `LINK OK` → `kernel/build/mach3.elf`. The portable toolchain lives outside the repo (`~/workspace/toolchain/env.sh` must be sourced; bare QEMU fails without its module dir).
+> - **Build:** `cd mach3-port && ./build-md.sh` → per-file OK summary + `LINK OK` → `mach3-port/build/mach3.elf`. The portable toolchain lives outside the repo (`~/workspace/toolchain/env.sh` must be sourced; bare QEMU fails without its module dir).
 > - **GUI verification is official methodology**, not a nicety: any face/uiapp/sh/display change ships with a QEMU screenshot + a shell transcript (`docs/VERIFIKASI-GUI.md`).
 > - **Serial sockets must be drained continuously** by a reader thread in any harness — guest printf is polling-mode, and an undrained socket stalls the guest CPU inside printf, mimicking a network hang.
 > - Kill leftover QEMU by exact name only (`pgrep -x qemu-system-arm`) before reruns — leftovers hold the disk-image lock and serial socket and cause phantom failures.
@@ -21,11 +21,13 @@ images are **embedded into the kernel image**, so adding a user
 program means touching all of:
 
 1. the program source under `user/`,
-2. **both** program loops in `kernel/build-md.sh`,
+2. **both** program loops in `mach3-port/build-md.sh`,
 3. the extern declaration + a `uprogs[]` entry in `user.c`.
 
-Kernel sources under `kernel/kernel/arm/` are globbed by the
-build. The shell one-shot embed cap is 65,536 bytes.
+Kernel sources are globbed by the build from
+`mach3-port/src/md/arm/` (incl. `tests/`), `mach3-port/src/ext/`
+and `mach3-port/src/ext/littlefs/`. The shell one-shot embed cap
+is 65,536 bytes.
 
 ## Run + verify in QEMU
 
@@ -69,12 +71,17 @@ Methodology source:
 
 | Path | What |
 |---|---|
-| `kernel/` | Mach 3 port (MD build), extension layer in `kernel/kernel/arm/` |
+| `mach3-port/` | Mach 3 port build workspace — layout map in `mach3-port/README.md`; MD glue in `src/md/arm/`, extension layer in `src/ext/`, pristine upstream in `upstream/mach3/` |
 | `user/` | Daemons, one-shots, `ulib`, `uartproto`, vendored `tls` |
 | `scripts/` | Build/run/verify tooling, `sign-update.py`, QEMU harnesses |
 | `docs/` | The deep documents this wiki synthesizes |
 | `hw/`, `~/workspace/b0-sdk/` | Vendor DTS, boot-chain SDK artifacts |
 | `wiki/` | This wiki (sources in `wiki/docs/`, built site gitignored) |
+
+> Documents dated before the 2026-10-24 restructure cite the
+> pre-restructure layout (`kernel/`, `kernel/kernel/arm/`,
+> `kernel/mach3-src/`, …); the mapping is
+> `docs/rencana-restruktur/PLAN.md` §4.2.
 
 Sources:
 [`docs/VERIFIKASI-GUI.md`](../docs/VERIFIKASI-GUI.md),

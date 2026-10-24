@@ -23,7 +23,7 @@ phantom failures).
 """
 import os, re, socket, subprocess, sys, threading, time
 
-ROOT = "/home/hatch/workspace/qaonic_os"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 tc = os.path.expanduser("~/workspace/toolchain")
 env = dict(os.environ)
 env["PATH"] = tc + "/usr/bin:" + env.get("PATH", "")
@@ -56,7 +56,7 @@ def boot_qemu():
         "qemu-system-arm", "-M", "virt", "-cpu", "cortex-a7",
         "-m", "64",
         "-L", tc + "/usr/share/qemu",
-        "-kernel", ROOT + "/kernel/build/mach3.elf",
+        "-kernel", ROOT + "/mach3-port/build/mach3.elf",
         "-serial", f"unix:{SER},server,nowait",
         "-monitor", f"unix:{MON},server,nowait",
         "-device", "virtio-gpu-device", "-display", "none",
