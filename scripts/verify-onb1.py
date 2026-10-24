@@ -13,6 +13,25 @@ for s in (SER,):
         os.unlink(s)
     except FileNotFoundError:
         pass
+
+# FND-4 hygiene: /data persists across QEMU restarts now
+# (blk region), and this script's flow starts from "device
+# has no PIN yet" -- a cfg-pin left by any earlier run would
+# turn the create form into a login form and cascade. Scrub
+# the littlefs region on the image to erased (0xFF) before
+# booting; the guest formats it on first mount. Region =
+# 2048 sectors directly below the bootstate tail block
+# (16 bootlog + state + scratch = 18 sectors); constants
+# mirror mach3-port/src/ext/lfs_port.c.
+_img = os.path.join(ROOT, "disk-images", "mach3-blk.img")
+_total = os.path.getsize(_img) // 512
+_base = _total - 18 - 2048
+with open(_img, "r+b") as _f:
+    _f.seek(_base * 512)
+    _f.write(b"\xff" * (2048 * 512))
+print("hygiene: littlefs region scrubbed (sectors %d..%d)"
+      % (_base, _base + 2047))
+
 p = subprocess.Popen([
     "qemu-system-arm", "-M", "virt", "-cpu", "cortex-a7", "-m", "64",
     "-L", tc + "/usr/share/qemu",
