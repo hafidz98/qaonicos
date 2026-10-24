@@ -1,35 +1,47 @@
 /*
- * mock_comcu.c - SIMULATOR co-MCU ESP32-C3 untuk QEMU.
+ * mock_comcu.c - mock co-MCU backend for the link layer (C6L-1).
  *
- * JUJUR: ini bukan hardware. co-MCU fisik belum ada; semua respons
- * canned agar alur UI WiFi/BLE/LLM/Passkey dapat diuji end-to-end di
- * QEMU.  Saat ESP32-C3 tiba: ganti xchg() di uartproto.c dengan
- * tulis/baca UART PL011 data — antarmuka uproto_* tidak berubah.
+ * HONEST: this is not hardware. The co-MCU is simulated
+ * in-process so UI and link tests run end-to-end in QEMU.
+ * Unlike the pre-C6L-1 mock, this backend is a WIRE-LEVEL
+ * peer: the link layer hands it the exact bytes a real
+ * peer would receive, and it parses them with the same
+ * rules (line grammar, length-prefixed KV bodies, QA
+ * frames). A bug in the link layer's wire encoding is
+ * therefore visible here, not hidden by a function call.
  *
- * Backing store = struct nvs_state (user/cfg/cfg.h) yang persisten di
- * 2 sektor NVS kartu SD (write-through tiap mutasi): KV LLM, jaringan
- * WiFi tersimpan, dan state/nama BLE selamat dari reboot. State
- * koneksi WiFi saat ini (wifi_conn/ssid/pending) tetap runtime saja.
+ * Backing store = struct nvs_state (user/cfg/cfg.h)
+ * persisted write-through to two SD sectors: KV, saved
+ * Wi-Fi networks, BLE state survive reboot. Wi-Fi
+ * connection state itself is runtime-only.
  *
- * Perintah yang didukung (RENCANA-app §4):
+ * Commands (frozen v1.1, see
+ * docs/rencana-komunikasi-c6/WIRE-FREEZE.md):
  *   WIFI.SCAN -> OK <n>\n<ssid>,<rssi>,<sec>\n...
- *   WIFI.CONNECT <ssid> -> OK NEEDPASS | OK CONNECTED | ERR NOTFOUND
- *   WIFI.PASS <pwd>     -> OK CONNECTED | ERR AUTH | ERR NOCONN
+ *   WIFI.CONNECT <ssid> -> OK NEEDPASS | OK CONNECTED
+ *                          | ERR NOTFOUND
+ *   WIFI.PASS <pwd>     -> OK CONNECTED | ERR AUTH
+ *                          | ERR NOCONN
  *   WIFI.LIST           -> OK <n>\n<ssid>,<sec>\n...
  *   WIFI.FORGET <ssid>  -> OK
  *   WIFI.STATUS         -> OK CONNECTED <ssid> | OK DISCONNECTED
  *   WIFI.DISC           -> OK
  *   BLE.ON / BLE.OFF    -> OK
  *   BLE.NAME <nama>     -> OK
- *   BLE.STATUS          -> OK ON|OFF <nama>
- *   KV.SET <k> <v>      -> OK
- *   KV.GET <k>          -> OK <v> | ERR NOTFOUND
+ *   BLE.STATUS          -> OK ON|OFF <paired_addr|NONE>
+ *                          (the mock never pairs: NONE)
+ *   KV.SET <k> <len>\n<body> -> OK
+ *   KV.GET <k>          -> OK <len>\n<body>
  *   KV.DEL <k>          -> OK
- *   TIME.GET            -> OK <iso8601> (jam dinding real via NTP;
- *                              label MOCK-... bila belum sinkron)
+ *   TIME.GET            -> OK <iso8601>
  *   FIDO.LIST           -> OK 0
+ * Mock extensions (not in the frozen v1 list, kept for
+ * the screens): WIFI.STATUS, WIFI.DISC.
+ * Still absent (C6L-2/C6L-3): NET.HTTP, FIDO.DEL/
+ * APPROVE/DENY, FIDO.EVENT, BIN/EVT frames.
  */
 #include "uartproto/uartproto.h"
+#include "uartproto/link.h"
 #include "ulib/ulib.h"
 #include "../cfg/cfg.h"
 
@@ -160,39 +172,47 @@ scpy(char *d, const char *s, unsigned dsz)
 	d[i] = 0;
 }
 
-/* Tulis "OK ...\n" ke rx. Return 0. */
-static int
-ok1(const char *p1, char *rx, unsigned rsz)
+/* --- Response byte queue (what read() drains) --- */
+
+#define	RESP_Q_SZ	256u	/* largest mock response is ~85 B */
+static unsigned char resp_q[RESP_Q_SZ];
+static unsigned resp_len = 0, resp_pos = 0;
+
+static void
+qbytes(const unsigned char *p, unsigned n)
 {
-	unsigned i = 0, j = 0;
-	rx[i++] = 'O';
-	rx[i++] = 'K';
+	unsigned i;
+	for (i = 0; i < n && resp_len < RESP_Q_SZ; i++)
+		resp_q[resp_len++] = p[i];
+}
+
+static void
+qstr(const char *s)
+{
+	qbytes((const unsigned char *)s, slen(s));
+}
+
+/* "OK ..." + '\n'. p1 may be NULL (bare OK). */
+static void
+qok1(const char *p1)
+{
+	qstr("OK");
 	if (p1) {
-		rx[i++] = ' ';
-		while (p1[j] && i + 2 < rsz)
-			rx[i++] = p1[j++];
+		qstr(" ");
+		qstr(p1);
 	}
-	rx[i++] = '\n';
-	rx[i] = 0;
-	return 0;
+	qstr("\n");
 }
 
-static int
-err(const char *code, char *rx, unsigned rsz)
+static void
+qerr(const char *code)
 {
-	unsigned i = 0, j = 0;
-	rx[i++] = 'E';
-	rx[i++] = 'R';
-	rx[i++] = 'R';
-	rx[i++] = ' ';
-	while (code[j] && i + 2 < rsz)
-		rx[i++] = code[j++];
-	rx[i++] = '\n';
-	rx[i] = 0;
-	return 0;
+	qstr("ERR ");
+	qstr(code);
+	qstr("\n");
 }
 
-/* Ambil argumen ke-n (0-based) dari tx setelah spasi. */
+/* Ambil argumen ke-n (0-based) dari line setelah spasi. */
 static void
 argn(const char *tx, int n, char *out, unsigned osz)
 {
@@ -261,12 +281,14 @@ kv_free(void)
 	return -1;
 }
 
-/* --- Data plane: penerima frame AUD (D4) --- */
+/* --- Data plane state (declared before dispatch) --- */
 static unsigned voice_frames;
 static int voice_active;
 
-int
-mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
+/* --- Command dispatch (one complete line, plus KV body) --- */
+
+static void
+dispatch(const char *tx, const unsigned char *body, unsigned bodylen)
 {
 	char a0[64], a1[64], tmp[128];
 	unsigned i, o;
@@ -297,8 +319,8 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 			tmp[o++] = '\n';
 		}
 		tmp[o] = 0;
-		scpy(rx, tmp, rsz);
-		return 0;
+		qstr(tmp);
+		return;
 	}
 	if (sncmp(tx, "WIFI.CONNECT", 12) == 0 &&
 	    (tx[12] == ' ' || tx[12] == 0)) {
@@ -309,17 +331,22 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 					wifi_conn = 1;
 					scpy(wifi_ssid, a0, sizeof(wifi_ssid));
 					wifi_pending[0] = 0;
-					return ok1("CONNECTED", rx, rsz);
+					qok1("CONNECTED");
+					return;
 				}
 				scpy(wifi_pending, a0, sizeof(wifi_pending));
-				return ok1("NEEDPASS", rx, rsz);
+				qok1("NEEDPASS");
+				return;
 			}
 		}
-		return err("NOTFOUND", rx, rsz);
+		qerr("NOTFOUND");
+		return;
 	}
 	if (sncmp(tx, "WIFI.PASS", 9) == 0 && (tx[9] == ' ' || tx[9] == 0)) {
-		if (!wifi_pending[0])
-			return err("NOCONN", rx, rsz);
+		if (!wifi_pending[0]) {
+			qerr("NOCONN");
+			return;
+		}
 		argn(tx, 0, a0, sizeof(a0));
 		if (slen(a0) >= 8) {
 			wifi_conn = 1;
@@ -338,9 +365,11 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 					cfg_save(&nvs); /* write-through */
 				}
 			}
-			return ok1("CONNECTED", rx, rsz);
+			qok1("CONNECTED");
+			return;
 		}
-		return err("AUTH", rx, rsz);
+		qerr("AUTH");
+		return;
 	}
 	if (scmp(tx, "WIFI.LIST") == 0) {
 		o = 0;
@@ -362,8 +391,8 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 			tmp[o++] = '\n';
 		}
 		tmp[o] = 0;
-		scpy(rx, tmp, rsz);
-		return 0;
+		qstr(tmp);
+		return;
 	}
 	if (sncmp(tx, "WIFI.FORGET", 11) == 0) {
 		argn(tx, 0, a0, sizeof(a0));
@@ -378,7 +407,8 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 			}
 		}
 		cfg_save(&nvs);	/* write-through; error diabaikan */
-		return ok1(0, rx, rsz);
+		qok1(0);
+		return;
 	}
 	if (scmp(tx, "WIFI.STATUS") == 0) {
 		if (wifi_conn) {
@@ -387,26 +417,32 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 			for (i = 0; wifi_ssid[i] && o + 2 < sizeof(tmp); i++)
 				tmp[o++] = wifi_ssid[i];
 			tmp[o] = 0;
-			return ok1(tmp, rx, rsz);
+			qok1(tmp);
+			return;
 		}
-		return ok1("DISCONNECTED", rx, rsz);
+		qok1("DISCONNECTED");
+		return;
 	}
 	if (scmp(tx, "WIFI.DISC") == 0) {
 		wifi_conn = 0;
+		wifi_pending[0] = 0;
 		wifi_ssid[0] = 0;
-		return ok1(0, rx, rsz);
+		qok1(0);
+		return;
 	}
 
 	/* --- BLE --- */
 	if (scmp(tx, "BLE.ON") == 0) {
 		nvs.ble_on = 1;
 		cfg_save(&nvs);	/* write-through; error diabaikan */
-		return ok1(0, rx, rsz);
+		qok1(0);
+		return;
 	}
 	if (scmp(tx, "BLE.OFF") == 0) {
 		nvs.ble_on = 0;
 		cfg_save(&nvs);	/* write-through; error diabaikan */
-		return ok1(0, rx, rsz);
+		qok1(0);
+		return;
 	}
 	if (sncmp(tx, "BLE.NAME", 8) == 0) {
 		argn(tx, 0, a0, sizeof(a0));
@@ -414,42 +450,80 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 			scpy(nvs.ble_name, a0, sizeof(nvs.ble_name));
 			cfg_save(&nvs);	/* write-through; error diabaikan */
 		}
-		return ok1(0, rx, rsz);
+		qok1(0);
+		return;
 	}
 	if (scmp(tx, "BLE.STATUS") == 0) {
-		scpy(tmp, nvs.ble_on ? "ON " : "OFF ", sizeof(tmp));
-		o = slen(tmp);
-		for (i = 0; nvs.ble_name[i] && o + 2 < sizeof(tmp); i++)
-			tmp[o++] = nvs.ble_name[i];
-		tmp[o] = 0;
-		return ok1(tmp, rx, rsz);
+		/* Frozen v1.1: paired address, never the
+		 * advertise name. This mock never pairs. */
+		qok1(nvs.ble_on ? "ON NONE" : "OFF NONE");
+		return;
 	}
 
-	/* --- KV --- */
+	/* --- KV (length-prefixed) --- */
 	if (sncmp(tx, "KV.SET", 6) == 0) {
 		int f;
+		/* Body arrived with the line (parser's job);
+		 * a line-only KV.SET is malformed. */
+		if (body == 0) {
+			qerr("ARG");
+			return;
+		}
 		argn(tx, 0, a0, sizeof(a0));
-		argn(tx, 1, a1, sizeof(a1));
-		if (!a0[0])
-			return err("ARG", rx, rsz);
+		if (!a0[0] || bodylen > UPROTO_KV_VAL_MAX) {
+			qerr("ARG");
+			return;
+		}
 		f = kv_find(a0);
 		if (f < 0)
 			f = kv_free();
-		if (f < 0)
-			return err("FULL", rx, rsz);
+		if (f < 0) {
+			qerr("FULL");
+			return;
+		}
 		scpy(nvs.kv[f].key, a0, sizeof(nvs.kv[f].key));
-		scpy(nvs.kv[f].val, a1, sizeof(nvs.kv[f].val));
+		/* Value bytes are a C string in this store
+		 * (no NULs); copy at most the slot size. */
+		{
+			unsigned n = (bodylen < sizeof(nvs.kv[f].val) - 1u) ?
+			    bodylen : sizeof(nvs.kv[f].val) - 1u;
+			for (i = 0; i < n; i++)
+				nvs.kv[f].val[i] = (char)body[i];
+			nvs.kv[f].val[n] = 0;
+		}
 		kv_recount();
 		cfg_save(&nvs);	/* write-through; error diabaikan */
-		return ok1(0, rx, rsz);
+		qok1(0);
+		return;
 	}
 	if (sncmp(tx, "KV.GET", 6) == 0) {
 		int f;
+		char num[12];
+		unsigned vlen, j;
 		argn(tx, 0, a0, sizeof(a0));
 		f = kv_find(a0);
-		if (f < 0)
-			return err("NOTFOUND", rx, rsz);
-		return ok1(nvs.kv[f].val, rx, rsz);
+		if (f < 0) {
+			qerr("NOTFOUND");
+			return;
+		}
+		vlen = slen(nvs.kv[f].val);
+		/* "OK <len>\n" + exactly len value bytes. */
+		j = 0;
+		do {
+			num[j++] = (char)('0' + vlen % 10u);
+			vlen /= 10u;
+		} while (vlen && j < sizeof(num));
+		qstr("OK ");
+		for (i = 0; i < j; i++)
+			{
+				char c = num[j - 1u - i];
+				qbytes((unsigned char *)&c, 1u);
+			}
+		qstr("\n");
+		qbytes((unsigned char *)nvs.kv[f].val,
+		       slen(nvs.kv[f].val));
+		(void)a1;
+		return;
 	}
 	if (sncmp(tx, "KV.DEL", 6) == 0) {
 		int f;
@@ -461,24 +535,29 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 		}
 		kv_recount();
 		cfg_save(&nvs);	/* write-through; error diabaikan */
-		return ok1(0, rx, rsz);
+		qok1(0);
+		return;
 	}
 
 	/* --- TIME --- */
 	if (scmp(tx, "TIME.GET") == 0) {
 		static char tbuf[32];
-		return ok1(time_now(tbuf), rx, rsz);
+		qok1(time_now(tbuf));
+		return;
 	}
 
 	/* --- FIDO --- */
-	if (scmp(tx, "FIDO.LIST") == 0)
-		return ok1("0", rx, rsz);
+	if (scmp(tx, "FIDO.LIST") == 0) {
+		qok1("0");
+		return;
+	}
 
 	/* --- VOICE (protokol v2, D4) --- */
 	if (scmp(tx, "VOICE.START 16000 16") == 0) {
 		voice_frames = 0u;
 		voice_active = 1;
-		return ok1("", rx, rsz);
+		qok1("");
+		return;
 	}
 	if (scmp(tx, "VOICE.STOP") == 0) {
 		char nbuf[16];
@@ -498,21 +577,21 @@ mock_comcu_handle(const char *tx, char *rx, unsigned rsz)
 				nbuf[i - 1u - j] = t;
 			}
 		}
-		return ok1(nbuf, rx, rsz);
+		qok1(nbuf);
+		return;
 	}
 
-	return err("UNKNOWN", rx, rsz);
+	qerr("UNKNOWN");
 }
 
-/* --- Data plane: penerima frame AUD (D4), lanjutan --- */
-
+/* --- Data plane: penerima frame AUD (D4) --- */
 static unsigned
 mock_crc16(const unsigned char *p, unsigned len)
 {
 	unsigned crc = 0xffffu;
 	unsigned i, j;
 
-	for (i = 0u; i < len; i++) {
+	for (i = 0; i < len; i++) {
 		crc ^= (unsigned)p[i] << 8;
 		for (j = 0u; j < 8u; j++)
 			crc = (crc & 0x8000u) ? (crc << 1) ^ 0x1021u :
@@ -521,24 +600,266 @@ mock_crc16(const unsigned char *p, unsigned len)
 	return crc & 0xffffu;
 }
 
-int
-mock_comcu_aud(const unsigned char *frame, unsigned flen)
+/* Frozen v2 frame: "QA" + type + len BE + payload + CRC BE.
+ * Only AUD (0x01) is accepted until C6L-3 adds BIN/EVT.
+ * The legacy 3-byte "AUD" magic is rejected. */
+static int
+aud_accept(const unsigned char *frame, unsigned flen)
 {
 	unsigned len, crc, expect;
 
 	if (!voice_active)
 		return -1;
-	if (flen < 7u)
+	if (flen < LINK_FRAME_HDR + LINK_FRAME_CRC)
 		return -1;
-	if (frame[0] != 'A' || frame[1] != 'U' || frame[2] != 'D')
+	if (frame[0] != LINK_FRAME_MAGIC0 ||
+	    frame[1] != LINK_FRAME_MAGIC1)
+		return -1;
+	if (frame[2] != LINK_FRAME_TYPE_AUD)
 		return -1;
 	len = ((unsigned)frame[3] << 8) | frame[4];
-	if (flen != 5u + len + 2u)
+	if (flen != LINK_FRAME_HDR + len + LINK_FRAME_CRC)
 		return -1;
-	crc = ((unsigned)frame[5u + len] << 8) | frame[5u + len + 1u];
-	expect = mock_crc16(frame, 5u + len);
+	crc = ((unsigned)frame[LINK_FRAME_HDR + len] << 8) |
+	    frame[LINK_FRAME_HDR + len + 1u];
+	expect = mock_crc16(frame, LINK_FRAME_HDR + len);
 	if (crc != expect)
 		return -1;
 	voice_frames++;
 	return 0;
 }
+
+/* --- Backend: byte-stream parser ---
+ *
+ * write() appends to the input accumulator; the parser
+ * consumes complete requests: a line, plus for KV.SET
+ * exactly <len> following body bytes. Malformed input
+ * policy: a KV.SET line whose length is not numeric
+ * (the legacy inline shape) is rejected at once with
+ * ERR ARG and no body wait; a numeric length above
+ * the sane bound (4096) drops the whole accumulator
+ * (the link layer then times out and must reopen);
+ * a body longer than the store cap is consumed and
+ * then rejected with ERR ARG, keeping the stream in
+ * sync. Overflow of the accumulator is a link error
+ * (write returns -1); the caller must reopen. */
+#define	IN_ACC_SZ	256u	/* largest single write is ~110 B */
+#define	BODY_MAX	4096u
+#define	READ_CHUNK	32u
+
+static unsigned char in_acc[IN_ACC_SZ];
+static unsigned in_len = 0;
+static int need_body = -1;	/* >= 0: body bytes still wanted */
+static char body_key[64];
+static unsigned body_want = 0;
+
+/* Strict parse of "KV.SET <key> <len>". Returns 0 with
+ * key/len filled, or -1 (not a KV.SET line, or
+ * malformed). */
+static int
+parse_kv_set(const char *line, char *key, unsigned kcap,
+	     unsigned *len_out)
+{
+	unsigned i = 0, o = 0, len = 0;
+	int digits = 0;
+
+	if (sncmp(line, "KV.SET", 6) != 0)
+		return -1;
+	i = 6;
+	if (line[i] != ' ')
+		return -1;
+	while (line[i] == ' ')
+		i++;
+	while (line[i] && line[i] != ' ' && o + 1 < kcap)
+		key[o++] = line[i++];
+	if (o == 0)
+		return -1;
+	key[o] = 0;
+	if (line[i] != ' ')
+		return -1;
+	while (line[i] == ' ')
+		i++;
+	while (line[i] >= '0' && line[i] <= '9') {
+		len = len * 10u + (unsigned)(line[i] - '0');
+		if (len > BODY_MAX + 1u)
+			return -1;
+		digits = 1;
+		i++;
+	}
+	if (!digits || line[i] != 0)
+		return -1;
+	*len_out = len;
+	return 0;
+}
+
+static void
+parser_reset(void)
+{
+	in_len = 0;
+	need_body = -1;
+	body_want = 0;
+	resp_len = resp_pos = 0;
+}
+
+static int
+mock_open(void)
+{
+	parser_reset();
+	return 0;
+}
+
+static int
+mock_close(void)
+{
+	parser_reset();
+	return 0;
+}
+
+static int
+mock_write(const unsigned char *buf, unsigned len)
+{
+	unsigned i;
+
+	if (in_len + len > IN_ACC_SZ)
+		return -1;
+	for (i = 0; i < len; i++)
+		in_acc[in_len++] = buf[i];
+
+	for (;;) {
+		/* Body phase: consume exactly body_want bytes. */
+		if (need_body >= 0) {
+			unsigned have;
+			if (in_len < body_want)
+				return 0;	/* wait for more */
+			have = body_want;
+			{
+				/* Stage only what the store can
+				 * take (64 B); over-cap bodies
+				 * are rejected by length, never
+				 * stored truncated. Guest stacks
+				 * are one page: no 4 KB array. */
+				unsigned char body[64];
+				unsigned take = (have < 64u) ? have : 64u;
+				unsigned k;
+				for (k = 0; k < take; k++)
+					body[k] = in_acc[k];
+				/* Shift the accumulator. */
+				for (k = 0; k + have < in_len; k++)
+					in_acc[k] = in_acc[k + have];
+				in_len -= have;
+				need_body = -1;
+				{
+					char line[128];
+					unsigned li = 0;
+					const char *p = "KV.SET ";
+					while (*p)
+						line[li++] = *p++;
+					for (k = 0; body_key[k]; k++)
+						line[li++] = body_key[k];
+					line[li] = 0;
+					if (have > UPROTO_KV_VAL_MAX) {
+						qerr("ARG");
+					} else {
+						dispatch(line, body, have);
+					}
+				}
+			}
+			continue;
+		}
+		/* Line phase: find '\n'. */
+		{
+			unsigned nl, k;
+			int found = -1;
+			for (k = 0; k < in_len; k++) {
+				if (in_acc[k] == '\n') {
+					found = (int)k;
+					break;
+				}
+			}
+			if (found < 0)
+				return 0;	/* wait for more */
+			nl = (unsigned)found;
+			{
+				char line[192];
+				unsigned li = 0;
+				for (k = 0; k < nl && li + 1 < sizeof(line); k++) {
+					if (in_acc[k] == '\r')
+						continue;
+					line[li++] = in_acc[k];
+				}
+				line[li] = 0;
+				/* Shift past the newline. */
+				for (k = 0; k + nl + 1u < in_len; k++)
+					in_acc[k] = in_acc[k + nl + 1u];
+				in_len -= nl + 1u;
+				/* KV.SET with a body? */
+				if (sncmp(line, "KV.SET", 6) == 0) {
+					char key[64];
+					unsigned blen;
+					if (parse_kv_set(line, key,
+							 sizeof(key),
+							 &blen) != 0) {
+						/* Legacy inline shape
+						 * or garbage: reject at
+						 * once, no body wait. */
+						qerr("ARG");
+						continue;
+					}
+					if (blen > BODY_MAX) {
+						/* Unreachable via the
+						 * parser bound, kept as
+						 * defence: drop stream. */
+						parser_reset();
+						return -1;
+					}
+					scpy(body_key, key, sizeof(body_key));
+					if (blen == 0) {
+						dispatch(line,
+							 (unsigned char *)"",
+							 0u);
+					} else {
+						body_want = blen;
+						need_body = 1;
+					}
+					continue;
+				}
+				dispatch(line, 0, 0u);
+			}
+		}
+	}
+}
+
+static int
+mock_read(unsigned char *buf, unsigned len)
+{
+	unsigned avail, n, i;
+
+	if (resp_pos >= resp_len)
+		return 0;
+	avail = resp_len - resp_pos;
+	n = avail;
+	if (n > len)
+		n = len;
+	if (n > READ_CHUNK)
+		n = READ_CHUNK;
+	for (i = 0; i < n; i++)
+		buf[i] = resp_q[resp_pos++];
+	if (resp_pos >= resp_len)
+		resp_len = resp_pos = 0;
+	return (int)n;
+}
+
+static int
+mock_send_frame(const unsigned char *frame, unsigned flen)
+{
+	return aud_accept(frame, flen);
+}
+
+struct uproto_backend uproto_backend_mock = {
+	"mock",
+	mock_open,
+	mock_write,
+	mock_read,
+	mock_send_frame,
+	mock_close,
+};

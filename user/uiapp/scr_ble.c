@@ -10,7 +10,7 @@
 #include "uartproto/uartproto.h"
 
 static char	ble_state[8] = "?";
-static char	ble_name[24] = "?";
+static char	ble_peer[24] = "?";
 static int	sel = 0;
 static int	note_kind = 0;
 static char	note_txt[48] = "";
@@ -36,7 +36,10 @@ refresh(void)
 		set_note(2, "CO-MCU TAK RESPON");
 		return;
 	}
-	/* "ON <nama>" / "OFF <nama>" */
+	/* Frozen v1.1: "ON|OFF <paired_addr|NONE>".
+	 * The second token is the PAIRED PEER, never the
+	 * advertise name (the pre-C6L-1 mock returned the
+	 * name here -- that was the drift). */
 	while (resp[o] && resp[o] != ' ' && o + 1 < sizeof(ble_state)) {
 		ble_state[o] = resp[o];
 		o++;
@@ -44,9 +47,9 @@ refresh(void)
 	ble_state[o] = 0;
 	if (resp[o] == ' ')
 		o++;
-	while (resp[o] && i + 1 < sizeof(ble_name))
-		ble_name[i++] = resp[o++];
-	ble_name[i] = 0;
+	while (resp[o] && i + 1 < sizeof(ble_peer))
+		ble_peer[i++] = resp[o++];
+	ble_peer[i] = 0;
 }
 
 static void
@@ -106,8 +109,8 @@ ble_render(void)
 
 	ui_text_center(44, ble_state, ble_state[0] == 'O' &&
 		     ble_state[1] == 'N' ? C_OK : C_DIM);
-	while (ble_name[b] && a + 1 < sizeof(line))
-		line[a++] = ble_name[b++];
+	while (ble_peer[b] && a + 1 < sizeof(line))
+		line[a++] = ble_peer[b++];
 	line[a] = 0;
 	ui_text_center(62, line, C_FG);
 

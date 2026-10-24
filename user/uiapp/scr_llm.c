@@ -35,24 +35,32 @@ set_note(int kind, const char *t)
 	note_txt[i] = 0;
 }
 
+static unsigned
+slen(const char *s)
+{
+	unsigned n = 0;
+	while (s[n])
+		n++;
+	return n;
+}
+
 static void
 kv_load(const char *k, char *v, unsigned vsz, const char *dflt)
 {
-	char resp[96];
+	int r;
 	unsigned i = 0;
-	if (uproto_cmd1("KV.GET", k, resp, sizeof(resp)) == 0) {
-		while (resp[i] && i + 1 < vsz) {
-			v[i] = resp[i];
-			i++;
-		}
-		v[i] = 0;
-	} else {
-		while (dflt[i] && i + 1 < vsz) {
-			v[i] = dflt[i];
-			i++;
-		}
-		v[i] = 0;
+
+	/* Length-prefixed KV (frozen v1.1): -2 means the
+	 * value was truncated into v, which is the old
+	 * behaviour, so it still counts as loaded. */
+	r = uproto_kv_get(k, v, vsz, 0);
+	if (r == 0 || r == -2)
+		return;
+	while (dflt[i] && i + 1 < vsz) {
+		v[i] = dflt[i];
+		i++;
 	}
+	v[i] = 0;
 }
 
 static void
@@ -63,15 +71,14 @@ llm_enter(void)
 	note_kind = 0;
 	kv_load("llm_provider", prov, sizeof(prov), "OPENROUTER");
 	kv_load("llm_model", model, sizeof(model), "AUTO");
-	have_key = (uproto_cmd1("KV.GET", "llm_key", resp,
-				sizeof(resp)) == 0);
+	have_key = (uproto_kv_get("llm_key", resp,
+			sizeof(resp), 0) != -1);
 }
 
 static void
 prov_cycle(void)
 {
 	int i;
-	char resp[64];
 	for (i = 0; i < 3; i++)
 		if (prov[0] == providers[i][0] && prov[1] == providers[i][1])
 			break;
@@ -84,19 +91,16 @@ prov_cycle(void)
 		}
 		prov[k] = 0;
 	}
-	if (uproto_cmd2("KV.SET", "llm_provider", prov, resp,
-			sizeof(resp)) != 0)
+	if (uproto_kv_set("llm_provider", prov, slen(prov)) != 0)
 		set_note(2, "SIMPAN GAGAL");
 }
 
 static void
 model_done(int confirmed)
 {
-	char resp[64];
 	if (!confirmed)
 		return;
-	if (uproto_cmd2("KV.SET", "llm_model", model, resp,
-			sizeof(resp)) != 0)
+	if (uproto_kv_set("llm_model", model, slen(model)) != 0)
 		set_note(2, "SIMPAN GAGAL");
 	else
 		set_note(1, "MODEL DISIMPAN");
@@ -105,11 +109,9 @@ model_done(int confirmed)
 static void
 key_done(int confirmed)
 {
-	char resp[64];
 	if (!confirmed)
 		return;
-	if (uproto_cmd2("KV.SET", "llm_key", apikey, resp,
-			sizeof(resp)) != 0)
+	if (uproto_kv_set("llm_key", apikey, slen(apikey)) != 0)
 		set_note(2, "SIMPAN GAGAL");
 	else {
 		set_note(1, "API KEY DISIMPAN");
