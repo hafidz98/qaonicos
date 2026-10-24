@@ -438,6 +438,12 @@ mkdir -p "$OBJMD"
 CFLAGS="--target=arm-none-eabi -march=armv7-a -DKERNEL -O1 -fno-builtin -fcommon"
 OVR="$MACH3_DIR/overrides"
 CFLAGS="$CFLAGS -I$OVR -I$GEN -I$INC -I$SRC"
+# Restructure: the MD/ext split separated files that used quoted
+# includes across the old single arm/ directory (ext/audio.c quotes
+# "machine_routines.h" from md/arm). Both source roots are include
+# roots so quoted includes resolve as they did pre-split; the
+# dependency direction stays ext -> md, never the reverse.
+CFLAGS="$CFLAGS -I$MACH3_DIR/src/md/arm -I$MACH3_DIR/src/ext"
 CFLAGS="$CFLAGS -I$MACH3_DIR/src/ext/littlefs -I$MACH3_DIR/src/ext/littlefs/shim"
 CFLAGS="$CFLAGS -Wno-implicit-function-declaration -Wno-implicit-int"
 CFLAGS="$CFLAGS -Wno-int-conversion -Wno-deprecated-non-prototype"
