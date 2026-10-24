@@ -118,6 +118,70 @@ bridge_close(void)
 	return 0;
 }
 
+/* --- Simulated baud pacing (C6L-4) ---
+ *
+ * The bridge stands in for a UART, so it paces all
+ * bytes it sends to the configured baud budget (10
+ * bits per byte: start + 8 data + stop). Default
+ * 921600 (the product baud); 115200 is the v1
+ * profile that cannot carry voice. The pacer is a
+ * reservation clock: each chunk reserves its
+ * airtime, and a send that arrives early yields
+ * until its budget frees (yielding pumps net_pump
+ * and feeds the watchdog, never a bare spin).
+ * Airtime is ceiled so the budget is never
+ * exceeded. Link-layer writes are single-chunk in
+ * practice (text <= 161 B, AUD frame 1031 B,
+ * dispatch body <= 257 B), so pacing never pushes
+ * a write past the send budget below. The mock
+ * backend is NOT paced (in-process, no UART). */
+static unsigned bridge_baud = 921600u;
+static unsigned pace_available_at = 0u;
+static unsigned pace_waits = 0u, pace_wait_ms = 0u;
+
+void
+uproto_bridge_set_baud(unsigned baud)
+{
+	if (baud < 9600u)
+		baud = 9600u;
+	bridge_baud = baud;
+	pace_available_at = 0u;
+}
+
+unsigned
+uproto_bridge_pace_waits(void)
+{
+	return pace_waits;
+}
+
+unsigned
+uproto_bridge_pace_wait_ms(void)
+{
+	return pace_wait_ms;
+}
+
+static void
+pace_before_send(unsigned len)
+{
+	unsigned air_ms, now, t0;
+
+	if (len == 0u)
+		return;
+	/* Ceiling division: len*10 bits, in ms. */
+	air_ms = (len * 10u * 1000u + bridge_baud - 1u) / bridge_baud;
+	now = sys_uptime();
+	if (pace_available_at == 0u)
+		pace_available_at = now;
+	if ((int)(now - pace_available_at) < 0) {
+		t0 = now;
+		pace_waits++;
+		while ((int)(sys_uptime() - pace_available_at) < 0)
+			sys_yield();
+		pace_wait_ms += sys_uptime() - t0;
+	}
+	pace_available_at = sys_uptime() + air_ms;
+}
+
 /* Send all bytes, stop-and-wait (the kernel send is
  * unacked-windowed: 0 means "retry after a pump").
  * Returns 0, or -1 on dead link / budget expiry. */
@@ -135,6 +199,7 @@ bridge_write_all(const unsigned char *buf, unsigned len)
 
 		if (chunk > 1200u)
 			chunk = 1200u;
+		pace_before_send(chunk);
 		n = sys_tcp_send(buf + sent, chunk);
 		if (n < 0)
 			return -1;

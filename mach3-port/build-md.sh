@@ -286,6 +286,33 @@ python3 "$USR/embed.py" "$BUILD/ulink3.bin" "$GEN/ulink3_img.c" "ulink3_img" 655
     { echo "FAIL embed ulink3_img"; exit 1; }
 echo "USER: ulink3.elf entry=$ENTRY ok"
 
+# --- 1d1d. user program ulinkaud (C6L-4): AUD streaming integrity
+# + error semantics test. ---
+echo "BUILD user program ulinkaud"
+# shellcheck disable=SC2086
+clang $UCFLAGS -I"$USR" -c "$USR/ulinkaud.c" -o "$BUILD/ulinkaud.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/ulinkaud.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/ulinkaud.elf" "$BUILD/ulinkaud.o" \
+    "$BUILD/uartproto_uartproto.o" "$BUILD/uartproto_mock_comcu.o" \
+    "$BUILD/uartproto_bridge.o" \
+    "$BUILD/cfg.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/ulinkaud.elf (see $LOG)"; exit 1; }
+ENTRY=$("$LLVM_READELF" -h "$BUILD/ulinkaud.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: ulinkaud entry $ENTRY != 0x100000"; exit 1; }
+"$LLVM_OBJCOPY" -O binary "$BUILD/ulinkaud.elf" "$BUILD/ulinkaud.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/ulinkaud.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/ulinkaud.bin" "$BUILD/ulinkaud.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/ulinkaud.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/ulinkaud.bin" "$GEN/ulinkaud_img.c" "ulinkaud_img" 65536 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed ulinkaud_img"; exit 1; }
+echo "USER: ulinkaud.elf entry=$ENTRY ok"
+
 # --- 1d. user program ntp (App A4): daemon sinkron jam via NTP. ---
 echo "BUILD user program ntp"
 # shellcheck disable=SC2086
@@ -575,7 +602,7 @@ echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice ulinktest ulinkbr ulink3 upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud; do
+for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice ulinktest ulinkbr ulink3 ulinkaud upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }
