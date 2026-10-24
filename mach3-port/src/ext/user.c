@@ -1158,6 +1158,11 @@ user_syscall(struct arm_trap_frame *frame)
 			 *   embed:uls     Q9 spawn self-test program.
 			 *   embed:uipcsrv / embed:uipccli  IPC-1
 			 *     round-trip test pair.
+			 *   embed:uipksrv / embed:uipkcli  IPC-2
+			 *     blocking-recv round-trip pair;
+			 *     embed:uipkpark (65 s deadline park)
+			 *     and embed:uipknd (no-deadline park)
+			 *     are IPC-2's park probes.
 			 *   embed:ufault  FND-2: takes the console, faults.
 			 *   embed:ufaultd FND-2: becomes the display
 			 *     holder, then faults. Its progid override
@@ -1170,12 +1175,16 @@ user_syscall(struct arm_trap_frame *frame)
 						ufaultd_img[], uyield_img[],
 						uhangd_img[], uspin_img[],
 						uhangc_img[], uipcsrv_img[],
-						uipccli_img[];
+						uipccli_img[], uipksrv_img[],
+						uipkcli_img[], uipkpark_img[],
+						uipknd_img[];
 			extern unsigned int	uls_img_len, ufault_img_len,
 						ufaultd_img_len, uyield_img_len,
 						uhangd_img_len, uspin_img_len,
 						uhangc_img_len, uipcsrv_img_len,
-						uipccli_img_len;
+						uipccli_img_len, uipksrv_img_len,
+						uipkcli_img_len, uipkpark_img_len,
+						uipknd_img_len;
 			static const struct {
 				const char	*name;
 				unsigned char	*img;
@@ -1205,6 +1214,16 @@ user_syscall(struct arm_trap_frame *frame)
 				  &uipcsrv_img_len, -1 },
 				{ "embed:uipccli", uipccli_img,
 				  &uipccli_img_len, -1 },
+				/* IPC-2: blocking-recv pair + park
+				 * probes (see docs/rencana-ipc). */
+				{ "embed:uipksrv", uipksrv_img,
+				  &uipksrv_img_len, -1 },
+				{ "embed:uipkcli", uipkcli_img,
+				  &uipkcli_img_len, -1 },
+				{ "embed:uipkpark", uipkpark_img,
+				  &uipkpark_img_len, -1 },
+				{ "embed:uipknd", uipknd_img,
+				  &uipknd_img_len, -1 },
 			};
 			unsigned int hi, ei;
 			int matched = 0;
