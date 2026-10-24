@@ -403,3 +403,31 @@ as a sanctioned switch point — before IPC-2),
 before IPC-1 freezes its constants). Recommendations
 are recorded with each; silence is not assent — the
 coordinator surfaces them at phase boundaries.
+
+### Resolutions — owner decisions, 2026-10-24
+
+All three answered in chat the day the plan landed:
+
+- **D-IPC-1: adopt.** Blocking receive is a sanctioned
+  third scheduler switch point (generalised WAITING,
+  net_pump in its prologue); watchdog treatment is
+  exempt-but-observed with a mandatory wait deadline,
+  and a sender wake restarts the waiter's progress
+  clock. IPC-2 proceeds on this basis.
+- **D-IPC-2: reserved system names — against the
+  plan's flat-v1 recommendation.** The IPC-4 registry
+  enforces a kernel policy: reserved names (e.g.
+  `tools`, `link`) may be claimed only by their owning
+  program. Enforcement must key on the kernel-assigned
+  spawn identity of the daemon slot (the daemon_images
+  index the kernel itself spawned), never on a
+  caller-supplied id; non-reserved names stay open,
+  and generation counters still detect staleness.
+- **D-IPC-3: inline cap is 4096 B — against the
+  plan's 1024 B recommendation.** One AUD frame no
+  longer sizes the cap; IPC-1 freezes its constants at
+  4096. Consequence carried to IPC-5 sizing: per-port
+  queue memory is budgeted with 4 KB messages (a
+  16-deep queue is up to 64 KB per port). Out-of-line
+  memory remains deferred indefinitely, trigger = a
+  named consumer with a measured need.
