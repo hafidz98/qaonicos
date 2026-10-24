@@ -1885,16 +1885,25 @@ ipc_park_log_nodeadline(struct daemon *d)
  *
  * All-parked idle: nobody is runnable, so instead of
  * returning to a frame, spin here one timer tick at a
- * time. IRQs stay live in SVC trap context (locore
- * Fase D), so the 100 Hz timer keeps advancing ticks;
- * wd_irq_tick() only trips on a USER-mode frame, so
- * class (b) cannot fire from this loop, and stamping
- * wd_last_activity per tick keeps its precondition
- * ("no scheduler activity") false anyway. Per tick:
- * pump the network (a TCP arrival can be the event a
- * waiter indirectly needs, and HTTP stays alive) and
- * expire deadlines. The first wake -- a deadline here,
- * since no userspace runs to send -- ends the idle.
+ * time. SVC trap context in this port runs with IRQs
+ * MASKED (CPSR.I=1 -- measured: cpsr=0x...93 in the
+ * trap, spsr=0x...10 in user mode), so the tick
+ * counter (incremented in the IRQ handler) is frozen
+ * while a trap handler runs; the idle therefore
+ * unmasks IRQs for the raw tick wait itself and
+ * re-masks before doing any other kernel work, so
+ * every other line of this function runs in exactly
+ * the environment the other switch prologues run in.
+ * The nested timer IRQs are safe: they take their own
+ * frame on the SVC stack, and wd_irq_tick() only ever
+ * judges USER-mode frames ("kernel/WFI stretches are
+ * not hangs"), so class (b) cannot fire from here;
+ * stamping wd_last_activity per tick keeps its
+ * precondition false regardless. Per tick: pump the
+ * network (a TCP arrival can be the event a waiter
+ * indirectly needs, and HTTP stays alive) and expire
+ * deadlines. The first wake -- a deadline here, since
+ * no userspace runs to send -- ends the idle.
  */
 static int
 sched_ipc_wait_switch(struct arm_trap_frame *f)
@@ -1923,11 +1932,17 @@ sched_ipc_wait_switch(struct arm_trap_frame *f)
 		return 0;	/* switched away */
 	}
 	for (;;) {
-		unsigned int t0 = arm_timer_ticks();
+		unsigned int t0;
 
+		/* One tick with IRQs live (see the block
+		 * comment): the ONLY unmasked stretch in
+		 * the switch, bracketing a pure wait. */
+		__asm__ volatile ("cpsie i" ::: "memory");
+		t0 = arm_timer_ticks();
 		while (arm_timer_ticks() == t0) {
 			/* spin one tick */
 		}
+		__asm__ volatile ("cpsid i" ::: "memory");
 		wd_last_activity = arm_timer_ticks();
 		net_pump();
 		ipc_wait_expire(arm_timer_ticks());
