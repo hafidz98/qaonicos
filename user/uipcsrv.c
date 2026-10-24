@@ -9,36 +9,46 @@
  *
  *   run 1 (setup): alloc the service port (queue limit
  *     raised to the Mach maximum, 16), park its receive
- *     right in the kernel test rendezvous (uipc.h), exit.
- *   run k (drain): claim the receive right back, receive
- *     one batch of requests, verify sequence + payload
- *     byte-exact, reply to each on the send-once right
- *     its header carried, then either park the port
- *     again or -- at 100 served -- destroy it and print
- *     the PASS marker.
+ *     right in the kernel test rendezvous (uipc.h),
+ *     queue a STATE message to itself (below), exit.
+ *   run k (drain): claim the receive right back, read
+ *     the state message, receive one batch of
+ *     requests, verify sequence + payload byte-exact,
+ *     reply to each on the send-once right its header
+ *     carried, re-park the port, queue the next state
+ *     message -- or, at 100 served, destroy the port
+ *     and print the PASS marker.
  *
- * Progress lives in the ramfs file /ipc1.srv (one ASCII
- * counter) -- the house cross-program coordination
- * pattern. Batch = 16 because upstream Mach caps a
- * port queue at MACH_PORT_QLIMIT_MAX = 16 messages.
+ * Coordination state rides IN the queue as a message
+ * with id 0x5EED whose body is two counters. It is
+ * queued while the queue is otherwise empty, so it is
+ * always the first message out on the next run. (The
+ * ramfs counter files used by other test pairs are
+ * not an option here: ramfs fd tables are keyed by
+ * task and never reclaimed -- RAMFS_MAX_TASKS is 16
+ * and every spawn run is a fresh task. Noted in
+ * DEVLOG-IPC1 as a pre-existing gap.) One queue slot
+ * is therefore spent on state, so a batch is 15 of
+ * the 16 queue slots; 100 messages = 7 batches
+ * (15*6 + 10).
  *
  * Payload contract (the client computes the same):
  *   seq s = 0..99, id = 0x1000 + s,
  *   body length: s=0 -> 4, s=50 -> 4096 (the inline
- *     cap), else 8 + (s*37) % 251,
+ *     cap), else 8 + ((s*37) % 62) * 4,
  *   body byte j = (s*31 + j) & 0xFF.
  *   Reply: id = 0x2000 + s, same length, byte ^ 0xA5.
  *
  * NOT in uprogs[]: test-only, spawned on demand via
- * "embed:uipcsrv". Deleted-with-the-rendezvous note:
- * IPC-4 replaces the rendezvous with the registry.
+ * "embed:uipcsrv". The rendezvous is deleted at
+ * IPC-4 in favour of the registry.
  */
 #include "ulib/uipc.h"
 
 #define TOTAL	100u
-#define BATCH	16u
+#define BATCH	15u		/* 16 queue slots - 1 state */
 #define SLOT	"uipcsrv"
-#define STATE	"/ipc1.srv"
+#define STATE_ID	0x5EED
 
 static struct uipc_msg	msg;
 static unsigned int	reply_names[BATCH];
@@ -95,53 +105,8 @@ pat(unsigned s, unsigned j)
 	return (unsigned char)((s * 31u + j) & 0xFFu);
 }
 
-static void
-state_write(unsigned served)
-{
-	char b[12];
-	int i = 0, fd;
-	unsigned v = served;
-	if (v == 0u)
-		b[i++] = '0';
-	else {
-		char t[12];
-		int n = 0;
-		while (v != 0u) {
-			t[n++] = (char)('0' + (int)(v % 10u));
-			v /= 10u;
-		}
-		while (n > 0)
-			b[i++] = t[--n];
-	}
-	b[i] = '\0';
-	fd = u_open(STATE, O_CREAT | O_RDWR);
-	if (fd < 0)
-		fail("state open", fd);
-	(void)u_write((unsigned)fd, b, (unsigned)i);
-	(void)u_close(fd);
-}
-
-static int
-state_read(unsigned *served)
-{
-	char b[16];
-	int fd, n, i;
-	unsigned v = 0u;
-	fd = u_open(STATE, O_RDONLY);
-	if (fd < 0)
-		return -1;
-	n = u_read(fd, b, sizeof(b) - 1u);
-	(void)u_close(fd);
-	if (n <= 0)
-		return -1;
-	for (i = 0; i < n && b[i] >= '0' && b[i] <= '9'; i++)
-		v = v * 10u + (unsigned)(b[i] - '0');
-	*served = v;
-	return 0;
-}
-
-/* Poll-receive one message; the batch is already queued
- * in the correct interleave, so the first poll normally
+/* Poll-receive one message; in the correct interleave
+ * it is already queued, so the first poll normally
  * succeeds. The bound keeps a broken peer from hanging
  * this child (the FND-3 watchdog is the backstop). */
 static int
@@ -158,6 +123,52 @@ recv_wait(unsigned port)
 	return rc;
 }
 
+/* Queue the state message (counter = served) to our
+ * own parked port. The caller has just re-published
+ * the receive right, so RESOLVE can mint a send name. */
+static void
+state_send(unsigned served)
+{
+	int rc;
+	unsigned self;
+	rc = uipc_test_resolve(SLOT);
+	if (rc < 0)
+		fail("state resolve", rc);
+	self = (unsigned)rc;
+	msg.reply = 0u;
+	msg.dest = 0u;
+	msg.id = STATE_ID;
+	msg.size = UIPC_HDR_SIZE + 8u;
+	msg.body[0] = (unsigned char)(served & 0xFFu);
+	msg.body[1] = (unsigned char)((served >> 8) & 0xFFu);
+	msg.body[2] = (unsigned char)((served >> 16) & 0xFFu);
+	msg.body[3] = (unsigned char)((served >> 24) & 0xFFu);
+	msg.body[4] = 0u;
+	msg.body[5] = 0u;
+	msg.body[6] = 0u;
+	msg.body[7] = 0u;
+	rc = uipc_send(self, &msg, UIPC_HDR_SIZE + 8u);
+	if (rc != 0)
+		fail("state send", rc);
+}
+
+/* Read the state message that heads the queue. */
+static unsigned
+state_recv(unsigned port)
+{
+	int rc;
+	rc = recv_wait(port);
+	if (rc < 0)
+		fail("state recv", rc);
+	if (msg.id != STATE_ID ||
+	    (unsigned)rc != UIPC_HDR_SIZE + 8u)
+		fail("state header", msg.id);
+	return (unsigned)msg.body[0] |
+	    ((unsigned)msg.body[1] << 8) |
+	    ((unsigned)msg.body[2] << 16) |
+	    ((unsigned)msg.body[3] << 24);
+}
+
 __attribute__((section(".text.start")))
 void
 _start(void)
@@ -167,18 +178,19 @@ _start(void)
 
 	rc = uipc_test_claim(SLOT);
 	if (rc == UIPC_ENORV) {
-		/* Setup run: create + park the service port. */
+		/* Setup run: create + park the service port,
+		 * then queue state(0) into it. */
 		rc = uipc_port_alloc();
 		if (rc < 0)
 			fail("alloc", rc);
 		port = (unsigned)rc;
-		rc = uipc_port_setqlimit(port, BATCH);
+		rc = uipc_port_setqlimit(port, 16u);
 		if (rc != 0)
 			fail("setqlimit", rc);
-		state_write(0u);
 		rc = uipc_test_publish(SLOT, port);
 		if (rc != 0)
 			fail("publish", rc);
+		state_send(0u);
 		u_put("UIPCSRV: setup port published\n");
 		sys_exit(0);
 	}
@@ -186,8 +198,7 @@ _start(void)
 		fail("claim", rc);
 	port = (unsigned)rc;
 
-	if (state_read(&served) != 0)
-		fail("state read", -1);
+	served = state_recv(port);
 	batch = TOTAL - served;
 	if (batch > BATCH)
 		batch = BATCH;
@@ -230,14 +241,13 @@ _start(void)
 	served += batch;
 	if (served >= TOTAL) {
 		(void)uipc_port_destroy(port);
-		(void)sys_delete(STATE);
 		u_put("UIPCSRV: PASS served=100/100\n");
 		sys_exit(0);
 	}
-	state_write(served);
 	rc = uipc_test_publish(SLOT, port);
 	if (rc != 0)
 		fail("re-publish", rc);
+	state_send(served);
 	u_put("UIPCSRV: served ");
 	putu(served);
 	u_put("/100\n");

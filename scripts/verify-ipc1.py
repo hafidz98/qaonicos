@@ -7,18 +7,23 @@ console and typed commands are safe, the FND-4 pattern):
 
   run embed:uipcsrv   setup: alloc its port (qlimit 16),
                       park the receive right in the
-                      kernel test rendezvous.
+                      kernel test rendezvous, queue a
+                      STATE message (id 0x5EED, counters)
+                      to itself.
   run embed:uipccli   setup + negative probes, then
-                      send batch 0 (16 requests) and park
-                      its reply port.
+                      send batch 0 and park its reply
+                      port with its own state message.
   ... alternating drain runs: the server claims its
-  port, receives one batch, verifies seq/payload,
-  replies on each header send-once right; the client
-  claims its reply port, verifies the replies, sends
-  the next batch. Batch = 16 because upstream Mach caps
-  a port queue at MACH_PORT_QLIMIT_MAX = 16; 100
-  messages = 7 batches (16*6 + 4). Coordination state
-  lives in ramfs counter files (the house pattern).
+  port, reads state, receives one batch, verifies
+  seq/payload, replies on each header send-once right;
+  the client claims its reply port, verifies the
+  replies, sends the next batch. Batch = 15: upstream
+  Mach caps a port queue at MACH_PORT_QLIMIT_MAX = 16
+  and one slot is spent on the state message; 100
+  messages = 7 batches (15*6 + 10). (Coordination via
+  ramfs files is not possible: ramfs fd tables are
+  keyed by task and never reclaimed, 16 slots total,
+  and every spawn run is a fresh task.)
 
 Expected evidence (guest behaviour, not code):
   - client probes: empty queue -> -5 (UIPC_EEMPTY),
@@ -179,8 +184,8 @@ check("probe: send to dead port -> -3 (EDEST)",
       "UIPCCLI: probe dead-port rc=-3 OK" in seg)
 check("probe: oversize body 4097 -> -6 (E2BIG)",
       "UIPCCLI: probe oversize rc=-6 OK" in seg)
-check("cli setup: batch 0 sent (16 requests queued)",
-      "UIPCCLI: progress sent=16 got=0" in seg)
+check("cli setup: batch 0 sent (15 requests queued)",
+      "UIPCCLI: progress sent=15 got=0" in seg)
 
 # Alternating drain rounds: srv serves one batch, cli
 # verifies its replies and sends the next batch.

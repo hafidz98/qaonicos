@@ -3,18 +3,22 @@
  *
  * Second half of the IPC-1 round-trip proof; see
  * uipcsrv.c for the pair protocol (sequential spawn
- * runs, store-and-forward batches of 16, ramfs state).
- * Client state is /ipc1.cli: "sent got" ASCII counters.
+ * runs, store-and-forward batches, coordination state
+ * as a queued STATE message, id 0x5EED, body = two
+ * counters "sent" and "got"). Batch is 15: the port
+ * queue caps at 16 (MACH_PORT_QLIMIT_MAX) and one slot
+ * is spent on the state message.
  *
  *   run 1 (setup): alloc the reply port (qlimit 16),
  *     run the phase's NEGATIVE PROBES on a throwaway
- *     probe port, write state, send batch 0 (16
- *     requests, each carrying a send-once right to the
- *     reply port), park the reply port, exit.
- *   run k (work): claim the reply port; verify the
- *     replies for the outstanding batch byte-exact and
- *     in order; at 100 verified print the PASS marker;
- *     else send the next batch and park the port again.
+ *     probe port, send batch 0 (15 requests, each
+ *     carrying a send-once right to the reply port),
+ *     park the reply port, queue state(15, 0), exit.
+ *   run k (work): claim the reply port; read state;
+ *     verify the outstanding batch's replies byte-
+ *     exact and in order; at 100 verified print the
+ *     PASS marker; else send the next batch, re-park
+ *     the port and queue the new state.
  *
  * Negative probes (plan IPC-1) -- each must return the
  * documented error code, never hang, never fault:
@@ -29,11 +33,11 @@
 #include "ulib/uipc.h"
 
 #define TOTAL	100u
-#define BATCH	16u
+#define BATCH	15u		/* 16 queue slots - 1 state */
 #define SLOT	"uipccli"
 #define SRVSLOT	"uipcsrv"
 #define PROBE	"uipcprobe"
-#define STATE	"/ipc1.cli"
+#define STATE_ID	0x5EED
 
 static struct uipc_msg	msg;
 
@@ -89,73 +93,6 @@ pat(unsigned s, unsigned j)
 	return (unsigned char)((s * 31u + j) & 0xFFu);
 }
 
-static void
-state_write(unsigned sent, unsigned got)
-{
-	char b[24], t[12];
-	int i = 0, n, fd;
-	unsigned v = sent;
-	if (v == 0u)
-		b[i++] = '0';
-	else {
-		n = 0;
-		while (v != 0u) {
-			t[n++] = (char)('0' + (int)(v % 10u));
-			v /= 10u;
-		}
-		while (n > 0)
-			b[i++] = t[--n];
-	}
-	b[i++] = ' ';
-	v = got;
-	if (v == 0u)
-		b[i++] = '0';
-	else {
-		n = 0;
-		while (v != 0u) {
-			t[n++] = (char)('0' + (int)(v % 10u));
-			v /= 10u;
-		}
-		while (n > 0)
-			b[i++] = t[--n];
-	}
-	b[i] = '\0';
-	fd = u_open(STATE, O_CREAT | O_RDWR);
-	if (fd < 0)
-		fail("state open", fd);
-	(void)u_write((unsigned)fd, b, (unsigned)i);
-	(void)u_close(fd);
-}
-
-static int
-state_read(unsigned *sent, unsigned *got)
-{
-	char b[24];
-	int fd, n, i = 0;
-	unsigned v = 0u;
-	fd = u_open(STATE, O_RDONLY);
-	if (fd < 0)
-		return -1;
-	n = u_read(fd, b, sizeof(b) - 1u);
-	(void)u_close(fd);
-	if (n <= 0)
-		return -1;
-	while (i < n && b[i] >= '0' && b[i] <= '9') {
-		v = v * 10u + (unsigned)(b[i] - '0');
-		i++;
-	}
-	*sent = v;
-	while (i < n && b[i] == ' ')
-		i++;
-	v = 0u;
-	while (i < n && b[i] >= '0' && b[i] <= '9') {
-		v = v * 10u + (unsigned)(b[i] - '0');
-		i++;
-	}
-	*got = v;
-	return 0;
-}
-
 static int
 recv_wait(unsigned port)
 {
@@ -168,6 +105,61 @@ recv_wait(unsigned port)
 		sys_yield();
 	}
 	return rc;
+}
+
+static void
+put_word(unsigned off, unsigned v)
+{
+	msg.body[off] = (unsigned char)(v & 0xFFu);
+	msg.body[off + 1u] = (unsigned char)((v >> 8) & 0xFFu);
+	msg.body[off + 2u] = (unsigned char)((v >> 16) & 0xFFu);
+	msg.body[off + 3u] = (unsigned char)((v >> 24) & 0xFFu);
+}
+
+static unsigned
+get_word(unsigned off)
+{
+	return (unsigned)msg.body[off] |
+	    ((unsigned)msg.body[off + 1u] << 8) |
+	    ((unsigned)msg.body[off + 2u] << 16) |
+	    ((unsigned)msg.body[off + 3u] << 24);
+}
+
+/* Queue state(sent, got) to our own parked reply port.
+ * The caller has just re-published the receive right. */
+static void
+state_send(unsigned sent, unsigned got)
+{
+	int rc;
+	unsigned self;
+	rc = uipc_test_resolve(SLOT);
+	if (rc < 0)
+		fail("state resolve", rc);
+	self = (unsigned)rc;
+	msg.reply = 0u;
+	msg.dest = 0u;
+	msg.id = STATE_ID;
+	msg.size = UIPC_HDR_SIZE + 8u;
+	put_word(0u, sent);
+	put_word(4u, got);
+	rc = uipc_send(self, &msg, UIPC_HDR_SIZE + 8u);
+	if (rc != 0)
+		fail("state send", rc);
+}
+
+/* Read the state message that heads the queue. */
+static void
+state_recv(unsigned port, unsigned *sent, unsigned *got)
+{
+	int rc;
+	rc = recv_wait(port);
+	if (rc < 0)
+		fail("state recv", rc);
+	if (msg.id != STATE_ID ||
+	    (unsigned)rc != UIPC_HDR_SIZE + 8u)
+		fail("state header", msg.id);
+	*sent = get_word(0u);
+	*got = get_word(4u);
 }
 
 /* Send request batch [sent, sent+batch) to the server. */
@@ -277,24 +269,23 @@ _start(void)
 		if (rc < 0)
 			fail("alloc", rc);
 		rport = (unsigned)rc;
-		rc = uipc_port_setqlimit(rport, BATCH);
+		rc = uipc_port_setqlimit(rport, 16u);
 		if (rc != 0)
 			fail("setqlimit", rc);
 		probes(rport);
 		send_batch(rport, 0u, BATCH);
-		state_write(BATCH, 0u);
 		rc = uipc_test_publish(SLOT, rport);
 		if (rc != 0)
 			fail("publish", rc);
-		u_put("UIPCCLI: progress sent=16 got=0\n");
+		state_send(BATCH, 0u);
+		u_put("UIPCCLI: progress sent=15 got=0\n");
 		sys_exit(0);
 	}
 	if (rc < 0)
 		fail("claim", rc);
 	rport = (unsigned)rc;
 
-	if (state_read(&sent, &got) != 0)
-		fail("state read", -1);
+	state_recv(rport, &sent, &got);
 
 	/* Verify the outstanding batch's replies, in order. */
 	for (i = got; i < sent; i++) {
@@ -315,12 +306,13 @@ _start(void)
 
 	if (got >= TOTAL) {
 		(void)uipc_port_destroy(rport);
-		(void)sys_delete(STATE);
 		u_put("UIPCCLI: PASS replies=100/100\n");
 		sys_exit(0);
 	}
 
-	/* Send the next batch, then park the reply port. */
+	/* Send the next batch, then park the reply port
+	 * and queue the new state behind this run's work
+	 * (the queue is empty again at that point). */
 	{
 		unsigned batch = TOTAL - sent;
 		if (batch > BATCH)
@@ -328,10 +320,10 @@ _start(void)
 		send_batch(rport, sent, batch);
 		sent += batch;
 	}
-	state_write(sent, got);
 	rc = uipc_test_publish(SLOT, rport);
 	if (rc != 0)
 		fail("re-publish", rc);
+	state_send(sent, got);
 	u_put("UIPCCLI: progress sent=");
 	putu(sent);
 	u_put(" got=");
