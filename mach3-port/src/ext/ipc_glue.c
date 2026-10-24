@@ -368,6 +368,23 @@ rv_claim(ipc_space_t space, const char *name)
 	slot = rv_find(name);
 	if (slot < 0)
 		return (unsigned int)UIPC_ENORV;
+	/* Receiver-epoch reset. ipc_port_make_send (used
+	 * by RESOLVE) bumps the port's make-send count,
+	 * and ipc_right_copyout asserts the count is 0
+	 * before inserting a receive right anywhere --
+	 * a parked port that was ever resolved would
+	 * otherwise be unclaimable (and the assert halts
+	 * the CPU in this build). Upstream performs the
+	 * same reset in ipc_port_clear_receiver whenever
+	 * a receive right changes hands; the rendezvous
+	 * does it here, at the hand-over it owns. Send
+	 * rights already minted stay valid (they are
+	 * counted in ip_srights, untouched); no no-senders
+	 * notification is ever registered on a parked
+	 * port, so no consumer of the count is affected. */
+	ip_lock(rv_table[slot].port);
+	ipc_port_set_mscount(rv_table[slot].port, 0);
+	ip_unlock(rv_table[slot].port);
 	kr = ipc_object_copyout(space,
 				(ipc_object_t)rv_table[slot].port,
 				MACH_MSG_TYPE_PORT_RECEIVE, TRUE,
