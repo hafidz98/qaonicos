@@ -843,6 +843,125 @@ sys_spawn_wait(void)
 	return ret;
 }
 
+/* ===================== IPC (IPC-1, ulib/uipc.h) =====================
+ * Raw stubs + friendly wrappers. Numbers and sub-ops are
+ * defined in ulib/uipc.h; the numeric literals here mirror
+ * them (uipc.h includes this header, not vice versa). */
+
+/* SYS_SEND (10): (dest, buf, len, flags) -> 0 or UIPC_E* */
+int
+sys_ipc_send(unsigned dest, const void *buf, unsigned len,
+	     unsigned flags)
+{
+	register unsigned _r0 __asm__("r0") = dest;
+	register unsigned _r1 __asm__("r1") = (unsigned)buf;
+	register unsigned _r2 __asm__("r2") = len;
+	register unsigned _r3 __asm__("r3") = flags;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #10\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0), "r" (_r1), "r" (_r2), "r" (_r3)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+/* SYS_RECV (11): (port, buf, max) -> total len or UIPC_E* */
+int
+sys_ipc_recv(unsigned port, void *buf, unsigned max)
+{
+	register unsigned _r0 __asm__("r0") = port;
+	register unsigned _r1 __asm__("r1") = (unsigned)buf;
+	register unsigned _r2 __asm__("r2") = max;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #11\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0), "r" (_r1), "r" (_r2)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+/* SYS_IPC_PORT (25): (sub, a1, a2) -> name/0 or UIPC_E* */
+int
+sys_ipc_port(unsigned sub, unsigned a1, unsigned a2)
+{
+	register unsigned _r0 __asm__("r0") = sub;
+	register unsigned _r1 __asm__("r1") = a1;
+	register unsigned _r2 __asm__("r2") = a2;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #25\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (_r0), "r" (_r1), "r" (_r2)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+/* Sub-ops: 0 ALLOC_RECV, 1 DESTROY, 2 SETQLIMIT,
+ * 3 RV_PUBLISH, 4 RV_RESOLVE, 5 RV_CLAIM (uipc.h). */
+
+int
+uipc_port_alloc(void)
+{
+	return sys_ipc_port(0u, 0u, 0u);
+}
+
+int
+uipc_port_destroy(unsigned name)
+{
+	return sys_ipc_port(1u, name, 0u);
+}
+
+int
+uipc_port_setqlimit(unsigned name, unsigned limit)
+{
+	return sys_ipc_port(2u, name, limit);
+}
+
+int
+uipc_send(unsigned dest, const struct uipc_msg *m, unsigned len)
+{
+	return sys_ipc_send(dest, m, len, 0u);
+}
+
+int
+uipc_reply(unsigned dest_once, const struct uipc_msg *m,
+	   unsigned len)
+{
+	return sys_ipc_send(dest_once, m, len, 1u); /* SEND_ONCE */
+}
+
+int
+uipc_recv_poll(unsigned port, struct uipc_msg *m, unsigned max)
+{
+	return sys_ipc_recv(port, m, max);
+}
+
+int
+uipc_test_publish(const char *slot, unsigned port)
+{
+	return sys_ipc_port(3u, (unsigned)slot, port);
+}
+
+int
+uipc_test_resolve(const char *slot)
+{
+	return sys_ipc_port(4u, (unsigned)slot, 0u);
+}
+
+int
+uipc_test_claim(const char *slot)
+{
+	return sys_ipc_port(5u, (unsigned)slot, 0u);
+}
+
 /* Q9: jadi eksklusif pembaca console. */
 int
 sys_console_takeover(void)

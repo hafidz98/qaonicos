@@ -166,6 +166,27 @@ int	sys_face_expr(unsigned expr, const char *text);
 int	sys_spawn(const char *path);	/* Q9 */
 int	sys_spawn_wait(void);		/* Q9 */
 int	sys_console_takeover(void);	/* Q9 */
+
+/* IPC-1 (see ulib/uipc.h for the full API + error codes).
+ * struct uipc_msg is defined by uipc.h; only pointers
+ * cross these prototypes. */
+struct uipc_msg;
+int	sys_ipc_send(unsigned dest, const void *buf,
+		     unsigned len, unsigned flags);
+int	sys_ipc_recv(unsigned port, void *buf, unsigned max);
+int	sys_ipc_port(unsigned sub, unsigned a1, unsigned a2);
+int	uipc_port_alloc(void);
+int	uipc_port_destroy(unsigned name);
+int	uipc_port_setqlimit(unsigned name, unsigned limit);
+int	uipc_send(unsigned dest, const struct uipc_msg *m,
+		  unsigned len);
+int	uipc_reply(unsigned dest_once, const struct uipc_msg *m,
+		   unsigned len);
+int	uipc_recv_poll(unsigned port, struct uipc_msg *m,
+		       unsigned max);
+int	uipc_test_publish(const char *slot, unsigned port);
+int	uipc_test_resolve(const char *slot);
+int	uipc_test_claim(const char *slot);
 int	sys_event_inject(int ev);	/* dev/test: push EV_* into the event queue */
 int	sys_reset(void);	/* FND-1: software reset (never returns on success) */
 int	sys_poweroff(void);	/* FND-1: power off (never returns on success) */

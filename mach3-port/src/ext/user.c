@@ -24,6 +24,7 @@
 #include <kern/thread.h>
 #include <vm/vm_kern.h>
 #include "ramfs.h"
+#include "ipc_glue.h"
 
 extern void	panic(const char *, ...);
 extern int	printf(const char *, ...);
@@ -324,6 +325,10 @@ extern void	arm_pmap_activate_kernel(void);
 #define	SYS_EVENT_INJECT 105u	/* Dev/test: inject a button event into evq */
 #define	SYS_RESET	106u	/* FND-1: software reset (PSCI SYSTEM_RESET) */
 #define	SYS_POWEROFF	107u	/* FND-1: power off (PSCI SYSTEM_OFF) */
+#define	SYS_SEND	10u	/* IPC-1: ipc send (dest, buf, len, flags) -> 0/UIPC_E* */
+#define	SYS_RECV	11u	/* IPC-1: ipc recv poll (port, buf, max) -> len/UIPC_E* */
+/* 12 stays reserved for SYS_RPC (IPC-4). */
+#define	SYS_IPC_PORT	25u	/* IPC-1: port mgmt + test rendezvous (sub, a1, a2) */
 
 /* Kode event input (App A2; disalin ke user/ulib/ulib.h). */
 #define	EV_UP		0
@@ -1151,6 +1156,8 @@ user_syscall(struct arm_trap_frame *frame)
 			/* Test hooks: "embed:<name>" spawns an embedded
 			 * image without depending on FAT (Q9 pattern).
 			 *   embed:uls     Q9 spawn self-test program.
+			 *   embed:uipcsrv / embed:uipccli  IPC-1
+			 *     round-trip test pair.
 			 *   embed:ufault  FND-2: takes the console, faults.
 			 *   embed:ufaultd FND-2: becomes the display
 			 *     holder, then faults. Its progid override
@@ -1162,11 +1169,13 @@ user_syscall(struct arm_trap_frame *frame)
 			extern unsigned char	uls_img[], ufault_img[],
 						ufaultd_img[], uyield_img[],
 						uhangd_img[], uspin_img[],
-						uhangc_img[];
+						uhangc_img[], uipcsrv_img[],
+						uipccli_img[];
 			extern unsigned int	uls_img_len, ufault_img_len,
 						ufaultd_img_len, uyield_img_len,
 						uhangd_img_len, uspin_img_len,
-						uhangc_img_len;
+						uhangc_img_len, uipcsrv_img_len,
+						uipccli_img_len;
 			static const struct {
 				const char	*name;
 				unsigned char	*img;
@@ -1190,6 +1199,12 @@ user_syscall(struct arm_trap_frame *frame)
 				  &uspin_img_len, -1 },
 				{ "embed:uhangc", uhangc_img,
 				  &uhangc_img_len, -1 },
+				/* IPC-1: Mach IPC round-trip pair
+				 * (see docs/rencana-ipc). */
+				{ "embed:uipcsrv", uipcsrv_img,
+				  &uipcsrv_img_len, -1 },
+				{ "embed:uipccli", uipccli_img,
+				  &uipccli_img_len, -1 },
 			};
 			unsigned int hi, ei;
 			int matched = 0;
@@ -1586,6 +1601,33 @@ user_syscall(struct arm_trap_frame *frame)
 			return (unsigned int)-1;
 		return (unsigned int)lfs_port_write(kpath,
 		    (const unsigned char *)a1, a2);
+	}
+	case SYS_SEND:
+		/* IPC-1: a0=dest name a1=buf a2=len a3=flags.
+		 * user_range_ok is window-based, so an
+		 * oversize probe length still validates here
+		 * and the glue answers its documented -6. */
+		if (cur_utask == TASK_NULL || !user_range_ok(a1, a2))
+			return (unsigned int)-1;
+		return ipc_glue_send(cur_utask, a0,
+				     (const void *)a1, a2, a3);
+	case SYS_RECV:
+		/* IPC-1: a0=port name a1=buf a2=max. */
+		if (cur_utask == TASK_NULL || !user_range_ok(a1, a2))
+			return (unsigned int)-1;
+		return ipc_glue_recv(cur_utask, a0, (void *)a1, a2);
+	case SYS_IPC_PORT: {
+		/* IPC-1: a0=sub. RV_* subs take the slot name
+		 * string in a1 and the port name in a2; the
+		 * plain subs take name in a1, qlimit in a2. */
+		static char kname[16];
+		if (a0 >= IPCP_RV_PUBLISH) {
+			if (copy_path_user(a1, kname, sizeof(kname)) != 0)
+				return (unsigned int)-1;
+			return ipc_glue_port(cur_utask, a0, kname, a2, 0u);
+		}
+		return ipc_glue_port(cur_utask, a0, (const char *)0,
+				     a1, a2);
 	}
 	default:
 		return (unsigned int)-2;	/* ENOSYS */
