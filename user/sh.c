@@ -5,6 +5,7 @@
  * help, ls, cat, gpio, time, uptime, face, qabot (stub; tanpa spawn).
  */
 #include "ulib/ulib.h"
+#include "ulib/uipc.h"
 
 #define	SH_LINE_MAX	120u
 #define	SH_ARGS_MAX	8u
@@ -208,6 +209,7 @@ bi_help(void)
 	sh_puts("  setup [name <x>|tz <x>|pin <x>|done|reset]  first-boot setup\n");
 	sh_puts("  gui                   start the GUI dashboard\n");
 	sh_puts("  key <up|down|left|right|ok|back|menu>  inject a button event (dev/test)\n");
+	sh_puts("  ipc resolve|send|req|park  IPC-3 harness (dev/test)\n");
 	sh_puts("  update [stage <ver>|stagepkg <path>|cancel|sabotage]  A/B updates\n");
 	sh_puts("  reboot          software reset (bootstate reason 4)\n");
 	sh_puts("  poweroff        power off (bootstate reason 4)\n");
@@ -709,6 +711,123 @@ bi_key(void)
 	sh_puts("key: unknown button\n");
 }
 
+
+/* ipc: IPC-3 harness builtins (dev/test only). sh is the
+ * one persistent userspace task, so it holds send names
+ * across spawn runs -- a spawn child cannot (it cannot
+ * spawn, and its space dies with it). Subcommands:
+ *   ipc resolve <slot>  resolve the test rendezvous
+ *                       slot, hold the send name
+ *   ipc send <id>       send an 8-byte message (body
+ *                       A5 5A 00..) to the held name
+ *   ipc req <id>        alloc a reply port, send a
+ *                       reply-carrying request to the
+ *                       held name, hold the reply port
+ *   ipc park <ms>       blocking recv on the held
+ *                       reply port (unsigned ms only:
+ *                       a stranded park would hang
+ *                       the console owner)
+ * Each prints one greppable "IPC: ..." line. */
+static unsigned	ipc_hold;
+static unsigned	ipc_reply;
+static unsigned	ipc_buf[10];
+
+static void
+ipc_puti(int rc)
+{
+	if (rc < 0) {
+		sh_puts("-");
+		sh_putu((unsigned)-rc);
+	} else
+		sh_putu((unsigned)rc);
+}
+
+static void
+bi_ipc(void)
+{
+	int rc;
+
+	if (sh_argc < 2) {
+		sh_puts("usage: ipc resolve <slot>|send <id>|req <id>|park <ms>\n");
+		return;
+	}
+	if (sh_streq(sh_argv[1], "resolve")) {
+		if (sh_argc < 3) {
+			sh_puts("usage: ipc resolve <slot>\n");
+			return;
+		}
+		rc = uipc_test_resolve(sh_argv[2]);
+		if (rc >= 0)
+			ipc_hold = (unsigned)rc;
+		sh_puts("IPC: hold ");
+		ipc_puti(rc);
+		sh_puts("\n");
+		return;
+	}
+	if (sh_streq(sh_argv[1], "send") || sh_streq(sh_argv[1], "req")) {
+		unsigned id, reply = 0u;
+
+		if (sh_argc < 3) {
+			sh_puts("usage: ipc send|req <id>\n");
+			return;
+		}
+		id = sh_atou(sh_argv[2]);
+		if (sh_streq(sh_argv[1], "req")) {
+			rc = uipc_port_alloc();
+			if (rc < 0) {
+				sh_puts("IPC: req reply=0 rc=");
+				ipc_puti(rc);
+				sh_puts("\n");
+				return;
+			}
+			ipc_reply = (unsigned)rc;
+			reply = ipc_reply;
+		}
+		ipc_buf[0] = reply;
+		ipc_buf[1] = 0u;
+		ipc_buf[2] = id;
+		ipc_buf[3] = UIPC_HDR_SIZE + 8u;
+		ipc_buf[4] = 0u;
+		ipc_buf[5] = 0u;
+		ipc_buf[6] = 0x5AA5u;
+		ipc_buf[7] = 0u;
+		rc = uipc_send(ipc_hold, (const struct uipc_msg *)ipc_buf,
+			       UIPC_HDR_SIZE + 8u);
+		if (sh_streq(sh_argv[1], "req")) {
+			sh_puts("IPC: req reply=");
+			sh_putu(ipc_reply);
+			sh_puts(" rc=");
+		} else
+			sh_puts("IPC: send rc=");
+		ipc_puti(rc);
+		sh_puts("\n");
+		return;
+	}
+	if (sh_streq(sh_argv[1], "park")) {
+		unsigned ms;
+
+		if (sh_argc < 3) {
+			sh_puts("usage: ipc park <ms>\n");
+			return;
+		}
+		ms = sh_atou(sh_argv[2]);
+		rc = uipc_recv(ipc_reply, (struct uipc_msg *)ipc_buf,
+			       sizeof(ipc_buf), (int)ms);
+		sh_puts("IPC: park rc=");
+		ipc_puti(rc);
+		if (rc >= 0) {
+			/* A delivered message: print its id so
+			 * the harness can tell a send-once
+			 * notification (id 71) from a reply. */
+			sh_puts(" id=");
+			sh_putu(ipc_buf[2]);
+		}
+		sh_puts("\n");
+		return;
+	}
+	sh_puts("usage: ipc resolve <slot>|send <id>|req <id>|park <ms>\n");
+}
+
 /* reboot / poweroff: FND-1 (SYS_RESET / SYS_POWEROFF). The
  * kernel records bootstate reason 4 (software request)
  * before acting, so the next boot's bootlog tells the
@@ -1138,6 +1257,8 @@ _start(void)
 			bi_gui();
 		else if (sh_streq(sh_argv[0], "key"))
 			bi_key();
+		else if (sh_streq(sh_argv[0], "ipc"))
+			bi_ipc();
 		else if (sh_streq(sh_argv[0], "update"))
 			bi_update();
 		else if (sh_streq(sh_argv[0], "reboot"))

@@ -70,6 +70,10 @@
 #include <ipc/ipc_mqueue.h>
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_port.h>
+#include <ipc/ipc_space.h>
+#include <ipc/ipc_entry.h>
+#include <ipc/ipc_kmsg.h>
+#include <ipc/port.h>
 #include "ipc_glue.h"
 
 /* MIG-generated prototypes are not part of the ext
@@ -95,6 +99,12 @@ extern kern_return_t mach_port_extract_right(ipc_space_t, mach_port_t,
  * runnable again (D-IPC-1: the wake restarts its
  * watchdog progress clock). */
 extern void sched_ipc_wake_port(void *port_obj);
+/* IPC-3: scheduler peer-death hook (user.c). Called
+ * after a port OBJECT has been destroyed: any waiter
+ * whose wait record is peer-annotated with that object
+ * is woken with the peer-died verdict (its re-dispatch
+ * returns UIPC_EPEER, never a message or a deadline). */
+extern void sched_ipc_wake_peer(void *port_obj);
 
 /* Userspace message header (mirror of struct uipc_msg's
  * first 24 bytes in user/ulib/uipc.h). */
@@ -142,6 +152,15 @@ map_send_err(mach_msg_return_t mr)
 unsigned int
 ipc_glue_send(task_t who, unsigned int dest, const void *ubuf,
 	      unsigned int len, unsigned int flags)
+{
+	return ipc_glue_send_ex(who, dest, ubuf, len, flags,
+				(void **)0, (unsigned int *)0);
+}
+
+unsigned int
+ipc_glue_send_ex(task_t who, unsigned int dest, const void *ubuf,
+		 unsigned int len, unsigned int flags,
+		 void **dest_obj_out, unsigned int *reply_out)
 {
 	const struct uipc_hdr *uh = (const struct uipc_hdr *)ubuf;
 	const unsigned char *ubody =
@@ -208,6 +227,14 @@ ipc_glue_send(task_t who, unsigned int dest, const void *ubuf,
 			ipc_kmsg_destroy(kmsg);
 			return (unsigned int)map_send_err(mr);
 		}
+		/* IPC-3: report the staged destination for the
+		 * dispatch's peer annotation (success only;
+		 * no reference is taken here -- see the header
+		 * comment). */
+		if (dest_obj_out != (void **)0)
+			*dest_obj_out = dest_obj;
+		if (reply_out != (unsigned int *)0)
+			*reply_out = uh->reply;
 		sched_ipc_wake_port(dest_obj);
 	}
 	return 0;
@@ -297,6 +324,148 @@ ipc_glue_recv_ex(task_t who, unsigned int port, void *ubuf,
 		 unsigned int max, void **obj_out)
 {
 	return recv_core(who, port, ubuf, max, obj_out);
+}
+
+/* ---------------- IPC-3: lifecycle ----------------
+ * A dead daemon's ports must die with it, or senders
+ * queue messages on a corpse port forever (the IPC-1/2
+ * behaviour this phase fixes). The teardown below is
+ * SURGICAL: it destroys rights in the dead task's
+ * space, which is every IPC-visible effect of a full
+ * task_terminate (empty space, dead senders, discarded
+ * queues, dead-name on next send) -- see DEVLOG-IPC3
+ * for the evidence. The task object itself is not
+ * freed (pre-existing leak, bounded by the FND-3
+ * respawn budget for persistent daemons).
+ *
+ * Single-threaded trap context: no other task can
+ * mutate this space while teardown runs, so the table
+ * walk needs no extra locking (mach_port_destroy
+ * handles space locking internally). Destroying an
+ * entry never shrinks the table or moves other
+ * entries, so iterating by index while destroying is
+ * safe; freed entries join the free list.
+ */
+int
+ipc_glue_port_alive(void *obj)
+{
+	if (obj == (void *)0)
+		return 0;
+	return io_active((ipc_object_t)obj);
+}
+
+void
+ipc_glue_take_ref(void *obj)
+{
+	if (obj != (void *)0)
+		ipc_object_reference((ipc_object_t)obj);
+}
+
+void
+ipc_glue_release_ref(void *obj)
+{
+	if (obj != (void *)0)
+		ipc_object_release((ipc_object_t)obj);
+}
+
+/* Type of a name in a space, by table lookup (the
+ * generation must match, or the name is stale). 0 =
+ * no such entry. Used by the DESTROY hook to tell a
+ * receive right (whose destruction kills the port)
+ * from a send right (whose destruction kills nothing). */
+static unsigned int
+space_entry_type(ipc_space_t space, unsigned int name)
+{
+	unsigned int idx = MACH_PORT_INDEX(name);
+	ipc_entry_t entry;
+
+	if (idx >= space->is_table_size)
+		return 0u;
+	entry = &space->is_table[idx];
+	if (entry->ie_object == IP_NULL)
+		return 0u;
+	if (MACH_PORT_GEN(name) != IE_BITS_GEN(entry->ie_bits))
+		return 0u;
+	return IE_BITS_TYPE(entry->ie_bits);
+}
+
+void
+ipc_glue_teardown(task_t who, unsigned int *ports_out,
+		  unsigned int *msgs_out)
+{
+	ipc_space_t space;
+	unsigned int i, ports = 0u, msgs = 0u;
+
+	if (ports_out != (unsigned int *)0)
+		*ports_out = 0u;
+	if (msgs_out != (unsigned int *)0)
+		*msgs_out = 0u;
+	if (!ipc_space_of(who, &space))
+		return;
+	/* Our spaces never grow a tree: a handful of
+	 * sequential allocations in the 128-entry initial
+	 * table. If this ever fires, teardown is
+	 * incomplete by exactly the tree entries. */
+	if (space->is_tree_total != 0u)
+		printf("ipc: teardown: WARNING %u tree entries "
+		    "NOT torn down\n", space->is_tree_total);
+	/* Pass 1: receive rights. Destroying one kills
+	 * its port: upstream ipc_port_destroy discards
+	 * the queue (counted first, bounded walk of the
+	 * circular kmsg list) and wakes no-senders
+	 * requesters (none registered in our flows).
+	 * Receive-first ordering is what makes senders
+	 * go dead immediately. The object is pinned
+	 * across the destroy so the peer-wake comparison
+	 * below cannot see a recycled pointer. */
+	for (i = 0u; i < space->is_table_size; i++) {
+		ipc_entry_t entry = &space->is_table[i];
+		ipc_port_t port;
+		mach_port_t name;
+		ipc_kmsg_t k, base;
+		unsigned int n = 0u;
+
+		if (entry->ie_object == IP_NULL)
+			continue;
+		if (IE_BITS_TYPE(entry->ie_bits) !=
+		    MACH_PORT_TYPE_RECEIVE)
+			continue;
+		port = (ipc_port_t)entry->ie_object;
+		name = MACH_PORT_MAKEB(i, entry->ie_bits);
+		base = port->ip_messages.imq_messages.ikmq_base;
+		if (base != IKM_NULL) {
+			k = base;
+			do {
+				n++;
+				k = k->ikm_next;
+			} while (k != base && n < 4096u);
+		}
+		msgs += n;
+		ipc_object_reference((ipc_object_t)port);
+		if (mach_port_destroy(space, name) == KERN_SUCCESS)
+			ports++;
+		sched_ipc_wake_peer((void *)port);
+		ipc_object_release((ipc_object_t)port);
+	}
+	/* Pass 2: everything else (send, send-once,
+	 * dead-name, port-set entries). Every entry
+	 * still pointing at an object holds a reference
+	 * on it, so destroying these cannot touch a
+	 * freed port. */
+	for (i = 0u; i < space->is_table_size; i++) {
+		ipc_entry_t entry = &space->is_table[i];
+		mach_port_t name;
+
+		if (entry->ie_object == IP_NULL)
+			continue;
+		name = MACH_PORT_MAKEB(i, entry->ie_bits);
+		if (mach_port_destroy(space, name) == KERN_SUCCESS)
+			ports++;
+	}
+	if (ports_out != (unsigned int *)0)
+		*ports_out = ports;
+	if (msgs_out != (unsigned int *)0)
+		*msgs_out = msgs;
 }
 
 /* ---------------- test rendezvous (IPC-1 only) ----------------
@@ -463,13 +632,46 @@ ipc_glue_port(task_t who, unsigned int sub, const char *kname,
 			return (unsigned int)UIPC_EINVAL;
 		return (unsigned int)name;
 	}
-	case IPCP_DESTROY:
+	case IPCP_DESTROY: {
+		/* IPC-3: a live daemon destroying its own
+		 * receive port is a peer death for any
+		 * waiter annotated with that port (the
+		 * shutdown case). Resolve first (copyin
+		 * takes a reference, which pins the object
+		 * across the destroy), destroy, then wake
+		 * peers ONLY if the name really was a
+		 * receive right: destroying a send name
+		 * kills nothing, and waking on it would
+		 * lie to a waiter. Unresolvable names
+		 * (send names to dead ports, dead names,
+		 * port sets) keep the old behaviour. */
+		ipc_mqueue_t mqueue;
+		ipc_object_t object = (ipc_object_t)0;
+		unsigned int was_recv = 0u;
+
+		if (ipc_mqueue_copyin(space, (mach_port_t)x,
+				      &mqueue, &object) ==
+		    MACH_MSG_SUCCESS)
+			was_recv =
+			    (space_entry_type(space, x) ==
+			     MACH_PORT_TYPE_RECEIVE);
 		kr = mach_port_destroy(space, (mach_port_t)x);
-		if (kr == KERN_INVALID_NAME)
+		if (kr == KERN_INVALID_NAME) {
+			if (object != (ipc_object_t)0)
+				ipc_object_release(object);
 			return (unsigned int)UIPC_EDEST;
-		if (kr != KERN_SUCCESS)
+		}
+		if (kr != KERN_SUCCESS) {
+			if (object != (ipc_object_t)0)
+				ipc_object_release(object);
 			return (unsigned int)UIPC_EINVAL;
+		}
+		if (was_recv && object != (ipc_object_t)0)
+			sched_ipc_wake_peer((void *)object);
+		if (object != (ipc_object_t)0)
+			ipc_object_release(object);
 		return 0;
+	}
 	case IPCP_SETQLIMIT:
 		/* Upstream rejects > MACH_PORT_QLIMIT_MAX
 		 * (16) with KERN_INVALID_VALUE; mirror the
