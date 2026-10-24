@@ -8,7 +8,7 @@ filesystem failure can never take the recovery story with it.
 
 > **Key facts**
 >
-> - **littlefs v2.9.3**, vendored in `kernel/kernel/arm/littlefs/`; syscalls **93–97**.
+> - **littlefs v2.9.3**, vendored in `mach3-port/src/ext/littlefs/`; syscalls **93–97**.
 > - **QEMU today:** RAM backend, 1 MB (256 × 4096 B) — config does **not** survive QEMU reboots. FND-4 fixes this.
 > - **On hardware:** SPI NAND via the SFC draft driver; littlefs region = NAND **blocks 320–999**.
 > - NAND semantics are preserved by the port in both backends (erase → `0xFF`).

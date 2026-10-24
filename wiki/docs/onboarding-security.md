@@ -16,7 +16,7 @@ verified, and the phone transports wait on the C6 track.
 
 ## ONB-1: PIN gate, settings, web shell (built)
 
-Kernel side: `kernel/kernel/arm/webui.c`, reached via syscall
+Kernel side: `mach3-port/src/ext/webui.c`, reached via syscall
 **103 `SYS_WEBUI`**; the HTTP router (`http.c`) keeps `/` and
 `/metrics` public and session-gates `/login`, `/settings`,
 `/shell` behind one admin cookie (`qaon_sess`).

@@ -1,72 +1,108 @@
-# QaonicOS "mach3" track — porting kernel Mach 3 ASLI ke ARMv7
+# mach3-port/ — layout map
 
-Track ini mem-port **CMU Mach 3.0 asli** (bukan tiruan) ke ARMv7
-(Cortex-A7, target: QEMU `-M virt` dulu, Luckfox Pico Mini / RV1103 kemudian).
-
-## Di mana source Mach 3 aslinya?
-
-**TIDAK di-copy ke repo ini** (18MB). Lokasi persisten:
-
-```
-~/workspace/mach3-src/        # git clone https://github.com/Prajna/mach (CMU Mach 3.0)
-```
-
-Struktur source asli:
+This directory is the **build workspace of the Mach 3 ARM port**:
+the scripts that build QaonicOS's kernel, our port sources, the
+vendored upstream tree, and the patch overlay. It is not "the
+kernel folder" — it is the port's workshop, and this map is the
+authoritative guide to what lives where. (Layout established by
+the 2026-10-24 restructure; mapping from the old layout:
+`docs/rencana-restruktur/PLAN.md` §4.2.)
 
 ```
-mach3-src/
-  kernel/kern/     # MI: task, thread, scheduler, lock, clock  (~31k baris)
-  kernel/ipc/      # MI: IPC, ports, MIG runtime               (~23k baris)
-  kernel/vm/       # MI: virtual memory, vm_object, pmap API    (~21k baris)
-  kernel/mach/     # MI: header publik + .defs (MIG)            (~5.7k baris)
-  kernel/device/   # MI: device interface                      (~11k baris)
-  kernel/ddb/      # MI: kernel debugger                       (~9.7k baris)
-  kernel/mips/     # MD: port MIPS (PMAX) — REFERENSI pola port
-  kernel/alpha/    # MD: port Alpha
-  kernel/i386/     # MD: port i386
-  kernel/mach/{mips,alpha,i386}/  # MD: mach/machine/* per arsitektur
+mach3-port/
+├── README.md          # this layout map
+├── build-md.sh        # THE build: MI + user programs + MD/ext, links build/mach3.elf
+├── build-mi.sh        # MI-only compile pass (called by build-md.sh)
+├── mach3.ld           # linker script
+├── upstream/
+│   └── mach3/         # PRISTINE vendored CMU Mach 3.0 — do not edit, ever
+│       └── kernel/    # upstream's own source root (kern/ vm/ ipc/ mach/ device/ ddb/
+│                      #   + MD dirs for i386/alpha/mips/...; upstream has no arm/)
+├── overrides/         # our patched copies of upstream MI files, upstream-relative
+│   ├── kern/  vm/  ddb/   # build-mi.sh substitutes these for the pristine file
+│                      #   of the same relative path — this is what keeps
+│                      #   upstream/ pristine
+├── src/               # OUR port source root (parallels upstream/mach3/kernel/)
+│   ├── md/
+│   │   └── arm/       # Mach machine-dependent (MD) contract for ARM:
+│   │       ├── tests/ #   bring-up self-tests (ipc_test.c, sched_test.c)
+│   │       └── mp/    #   multiprocessor header (UP build; kept for upstream parity)
+│   ├── mach/
+│   │   └── arm/       # our <mach/machine/*.h> public interface headers
+│   └── ext/           # the QaonicOS EXTENSION layer: product services that
+│       ├── draft/     #   live in the kernel (syscall dispatch/scheduler in
+│       └── littlefs/  #   user.c, net stack, HTTP/web UI, bootstate, credstore,
+│                      #   update verifier, drivers). draft/ = uncompiled HW
+│                      #   driver drafts; littlefs/ = vendored littlefs + shim
+├── build-tools/       # host-side generators for this build (gen_config.py,
+│                      #   gen_mig_stubs.py, mi_sources.py) — NOT repo-level tools/
+├── history/           # dated M1–M6 porting reports, MI-PATCHES, RELEASE, and the
+│                      #   M1 scaffolding (Makefile, gen-skeleton.sh). Historical:
+│                      #   paths cited inside are the layout of their time
+└── build/             # generated output (gitignored): objects, gen/, inc/
+                       #   symlink farm, mach3.elf
 ```
 
-Repo ini hanya berisi **lapisan machine-dependent ARM** yang kita tulis:
+## Naming principles (one paragraph)
 
-```
-mach3/
-  kernel/arm/          # <-- dikompilasi sebagai <machine/*.h> (pengganti kernel/mips/)
-  kernel/mach/arm/     # <-- dikompilasi sebagai <mach/machine/*.h>
-  README.md            # file ini (laporan tahap ada di docs/)
-  Makefile             # (placeholder, build penuh di M2)
-```
+One name = one thing; a folder's name says its **role**, not its
+ancestry (`upstream/`, `overrides/`, `src/`, `md/`, `ext/`);
+upstream's own names stay upstream's (inside `upstream/mach3/`,
+`kernel/`, `kern/`, `mach/` are CMU's vocabulary and the content
+is frozen); where our source root plays the same role as
+upstream's, the layout mirrors it so a reader who learns one tree
+can navigate the other. Vocabulary: **MI** = machine-independent
+(Mach's core), **MD** = machine-dependent (the port's contract
+with Mach), **ext** = the QaonicOS extension layer (product code
+that lives in the kernel, governed by `docs/ARSITEKTUR.md`).
 
-## Cara pakai (pola build)
+## How the build assembles the tree
 
-MI di-include dengan path logis; build harus memetakan:
-
-| Include di kode MI | Dipetakan ke |
+| Logical view (what the compiler sees) | Physical source |
 |---|---|
-| `<machine/foo.h>` | `mach3/kernel/arm/foo.h` |
-| `<mach/machine/foo.h>` | `mach3/kernel/mach/arm/foo.h` |
-| `<kern/...>`, `<ipc/...>`, `<vm/...>`, `<mach/...>`, `<device/...>` | `~/workspace/mach3-src/kernel/...` |
+| MI source root (`<kern/…>`, `<ipc/…>`, `<vm/…>`, `<mach/…>`, `<device/…>`, `<ddb/…>`) | `upstream/mach3/kernel/` (per-file substitution from `overrides/`) |
+| `<machine/*.h>` | symlink `build/inc/machine` → `src/md/arm/` |
+| `<mach/machine/*.h>` | symlink `build/inc/mach/machine` → `src/mach/arm/` |
+| MD objects | `src/md/arm/*.c`, `*.s`, `src/md/arm/tests/*.c` |
+| Extension objects | `src/ext/*.c`, `src/ext/littlefs/*.c` |
+| Link | `mach3.ld` → `build/mach3.elf` |
 
-Flag wajib: `-DKERNEL` (tanpa ini, `mach/vm_param.h` sengaja gagal
-compile: "YOU HAVE MADE A MISTAKE BY INCLUDING THIS FILE").
-Flag bantu: `-Wno-implicit-function-declaration` (kode C 1990-an).
+Dependency rule: extension code may include MD headers
+(`<machine/*.h>`); MD code never includes extension headers.
 
-Header config yang di-generate build system asli (`cpus.h`,
-`mach_*.h`, `platforms.h`, `simple_clock.h`, `stat_time.h`, …)
-harus disediakan — via stub atau via porting `conf/` config tool (M2).
+## Where does a new file go?
 
-Header MIG (`mach/memory_object_user.h`, `mach/memory_object_default.h`, …)
-di-generate dari `.defs` oleh MIG — butuh MIG yang jalan (M2).
+- Implements Mach's MD contract for ARM (trap/pmap/clock/… glue,
+  `<machine/*.h>` headers)? → `src/md/arm/`
+- Is a `<mach/machine/*.h>` interface header? → `src/mach/arm/`
+- Is product logic/services in the kernel (a syscall service, a
+  driver for a product feature, the web UI, …)? → `src/ext/`
+  (and it must pass the kernel admission rule, `docs/ARSITEKTUR.md` R14)
+- Patches an upstream MI file? → copy it to the same relative
+  path under `overrides/` and patch it there; never edit
+  `upstream/`.
+- A host-side generator for this build? → `build-tools/`
+  (repo-level host utilities live in the repo's `tools/` instead)
+- A userspace program? → repo-level `user/`, never in here.
 
-## Status
+## Build
 
-- **M1** (selesai): inventarisasi + kerangka MD ARM + probe compile. Lihat docs/M1-REPORT.md.
-- **M2** (selesai): seluruh MI (94 file: kern/ipc/vm/device/ddb) ter-compile
-  dengan clang 18 `--target=arm-none-eabi`, 0 error, 0 patch source MI.
-  Build: `mach3/build-mi.sh` (generators: `tools/gen_config.py`,
-  `tools/gen_mig_stubs.py`, `tools/mi_sources.py`). Header
-  `<machine/*.h>` masih stand-in mips; stub MIG compile-only.
-  Lihat docs/M2-REPORT.md + docs/MI-PATCHES.md.
-- **M3** (rencana): header MD ARM nyata + implementasi MD (adaptasi
-  `kernel/src/`) + MIG asli/manual + link + boot di QEMU
-  `-M virt -cpu cortex-a7`.
+```sh
+source ~/workspace/toolchain/env.sh   # portable toolchain (or any clang/lld)
+cd mach3-port && ./build-md.sh        # -> build/mach3.elf, "MD: 42 ok, 0 failed"
+```
+
+## Warnings
+
+- **`build/` holds absolute symlinks.** A stale `build/` copied
+  or left over from another checkout points at that checkout's
+  sources. Delete `build/` before building in a fresh location.
+- **This workspace is not the standalone `~/workspace/mach3-port`
+  repo.** That is a separate, frozen checkout (the tagged
+  `mach3-port-v1.0` release artifact) with the pre-restructure
+  internal layout. Nothing here syncs to it.
+- **Documents dated before the 2026-10-24 restructure cite the
+  pre-restructure layout** (`kernel/`, `kernel/kernel/arm/`,
+  `kernel/mach3-src/`, …). The mapping is
+  `docs/rencana-restruktur/PLAN.md` §4.2; historical texts are
+  intentionally left as written.

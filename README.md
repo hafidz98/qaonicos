@@ -13,9 +13,11 @@ and **Qabot** — an on-device agent runtime harness.
 
 ```
 qaonic_os/
-├── kernel/          # Mach 3.0 kernel (CMU), ARMv7 port — release v1.0
-│                    #   kernel/ = MI+MD sources, build-md.sh/build-mi.sh = build,
-│                    #   docs/ = M1–M6 porting reports + RELEASE
+├── mach3-port/      # Mach 3.0 (CMU) ARMv7 port — build workspace (layout map:
+│                    #   mach3-port/README.md): upstream/ = pristine Mach 3.0,
+│                    #   overrides/ = patched MI files, src/ = our port sources
+│                    #   (md/arm = Mach MD glue, ext/ = extension layer),
+│                    #   build-md.sh/build-mi.sh = build, history/ = M1–M6 reports
 ├── user/            # Userspace programs
 │   ├── ulib/        #   ulib: mini libc + syscall wrappers (usys.h)
 │   ├── qabot/       #   Qabot harness: ReAct loop, policy gate, tool registry,
@@ -45,7 +47,7 @@ qaonic_os/
 Requires: `clang` + `lld` + `qemu-system-arm` (or an equivalent portable toolchain).
 
 ```sh
-cd kernel && ./build-md.sh   # build -> kernel/build/mach3.elf
+cd mach3-port && ./build-md.sh   # build -> mach3-port/build/mach3.elf
 ./scripts/run-qemu.sh        # boot (Ctrl-A X to quit)
 ```
 
@@ -84,6 +86,6 @@ a normal network (the sandbox blocks UDP); limitations are documented in
 
 Apache License 2.0 — see [LICENSE](LICENSE).
 
-Note: `kernel/` contains the Mach 3.0 microkernel © Carnegie Mellon University,
+Note: `mach3-port/upstream/mach3/` contains the Mach 3.0 microkernel © Carnegie Mellon University,
 which retains its original CMU license. Apache 2.0 applies to QaonicOS's own
 code: drivers, userspace programs, tools, and documentation.

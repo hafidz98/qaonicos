@@ -8,7 +8,7 @@ synthesizes; the source decides), and repo layout pointers.
 >
 > 1. **Code beats docs.** Where a page and the source tree disagree, the tree is the truth and the page is owed an update.
 > 2. **Newest research wins.** Where sources conflict, later research supersedes — the worked example is the SoC corrections register ([`docs/riset-soc-rv1103/RINGKASAN.md`](../docs/riset-soc-rv1103/RINGKASAN.md) §3: clock 1.104 GHz, TF socket present, CAM connector routed, no VOP/decoder).
-> 3. **Known staleness:** `docs/SYSCALL-ABI.md` is 28 syscalls behind the code (backlog #14). Never invent syscall rows; verify numbers in `kernel/kernel/arm/user.c`.
+> 3. **Known staleness:** `docs/SYSCALL-ABI.md` is 28 syscalls behind the code (backlog #14). Never invent syscall rows; verify numbers in `mach3-port/src/ext/user.c`.
 > 4. **Parked means parked:** secure boot (B5.4), the LLM API key, multi-user — decided by the owner; do not re-propose.
 > 5. Project artifacts (docs, code, comments, commits) are in **English**.
 
@@ -37,8 +37,8 @@ synthesizes; the source decides), and repo layout pointers.
 
 | Path | What an agent needs to know |
 |---|---|
-| `kernel/kernel/arm/` | The extension layer: `user.c` (dispatch, scheduler, arbiters), `bootstate.c`, `tcp.c`, `http.c`, `webui.c`, `credstore.c`, `lfs_port.c`, `psci.c`, `draft/` (uncompiled HW drivers) |
-| `kernel/build-md.sh` | The build; new user programs go in **both** program loops + `uprogs[]` in `user.c` |
+| `mach3-port/src/ext/` | The extension layer: `user.c` (dispatch, scheduler, arbiters), `bootstate.c`, `tcp.c`, `http.c`, `webui.c`, `credstore.c`, `lfs_port.c`, `psci.c`, `draft/` (uncompiled HW drivers) |
+| `mach3-port/build-md.sh` | The build; new user programs go in **both** program loops + `uprogs[]` in `user.c` |
 | `user/` | `face/`, `uiapp/`, `qabotd.c` + `qabot/`, `sh.c`, one-shots `u*.c`, `ulib/`, `uartproto/`, `tls/` (vendored mbedTLS) |
 | `scripts/` | `run-qemu.sh`, `capture-gui.sh`, `verify-shell.sh`, `verify-*.py`, `soak-test.py`, `sign-update.py` |
 | `docs/` | Deep documents: `ARSITEKTUR-SISTEM.md` (structure+flows), `ARSITEKTUR.md` (placement policy), `SYSCALL-ABI.md` (stale), `riset-*/` (research), `rencana-*/` (plans + dev logs) |

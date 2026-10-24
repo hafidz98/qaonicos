@@ -6,7 +6,7 @@ LVGL and Qt/QML. This document verifies the local stack first,
 then judges each candidate against it. No code was changed.
 
 Method: local code read (`user/uiapp/*`, `user/face/*`,
-`user/ulib/ulib.h`, `kernel/build-md.sh`, sizes measured with
+`user/ulib/ulib.h`, `mach3-port/build-md.sh`, sizes measured with
 `llvm-size` on the 2026-10-23 build) + vendor primary sources
 (lvgl.io, doc.qt.io, segger.com) — URLs in §10. Vendor numbers
 are marked **[vendor]**; locally measured numbers are marked
@@ -448,7 +448,7 @@ migration.
 
 Local: `user/uiapp/{ui.c,ui_draw.c,ui_draw.h,main.c,screen.h,scr_*.c}`,
 `user/face/{main.c,face_draw.c,face.h,qr.c}`, `user/ulib/ulib.h`,
-`kernel/build-md.sh`, `kernel/kernel/arm/draft/spi0.c`,
+`mach3-port/build-md.sh`, `mach3-port/src/ext/draft/spi0.c`,
 `scripts/update-img/parameter.txt`, sizes via `llvm-size-18`
 on the 2026-10-23 build.
 

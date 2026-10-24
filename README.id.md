@@ -13,9 +13,11 @@ agent runtime harness on-device.
 
 ```
 qaonic_os/
-├── kernel/          # Kernel Mach 3.0 (CMU), port ARMv7 — rilis v1.0
-│                    #   kernel/ = source MI+MD, build-md.sh/build-mi.sh = build,
-│                    #   docs/ = laporan porting M1–M6 + RELEASE
+├── mach3-port/      # Port Mach 3.0 (CMU) ARMv7 — workspace build (peta layout:
+│                    #   mach3-port/README.md): upstream/ = Mach 3.0 murni,
+│                    #   overrides/ = file MI yang di-patch, src/ = source port kami
+│                    #   (md/arm = glue MD Mach, ext/ = extension layer),
+│                    #   build-md.sh/build-mi.sh = build, history/ = laporan M1–M6
 ├── user/            # Program userspace
 │   ├── ulib/        #   ulib: libc mini + wrapper syscall (usys.h)
 │   ├── qabot/       #   Qabot harness: loop ReAct, policy gate, tool registry,
@@ -45,7 +47,7 @@ qaonic_os/
 Butuh: `clang` + `lld` + `qemu-system-arm` (atau toolchain portable sejenis).
 
 ```sh
-cd kernel && ./build-md.sh   # build -> kernel/build/mach3.elf
+cd mach3-port && ./build-md.sh   # build -> mach3-port/build/mach3.elf
 ./scripts/run-qemu.sh        # boot (Ctrl-A X untuk keluar)
 ```
 
@@ -82,6 +84,6 @@ normal (sandbox blokir UDP); detail limitasi ada di `docs/UTANG-TEKNIS.md`.
 
 Lisensi Apache 2.0 — lihat [LICENSE](LICENSE).
 
-Catatan: `kernel/` berisi mikrokernel Mach 3.0 © Carnegie Mellon University
+Catatan: `mach3-port/upstream/mach3/` berisi mikrokernel Mach 3.0 © Carnegie Mellon University
 yang tetap memakai lisensi asli CMU. Apache 2.0 berlaku untuk kode QaonicOS
 sendiri: driver, program userspace, tools, dan dokumentasi.

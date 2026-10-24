@@ -35,7 +35,7 @@ document does not pretend otherwise:
   Mach IPC ports play no part in the product path, and
   the IPC syscall numbers (10–12, 23) have sat reserved
   and unused since Fase B (`docs/SYSCALL-ABI.md`).
-- **A kernel extension layer** (`kernel/kernel/arm/`,
+- **A kernel extension layer** (`mach3-port/src/ext/`,
   centred on the 2,270-line `user.c`) owns everything
   product-shaped in the kernel: the syscall dispatch,
   a hand-rolled cooperative scheduler, the daemon table,
