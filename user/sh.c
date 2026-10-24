@@ -6,6 +6,7 @@
  */
 #include "ulib/ulib.h"
 #include "ulib/uipc.h"
+#include "uartproto/linkd.h"
 
 #define	SH_LINE_MAX	120u
 #define	SH_ARGS_MAX	8u
@@ -210,6 +211,7 @@ bi_help(void)
 	sh_puts("  gui                   start the GUI dashboard\n");
 	sh_puts("  key <up|down|left|right|ok|back|menu>  inject a button event (dev/test)\n");
 	sh_puts("  ipc resolve|send|req|park  IPC-3 harness (dev/test)\n");
+	sh_puts("  link                  linkd status (C6L-5, read-only)\n");
 	sh_puts("  update [stage <ver>|stagepkg <path>|cancel|sabotage]  A/B updates\n");
 	sh_puts("  reboot          software reset (bootstate reason 4)\n");
 	sh_puts("  poweroff        power off (bootstate reason 4)\n");
@@ -421,9 +423,36 @@ bi_put(void)
 		sh_puts("put: write failed\n");
 		return;
 	}
-	sh_puts("put: ok (");
-	sh_putu(pos);
-	sh_puts(" bytes)\n");
+	/* Atomic single-put line (see bi_link). */
+	{
+		char pb[32];
+		char rev[12];
+		unsigned n = 0u, v = pos, i = 0u;
+		int j = 0;
+
+		while ("put: ok ("[i]) {
+			pb[n++] = "put: ok ("[i];
+			i++;
+		}
+		if (v == 0u) {
+			pb[n++] = '0';
+		} else {
+			while (v != 0u) {
+				rev[j++] = (char)('0' + (int)(v % 10u));
+				v /= 10u;
+			}
+			while (j > 0)
+				pb[n++] = rev[--j];
+		}
+		{
+			unsigned k = 0u;
+
+			while (" bytes)\n"[k])
+				pb[n++] = " bytes)\n"[k++];
+		}
+		pb[n] = 0;
+		sh_puts(pb);
+	}
 }
 
 static void
@@ -756,6 +785,141 @@ ipc_puti(int rc)
 		sh_putu((unsigned)-rc);
 	} else
 		sh_putu((unsigned)rc);
+}
+
+/* --- linkd status (C6L-5): read-only STATUS RPC to `link`.
+ * Prints one greppable line:
+ *   link: UP reason=NONE ok=.. peer_err=.. timeout=.. dead=..
+ *     crc=.. oversize=.. malformed=.. resets=.. retries=..
+ *     denied=.. frames=.. sendfail=.. inbdrop=.. evtdrop=..
+ *     evt_seq=.. waiters=.. qlimit=..
+ * or "link: unavailable (rc=..)" when linkd is absent
+ * (before `gui`, or after its death + before respawn).
+ * The STATUS body words (after the 24-byte header):
+ *   0 status, 1 state, 2 reason, 3 ok, 4 peer_err,
+ *   5 timeout, 6 dead, 7 crc, 8 oversize, 9 malformed,
+ *   10 resets, 11 retries, 12 denied, 13 frames_sent,
+ *   14 frames_send_fail, 15 inb_dropped, 16 evt_dropped,
+ *   17 evt_seq, 18 waiters, 19 qlimit (LINKD-IPC v1). */
+
+static unsigned	link_words[128];
+static char	link_line[384];
+
+static const char *
+link_reason_name(unsigned r)
+{
+	switch (r) {
+	case 0: return "NONE";
+	case 1: return "TIMEOUT";
+	case 2: return "DEAD";
+	case 3: return "CRC";
+	case 4: return "OVERSIZE";
+	case 5: return "MALFORMED";
+	default: return "?";
+	}
+}
+
+/* Append helpers: the status line is built in one
+ * buffer and printed with a SINGLE sh_puts. The old
+ * form printed field-by-field; a concurrent daemon
+ * print (ulink5d's iteration line, every ~2 s) could
+ * interleave mid-line and break the "link: UP"
+ * substring the verify script greps for (C6L-5
+ * third run: both link checks failed that way
+ * while linkd was healthy). Console lines from
+ * concurrent writers must be atomic. */
+static void
+link_cat(const char *s)
+{
+	unsigned i = 0u, n = 0u;
+
+	while (link_line[n])
+		n++;
+	while (s[i] && n + 1u < sizeof(link_line)) {
+		link_line[n++] = s[i++];
+	}
+	link_line[n] = 0;
+}
+
+static void
+link_catu(unsigned v)
+{
+	char b[12];
+	int i = 0;
+
+	if (v == 0u) {
+		link_cat("0");
+		return;
+	}
+	while (v != 0u) {
+		b[i++] = (char)('0' + (int)(v % 10u));
+		v /= 10u;
+	}
+	while (i > 0) {
+		char s[2];
+
+		s[0] = b[--i];
+		s[1] = '\0';
+		link_cat(s);
+	}
+}
+
+static void
+link_catf(const char *label, unsigned v)
+{
+	link_cat(label);
+	link_catu(v);
+}
+
+static void
+bi_link(void)
+{
+	struct uipc_msg *m = (struct uipc_msg *)link_words;
+	unsigned i;
+	int rc;
+
+	for (i = 0u; i < 128u; i++)
+		link_words[i] = 0u;
+	m->id = (int)LINKD_OP_STATUS;
+	m->size = LINKD_BUDGET_STATUS;
+	link_words[6u] = LINKD_OP_STATUS;	/* body word 0: op */
+	rc = uipc_rpc_user("link", m, LINKD_BUDGET_STATUS, 5000);
+	if (rc < 0) {
+		sh_puts("link: unavailable (rc=");
+		ipc_puti(rc);
+		sh_puts(")\n");
+		return;
+	}
+	if (link_words[6u] != LINKD_OK) {
+		sh_puts("link: status ");
+		sh_putu(link_words[6u]);
+		sh_puts("\n");
+		return;
+	}
+	link_line[0] = 0;
+	link_cat("link: ");
+	link_cat(link_words[7u] == 0u ? "UP" : "DOWN");
+	link_cat(" reason=");
+	link_cat(link_reason_name(link_words[8u]));
+	link_catf(" ok=", link_words[9u]);
+	link_catf(" peer_err=", link_words[10u]);
+	link_catf(" timeout=", link_words[11u]);
+	link_catf(" dead=", link_words[12u]);
+	link_catf(" crc=", link_words[13u]);
+	link_catf(" oversize=", link_words[14u]);
+	link_catf(" malformed=", link_words[15u]);
+	link_catf(" resets=", link_words[16u]);
+	link_catf(" retries=", link_words[17u]);
+	link_catf(" denied=", link_words[18u]);
+	link_catf(" frames=", link_words[19u]);
+	link_catf(" sendfail=", link_words[20u]);
+	link_catf(" inbdrop=", link_words[21u]);
+	link_catf(" evtdrop=", link_words[22u]);
+	link_catf(" evt_seq=", link_words[23u]);
+	link_catf(" waiters=", link_words[24u]);
+	link_catf(" qlimit=", link_words[25u]);
+	link_cat("\n");
+	sh_puts(link_line);
 }
 
 static void
@@ -1321,9 +1485,33 @@ bi_run(void)
 			break;
 		sys_yield();
 	}
-	sh_puts("exit ");
-	sh_putu((unsigned)w);
-	sh_puts("\n");
+	/* Atomic single-put line (see bi_link): a
+	 * concurrent daemon print must not split
+	 * "exit 0" mid-line. */
+	{
+		char eb[24];
+		char rev[12];
+		unsigned n = 0u, v = (unsigned)w, i = 0u;
+		int j = 0;
+
+		while ("exit "[i]) {
+			eb[n++] = "exit "[i];
+			i++;
+		}
+		if (v == 0u) {
+			eb[n++] = '0';
+		} else {
+			while (v != 0u) {
+				rev[j++] = (char)('0' + (int)(v % 10u));
+				v /= 10u;
+			}
+			while (j > 0)
+				eb[n++] = rev[--j];
+		}
+		eb[n++] = '\n';
+		eb[n] = 0;
+		sh_puts(eb);
+	}
 }
 
 void
@@ -1399,6 +1587,8 @@ _start(void)
 			bi_key();
 		else if (sh_streq(sh_argv[0], "ipc"))
 			bi_ipc();
+		else if (sh_streq(sh_argv[0], "link"))
+			bi_link();
 		else if (sh_streq(sh_argv[0], "update"))
 			bi_update();
 		else if (sh_streq(sh_argv[0], "reboot"))
