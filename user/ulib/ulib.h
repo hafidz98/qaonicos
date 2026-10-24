@@ -173,7 +173,8 @@ int	sys_console_takeover(void);	/* Q9 */
 struct uipc_msg;
 int	sys_ipc_send(unsigned dest, const void *buf,
 		     unsigned len, unsigned flags);
-int	sys_ipc_recv(unsigned port, void *buf, unsigned max);
+int	sys_ipc_recv(unsigned port, void *buf, unsigned max,
+		     int timeout_ms);
 int	sys_ipc_port(unsigned sub, unsigned a1, unsigned a2);
 int	uipc_port_alloc(void);
 int	uipc_port_destroy(unsigned name);
@@ -184,6 +185,8 @@ int	uipc_reply(unsigned dest_once, const struct uipc_msg *m,
 		   unsigned len);
 int	uipc_recv_poll(unsigned port, struct uipc_msg *m,
 		       unsigned max);
+int	uipc_recv(unsigned port, struct uipc_msg *m,
+		  unsigned max, int timeout_ms);
 int	uipc_test_publish(const char *slot, unsigned port);
 int	uipc_test_resolve(const char *slot);
 int	uipc_test_claim(const char *slot);

@@ -868,20 +868,27 @@ sys_ipc_send(unsigned dest, const void *buf, unsigned len,
 	return ret;
 }
 
-/* SYS_RECV (11): (port, buf, max) -> total len or UIPC_E* */
+/* SYS_RECV (11): (port, buf, max, timeout_ms) -> total
+ * len or UIPC_E*. timeout 0 = poll; >0 = park up to
+ * that many ms; -1 = park without a deadline. A woken
+ * park returns UIPC_EPARK (-11) to this stub; the
+ * uipc_recv() wrapper below loops on it. The numeric
+ * literal mirrors uipc.h. */
 int
-sys_ipc_recv(unsigned port, void *buf, unsigned max)
+sys_ipc_recv(unsigned port, void *buf, unsigned max,
+	     int timeout_ms)
 {
 	register unsigned _r0 __asm__("r0") = port;
 	register unsigned _r1 __asm__("r1") = (unsigned)buf;
 	register unsigned _r2 __asm__("r2") = max;
+	register unsigned _r3 __asm__("r3") = (unsigned)timeout_ms;
 	int ret;
 	__asm__ volatile(
 		"mov r7, #11\n\t"
 		"svc #0\n\t"
 		"mov %0, r0"
 		: "=r" (ret)
-		: "r" (_r0), "r" (_r1), "r" (_r2)
+		: "r" (_r0), "r" (_r1), "r" (_r2), "r" (_r3)
 		: "r7", "lr", "memory", "cc");
 	return ret;
 }
@@ -941,7 +948,24 @@ uipc_reply(unsigned dest_once, const struct uipc_msg *m,
 int
 uipc_recv_poll(unsigned port, struct uipc_msg *m, unsigned max)
 {
-	return sys_ipc_recv(port, m, max);
+	return sys_ipc_recv(port, m, max, 0);
+}
+
+/* IPC-2: blocking receive. The kernel parks the caller
+ * inside SYS_RECV when the queue is empty; on wake the
+ * stub returns UIPC_EPARK (-11) and we simply call in
+ * again -- the kernel kept the wait (with its original
+ * deadline) and the re-entry collects the message or
+ * the UIPC_ETIME verdict. */
+int
+uipc_recv(unsigned port, struct uipc_msg *m, unsigned max,
+	  int timeout_ms)
+{
+	int rc;
+	do {
+		rc = sys_ipc_recv(port, m, max, timeout_ms);
+	} while (rc == -11);	/* UIPC_EPARK */
+	return rc;
 }
 
 int
