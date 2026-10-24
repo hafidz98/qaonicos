@@ -533,6 +533,35 @@ around their absence with shared kernel state (§1).
   remains possible but would be a deliberate project,
   not an accident.
 
+### Resolutions — owner decisions, 2026-10-24
+
+Decided by the owner in chat, one question at a time:
+
+- **D-ARCH-1: option (b).** HTTP + web UI move to a
+  userspace `httpd` daemon, gated on the server-socket
+  surface, sequenced after C6L; the PIN-gate verdict
+  stays in the kernel (§4.1); routes are frozen until
+  the move.
+- **D-ARCH-2: advisory only.** R14 is guidance for
+  phase plans, not a binding gate — deviations are
+  recorded with their reason, no formal waiver.
+- **D-ARCH-3: option (b).** Split at the transport:
+  driver + IP stay in kernel, transports gain a shared
+  socket surface; done when touched, first triggers
+  are the httpd move (D-ARCH-1) and C6L arbitration.
+- **D-ARCH-4: option (a) — against this document's
+  recommendation.** Real Mach IPC will be built.
+  Per-service syscall surfaces remain the pattern for
+  existing services; IPC becomes a second, sanctioned
+  mechanism, first consumers linkd + TOOL.DISPATCH.
+  The canonical statement in
+  `docs/ARSITEKTUR-SISTEM.md` that IPC is *not* the
+  system's service mechanism is superseded by this
+  resolution. Sequencing (owner, same session): the
+  IPC track runs **after the FND track and before
+  C6L**, as the foundation for linkd; research + plan
+  come first per the standing phase rule.
+
 ---
 
 *Companion documents: `docs/SYSCALL-ABI.md` (what the

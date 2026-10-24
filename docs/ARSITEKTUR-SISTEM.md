@@ -558,3 +558,15 @@ serving surface; one written secrets rule across
 credstore and C6. They are the owner's to answer; tracks
 that reach one must stop and surface it rather than
 decide it silently.
+
+**Update 2026-10-24:** the owner has answered. The HTTP
+server moves to a userspace httpd after C6L, the netstack
+splits at the transport, R14 stands as guidance (see
+`docs/ARSITEKTUR.md`, "Resolutions — owner decisions,
+2026-10-24"), and Q-A3 is settled the other way than
+this document assumed: **Mach IPC will be built**, as
+its own track between FND and C6L, with linkd +
+TOOL.DISPATCH as first consumers. The §1 statement
+that IPC is not the system's service mechanism is
+superseded for that track; per-service syscall surfaces
+remain the mechanism everywhere else.
