@@ -116,6 +116,8 @@ extern unsigned int	uvoice_img_len;
 extern unsigned char	ulinktest_img[];	/* C6L-1: link layer + wire freeze */
 extern unsigned int	ulinktest_img_len;
 extern unsigned char	ulinkbr_img[];	/* C6L-2: bridge test */
+extern unsigned char	ulink3_img[];	/* C6L-3: v2 completion test */
+extern unsigned int	ulink3_img_len;
 extern unsigned int	ulinkbr_img_len;
 extern unsigned char	upl330_img[];	/* D2b: PL330 microcode */
 extern unsigned int	upl330_img_len;
@@ -1339,6 +1341,14 @@ user_syscall(struct arm_trap_frame *frame)
 				 * never complete a handshake there. */
 				{ "embed:ulinkbr", ulinkbr_img,
 				  &ulinkbr_img_len, -1 },
+				/* C6L-3: v2 completion test
+				 * (TOOL.DISPATCH/EVT/NET.WS;
+				 * see docs/rencana-komunikasi-
+				 * c6/DEVLOG-C6L3). Spawn-only
+				 * like ulinkbr: the bridge leg
+				 * needs the scheduler active. */
+				{ "embed:ulink3", ulink3_img,
+				  &ulink3_img_len, -1 },
 			};
 			unsigned int hi, ei;
 			int matched = 0;

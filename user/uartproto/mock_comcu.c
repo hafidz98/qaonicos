@@ -37,8 +37,17 @@
  *   FIDO.LIST           -> OK 0
  * Mock extensions (not in the frozen v1 list, kept for
  * the screens): WIFI.STATUS, WIFI.DISC.
- * Still absent (C6L-2/C6L-3): NET.HTTP, FIDO.DEL/
- * APPROVE/DENY, FIDO.EVENT, BIN/EVT frames.
+ * C6L-3 (wire v1.2, see
+ * docs/rencana-komunikasi-c6/WIRE-FREEZE-V1.2.md):
+ * TOOL.DISPATCH (stub tools get_info/gpio_read/
+ * fail_test; unknown -> ERR NOTOOL), peer-initiated
+ * DISPATCH + DISPATCH.RESULT (results captured for
+ * the test), TEST.SCRIPT/TEST.BADFRAME (test-only
+ * scripted inbound units), NET.WS.OPEN/CLOSE + BIN
+ * echo, EVT frames (peer -> guest only).
+ * Still absent: NET.HTTP (host peer only, C6L-2),
+ * FIDO.DEL/APPROVE/DENY (command family; FIDO.EVENT
+ * rides the generic EVT mechanism since C6L-3).
  */
 #include "uartproto/uartproto.h"
 #include "uartproto/link.h"
@@ -212,6 +221,47 @@ qerr(const char *code)
 	qstr("\n");
 }
 
+static unsigned put_dec_raw(char *d, unsigned v);
+
+/* "OK <len>\n" + exactly len body bytes (TOOL.DISPATCH
+ * results, KV.GET-style length framing). */
+static void
+qok_body(const unsigned char *body, unsigned len)
+{
+	char num[12];
+	unsigned i, n;
+
+	n = put_dec_raw(num, len);
+	qstr("OK ");
+	for (i = 0; i < n; i++)
+		qbytes((unsigned char *)&num[i], 1u);
+	qstr("\n");
+	qbytes(body, len);
+}
+
+static unsigned mock_crc16(const unsigned char *p, unsigned len);
+
+/* Build one QA frame (type + payload) into out;
+ * returns the frame length. CRC via mock_crc16. */
+static unsigned
+build_frame(unsigned char *out, unsigned type,
+	    const unsigned char *payload, unsigned len)
+{
+	unsigned crc, i;
+
+	out[0] = LINK_FRAME_MAGIC0;
+	out[1] = LINK_FRAME_MAGIC1;
+	out[2] = (unsigned char)type;
+	out[3] = (unsigned char)((len >> 8) & 0xffu);
+	out[4] = (unsigned char)(len & 0xffu);
+	for (i = 0; i < len; i++)
+		out[LINK_FRAME_HDR + i] = payload[i];
+	crc = mock_crc16(out, LINK_FRAME_HDR + len);
+	out[LINK_FRAME_HDR + len] = (unsigned char)((crc >> 8) & 0xffu);
+	out[LINK_FRAME_HDR + len + 1u] = (unsigned char)(crc & 0xffu);
+	return LINK_FRAME_HDR + len + LINK_FRAME_CRC;
+}
+
 /* Ambil argumen ke-n (0-based) dari line setelah spasi. */
 static void
 argn(const char *tx, int n, char *out, unsigned osz)
@@ -284,6 +334,63 @@ kv_free(void)
 /* --- Data plane state (declared before dispatch) --- */
 static unsigned voice_frames;
 static int voice_active;
+
+/* --- C6L-3 state: WS session + scripted dispatch capture --- */
+static int ws_open;
+static unsigned ws_drop_n;
+
+/* DISPATCH.RESULT receipts, captured for the guest
+ * test (TEST.SCRIPT runs): up to 4, in arrival order.
+ * Test-only inspection API at the end of this file. */
+#define	SCRIPT_RES_N	4u
+static unsigned script_res_id[SCRIPT_RES_N];
+static char script_res_json[SCRIPT_RES_N][128];
+static unsigned script_res_n;
+
+/* Decimal output into d (no NUL); returns digits. */
+static unsigned
+put_dec_raw(char *d, unsigned v)
+{
+	char tmp[12];
+	unsigned i = 0, j;
+
+	do {
+		tmp[i++] = (char)('0' + v % 10u);
+		v /= 10u;
+	} while (v && i < sizeof(tmp));
+	for (j = 0; j < i; j++)
+		d[j] = tmp[i - 1u - j];
+	return i;
+}
+
+/* Find "pin":<digits> in a JSON body (not NUL-
+ * terminated). Returns the pin, or -1. */
+static int
+json_pin(const unsigned char *body, unsigned bodylen)
+{
+	unsigned i, pin = 0;
+	int digits = 0;
+
+	for (i = 0; i + 5 < bodylen; i++) {
+		if (body[i] == '"' && body[i + 1u] == 'p' &&
+		    body[i + 2u] == 'i' && body[i + 3u] == 'n' &&
+		    body[i + 4u] == '"') {
+			i += 5u;
+			while (i < bodylen && (body[i] == ' ' ||
+			    body[i] == ':'))
+				i++;
+			while (i < bodylen && body[i] >= '0' &&
+			    body[i] <= '9') {
+				pin = pin * 10u +
+				    (unsigned)(body[i] - '0');
+				digits = 1;
+				i++;
+			}
+			return digits ? (int)pin : -1;
+		}
+	}
+	return -1;
+}
 
 /* --- Command dispatch (one complete line, plus KV body) --- */
 
@@ -552,6 +659,169 @@ dispatch(const char *tx, const unsigned char *body, unsigned bodylen)
 		return;
 	}
 
+	/* --- C6L-3: TOOL.DISPATCH (guest -> peer) ---
+	 * tx = "TOOL.DISPATCH <tool> <len>"; body = args
+	 * JSON. Stub tools only: get_info (peer identity),
+	 * gpio_read (deterministic pin table: value =
+	 * pin & 1), fail_test (always a tool failure).
+	 * Anything else is ERR NOTOOL. */
+	if (sncmp(tx, "TOOL.DISPATCH", 13) == 0) {
+		static const char info[] =
+		    "{\"ok\":true,\"result\":{\"device\":"
+		    "\"mock-comcu\",\"link\":\"v1.2\"}}";
+		static const char failj[] =
+		    "{\"ok\":false,\"error\":\"test_failure\"}";
+
+		if (body == 0) {
+			qerr("ARG");
+			return;
+		}
+		argn(tx, 0, a0, sizeof(a0));
+		if (!a0[0]) {
+			qerr("ARG");
+			return;
+		}
+		if (scmp(a0, "get_info") == 0) {
+			qok_body((const unsigned char *)info,
+			    slen(info));
+			return;
+		}
+		if (scmp(a0, "gpio_read") == 0) {
+			int pin = json_pin(body, bodylen);
+			char jb[64];
+			unsigned o = 0, n;
+
+			if (pin < 0) {
+				qerr("ARG");
+				return;
+			}
+			{
+				static const char p1[] =
+				    "{\"ok\":true,\"result\":"
+				    "{\"pin\":";
+				static const char p2[] =
+				    ",\"value\":";
+				static const char p3[] = "}}";
+				unsigned k;
+
+				for (k = 0; p1[k]; k++)
+					jb[o++] = p1[k];
+				n = put_dec_raw(jb + o, (unsigned)pin);
+				o += n;
+				for (k = 0; p2[k]; k++)
+					jb[o++] = p2[k];
+				n = put_dec_raw(jb + o,
+				    (unsigned)(pin & 1));
+				o += n;
+				for (k = 0; p3[k]; k++)
+					jb[o++] = p3[k];
+			}
+			qok_body((unsigned char *)jb, o);
+			return;
+		}
+		if (scmp(a0, "fail_test") == 0) {
+			qok_body((const unsigned char *)failj,
+			    slen(failj));
+			return;
+		}
+		qerr("NOTOOL");
+		return;
+	}
+
+	/* --- C6L-3: DISPATCH.RESULT (guest answers a
+	 * peer-initiated dispatch) ---
+	 * tx = "DISPATCH.RESULT <id> <len>"; body =
+	 * result JSON. Receipts are captured for the
+	 * guest test (see mock_comcu_script_result). */
+	if (sncmp(tx, "DISPATCH.RESULT", 15) == 0) {
+		unsigned idv = 0, k;
+
+		if (body == 0) {
+			qerr("ARG");
+			return;
+		}
+		argn(tx, 0, a0, sizeof(a0));
+		for (k = 0; a0[k] >= '0' && a0[k] <= '9'; k++)
+			idv = idv * 10u + (unsigned)(a0[k] - '0');
+		if (script_res_n < SCRIPT_RES_N) {
+			unsigned n = (bodylen < 127u) ? bodylen : 127u;
+
+			script_res_id[script_res_n] = idv;
+			for (k = 0; k < n; k++)
+				script_res_json[script_res_n][k] =
+				    (char)body[k];
+			script_res_json[script_res_n][n] = 0;
+			script_res_n++;
+		}
+		qok1(0);
+		return;
+	}
+
+	/* --- C6L-3: test-only scripted inbound units ---
+	 * TEST.SCRIPT c6l3 -> "OK ARMED" + (in order) a
+	 * DISPATCH get_info, a DISPATCH gpio_read, a
+	 * DISPATCH gpio_write, a DISPATCH self_destruct,
+	 * and an EVT WIFI.DROPPED frame. The guest polls
+	 * and answers them.
+	 * TEST.BADFRAME -> "OK" + one EVT frame with a
+	 * corrupt CRC (the guest must report a link
+	 * error, reopen, and carry on). */
+	if (scmp(tx, "TEST.SCRIPT c6l3") == 0) {
+		unsigned char fr[LINK_FRAME_HDR + 12 +
+		    LINK_FRAME_CRC];
+		unsigned flen;
+
+		script_res_n = 0;
+		qok1("ARMED");
+		qstr("DISPATCH 1 get_info 2\n{}");
+		qstr("DISPATCH 2 gpio_read 9\n{\"pin\":3}");
+		qstr("DISPATCH 3 gpio_write 17\n"
+		    "{\"pin\":3,\"val\":1}");
+		qstr("DISPATCH 4 self_destruct 2\n{}");
+		flen = build_frame(fr, LINK_FRAME_TYPE_EVT,
+		    (const unsigned char *)"WIFI.DROPPED", 12u);
+		qbytes(fr, flen);
+		return;
+	}
+	if (scmp(tx, "TEST.BADFRAME") == 0) {
+		unsigned char fr[LINK_FRAME_HDR + 12 +
+		    LINK_FRAME_CRC];
+		unsigned flen;
+
+		qok1(0);
+		flen = build_frame(fr, LINK_FRAME_TYPE_EVT,
+		    (const unsigned char *)"WIFI.DROPPED", 12u);
+		/* Corrupt the CRC: the guest must fail the
+		 * unit, not accept the event. */
+		fr[flen - 1u] ^= 0xffu;
+		qbytes(fr, flen);
+		return;
+	}
+
+	/* --- C6L-3: NET.WS session (framing only) ---
+	 * One session at a time (sid always 1). OPEN
+	 * while open is ERR BUSY; CLOSE with no session
+	 * or a wrong sid is ERR NOCONN. */
+	if (sncmp(tx, "NET.WS.OPEN", 11) == 0) {
+		if (ws_open) {
+			qerr("BUSY");
+			return;
+		}
+		ws_open = 1;
+		qok1("1");
+		return;
+	}
+	if (sncmp(tx, "NET.WS.CLOSE", 12) == 0) {
+		argn(tx, 0, a0, sizeof(a0));
+		if (!ws_open || scmp(a0, "1") != 0) {
+			qerr("NOCONN");
+			return;
+		}
+		ws_open = 0;
+		qok1(0);
+		return;
+	}
+
 	/* --- VOICE (protokol v2, D4) --- */
 	if (scmp(tx, "VOICE.START 16000 16") == 0) {
 		voice_frames = 0u;
@@ -601,8 +871,9 @@ mock_crc16(const unsigned char *p, unsigned len)
 }
 
 /* Frozen v2 frame: "QA" + type + len BE + payload + CRC BE.
- * Only AUD (0x01) is accepted until C6L-3 adds BIN/EVT.
- * The legacy 3-byte "AUD" magic is rejected. */
+ * AUD (0x01) only here; BIN (0x02, WS echo) is routed
+ * in mock_send_frame, EVT (0x03) never comes from the
+ * guest. The legacy 3-byte "AUD" magic is rejected. */
 static int
 aud_accept(const unsigned char *frame, unsigned flen)
 {
@@ -632,25 +903,33 @@ aud_accept(const unsigned char *frame, unsigned flen)
 /* --- Backend: byte-stream parser ---
  *
  * write() appends to the input accumulator; the parser
- * consumes complete requests: a line, plus for KV.SET
- * exactly <len> following body bytes. Malformed input
- * policy: a KV.SET line whose length is not numeric
- * (the legacy inline shape) is rejected at once with
- * ERR ARG and no body wait; a numeric length above
- * the sane bound (4096) drops the whole accumulator
- * (the link layer then times out and must reopen);
- * a body longer than the store cap is consumed and
- * then rejected with ERR ARG, keeping the stream in
- * sync. Overflow of the accumulator is a link error
- * (write returns -1); the caller must reopen. */
-#define	IN_ACC_SZ	256u	/* largest single write is ~110 B */
+ * consumes complete requests: a line, plus for KV.SET /
+ * TOOL.DISPATCH / DISPATCH.RESULT exactly <len>
+ * following body bytes. Malformed input policy: a
+ * body line whose length is not numeric (the legacy
+ * inline shape) is rejected at once with ERR ARG and
+ * no body wait; a numeric length above the sane bound
+ * (4096) drops the whole accumulator (the link layer
+ * then times out and must reopen); a body longer than
+ * the store cap is consumed and then rejected with
+ * ERR ARG, keeping the stream in sync. Dispatch
+ * bodies over 192 B are rejected at once with ERR
+ * ARG (the guest guards the same cap, so no body
+ * follows in practice). Overflow of the accumulator
+ * is a link error (write returns -1); the caller
+ * must reopen. */
+#define	IN_ACC_SZ	256u	/* largest single write is ~240 B */
 #define	BODY_MAX	4096u
 #define	READ_CHUNK	32u
+#define	BODY_DISPATCH_MAX	192u
 
 static unsigned char in_acc[IN_ACC_SZ];
 static unsigned in_len = 0;
 static int need_body = -1;	/* >= 0: body bytes still wanted */
-static char body_key[64];
+static int body_kind = 0;	/* 0 KV.SET, 1 TOOL.DISPATCH,
+				 * 2 DISPATCH.RESULT */
+static char body_key[64];	/* KV key, or dispatch tool name */
+static unsigned body_id = 0;	/* DISPATCH.RESULT id */
 static unsigned body_want = 0;
 
 /* Strict parse of "KV.SET <key> <len>". Returns 0 with
@@ -697,8 +976,84 @@ parser_reset(void)
 {
 	in_len = 0;
 	need_body = -1;
+	body_kind = 0;
+	body_id = 0;
 	body_want = 0;
 	resp_len = resp_pos = 0;
+}
+
+/* Strict parse of "CMD <token> <len>" (TOOL.DISPATCH
+ * tool names). Returns 0 with token/len filled, or
+ * -1. Mirrors parse_kv_set's grammar. */
+static int
+parse_cmd_tok_len(const char *line, const char *cmd, char *tok,
+		  unsigned tcap, unsigned *len_out)
+{
+	unsigned i = 0, o = 0, len = 0;
+	int digits = 0;
+
+	while (cmd[i] && line[i] == cmd[i])
+		i++;
+	if (cmd[i] != 0 || line[i] != ' ')
+		return -1;
+	while (line[i] == ' ')
+		i++;
+	while (line[i] && line[i] != ' ' && o + 1 < tcap)
+		tok[o++] = line[i++];
+	if (o == 0 || line[i] != ' ')
+		return -1;
+	tok[o] = 0;
+	while (line[i] == ' ')
+		i++;
+	while (line[i] >= '0' && line[i] <= '9') {
+		len = len * 10u + (unsigned)(line[i] - '0');
+		if (len > BODY_MAX + 1u)
+			return -1;
+		digits = 1;
+		i++;
+	}
+	if (!digits || line[i] != 0)
+		return -1;
+	*len_out = len;
+	return 0;
+}
+
+/* Strict parse of "DISPATCH.RESULT <id> <len>".
+ * Returns 0 with id/len filled, or -1. */
+static int
+parse_cmd_id_len(const char *line, unsigned *id_out,
+		 unsigned *len_out)
+{
+	unsigned i = 15, id = 0, len = 0;
+	int digits = 0;
+
+	if (sncmp(line, "DISPATCH.RESULT", 15) != 0 ||
+	    line[15] != ' ')
+		return -1;
+	while (line[i] == ' ')
+		i++;
+	while (line[i] >= '0' && line[i] <= '9') {
+		id = id * 10u + (unsigned)(line[i] - '0');
+		digits = 1;
+		i++;
+	}
+	if (!digits || line[i] != ' ')
+		return -1;
+	while (line[i] == ' ')
+		i++;
+	digits = 0;
+	while (line[i] >= '0' && line[i] <= '9') {
+		len = len * 10u + (unsigned)(line[i] - '0');
+		if (len > BODY_MAX + 1u)
+			return -1;
+		digits = 1;
+		i++;
+	}
+	if (!digits || line[i] != 0)
+		return -1;
+	*id_out = id;
+	*len_out = len;
+	return 0;
 }
 
 static int
@@ -733,13 +1088,15 @@ mock_write(const unsigned char *buf, unsigned len)
 				return 0;	/* wait for more */
 			have = body_want;
 			{
-				/* Stage only what the store can
-				 * take (64 B); over-cap bodies
-				 * are rejected by length, never
-				 * stored truncated. Guest stacks
-				 * are one page: no 4 KB array. */
-				unsigned char body[64];
-				unsigned take = (have < 64u) ? have : 64u;
+				/* Stage up to the dispatch cap
+				 * (192 B); KV bodies are still
+				 * rejected above 64 by dispatch,
+				 * never stored truncated. Guest
+				 * stacks are one page: no 4 KB
+				 * array. */
+				unsigned char body[BODY_DISPATCH_MAX];
+				unsigned take = (have < BODY_DISPATCH_MAX) ?
+				    have : BODY_DISPATCH_MAX;
 				unsigned k;
 				for (k = 0; k < take; k++)
 					body[k] = in_acc[k];
@@ -750,14 +1107,35 @@ mock_write(const unsigned char *buf, unsigned len)
 				need_body = -1;
 				{
 					char line[128];
-					unsigned li = 0;
-					const char *p = "KV.SET ";
+					unsigned li = 0, n;
+					const char *p;
+
+					if (body_kind == 1)
+						p = "TOOL.DISPATCH ";
+					else if (body_kind == 2)
+						p = "DISPATCH.RESULT ";
+					else
+						p = "KV.SET ";
 					while (*p)
 						line[li++] = *p++;
-					for (k = 0; body_key[k]; k++)
-						line[li++] = body_key[k];
+					if (body_kind == 2) {
+						n = put_dec_raw(line + li,
+						    body_id);
+						li += n;
+					} else {
+						for (k = 0; body_key[k]; k++)
+							line[li++] =
+							    body_key[k];
+					}
+					line[li++] = ' ';
+					n = put_dec_raw(line + li, have);
+					li += n;
 					line[li] = 0;
-					if (have > UPROTO_KV_VAL_MAX) {
+					if (body_kind == 0 &&
+					    have > UPROTO_KV_VAL_MAX) {
+						qerr("ARG");
+					} else if (body_kind != 0 &&
+					    have > BODY_DISPATCH_MAX) {
 						qerr("ARG");
 					} else {
 						dispatch(line, body, have);
@@ -813,6 +1191,61 @@ mock_write(const unsigned char *buf, unsigned len)
 						return -1;
 					}
 					scpy(body_key, key, sizeof(body_key));
+					body_kind = 0;
+					if (blen == 0) {
+						dispatch(line,
+							 (unsigned char *)"",
+							 0u);
+					} else {
+						body_want = blen;
+						need_body = 1;
+					}
+					continue;
+				}
+				/* TOOL.DISPATCH with a body? */
+				if (sncmp(line, "TOOL.DISPATCH", 13) == 0) {
+					char tool[32];
+					unsigned blen;
+					if (parse_cmd_tok_len(line,
+						"TOOL.DISPATCH", tool,
+						sizeof(tool), &blen) != 0) {
+						qerr("ARG");
+						continue;
+					}
+					if (blen > BODY_DISPATCH_MAX) {
+						/* Guest guards the same
+						 * cap: reject at once,
+						 * no body wait. */
+						qerr("ARG");
+						continue;
+					}
+					scpy(body_key, tool,
+					    sizeof(body_key));
+					body_kind = 1;
+					if (blen == 0) {
+						dispatch(line,
+							 (unsigned char *)"",
+							 0u);
+					} else {
+						body_want = blen;
+						need_body = 1;
+					}
+					continue;
+				}
+				/* DISPATCH.RESULT with a body? */
+				if (sncmp(line, "DISPATCH.RESULT", 15) == 0) {
+					unsigned idv, blen;
+					if (parse_cmd_id_len(line, &idv,
+						&blen) != 0) {
+						qerr("ARG");
+						continue;
+					}
+					if (blen > BODY_DISPATCH_MAX) {
+						qerr("ARG");
+						continue;
+					}
+					body_id = idv;
+					body_kind = 2;
 					if (blen == 0) {
 						dispatch(line,
 							 (unsigned char *)"",
@@ -852,7 +1285,62 @@ mock_read(unsigned char *buf, unsigned len)
 static int
 mock_send_frame(const unsigned char *frame, unsigned flen)
 {
+	unsigned len, crc, expect;
+
+	if (flen < LINK_FRAME_HDR + LINK_FRAME_CRC ||
+	    frame[0] != LINK_FRAME_MAGIC0 ||
+	    frame[1] != LINK_FRAME_MAGIC1)
+		return -1;
+	if (frame[2] == LINK_FRAME_TYPE_BIN) {
+		/* WS data: validate, then echo verbatim
+		 * while a session is open; with no session
+		 * the frame is dropped (frames get no
+		 * response) and the send reports -1. */
+		len = ((unsigned)frame[3] << 8) | frame[4];
+		if (flen != LINK_FRAME_HDR + len + LINK_FRAME_CRC)
+			return -1;
+		crc = ((unsigned)frame[LINK_FRAME_HDR + len] << 8) |
+		    frame[LINK_FRAME_HDR + len + 1u];
+		expect = mock_crc16(frame, LINK_FRAME_HDR + len);
+		if (crc != expect)
+			return -1;
+		if (!ws_open) {
+			ws_drop_n++;
+			return -1;
+		}
+		/* Echo fits resp_q only for small messages;
+		 * the WS test keeps them small. */
+		qbytes(frame, flen);
+		return 0;
+	}
 	return aud_accept(frame, flen);
+}
+
+/* --- Test-only inspection API (C6L-3) ---
+ * The guest test reads back the DISPATCH.RESULT
+ * receipts the mock captured, to prove the peer
+ * actually received the guest's answers (the bridge
+ * leg proves the same via the host transcript). */
+unsigned
+mock_comcu_script_result_count(void)
+{
+	return script_res_n;
+}
+
+int
+mock_comcu_script_result(unsigned idx, unsigned *id_out, char *buf,
+			  unsigned cap)
+{
+	unsigned i;
+
+	if (idx >= script_res_n || !buf || cap == 0)
+		return -1;
+	if (id_out)
+		*id_out = script_res_id[idx];
+	for (i = 0; script_res_json[idx][i] && i + 1 < cap; i++)
+		buf[i] = script_res_json[idx][i];
+	buf[i] = 0;
+	return 0;
 }
 
 struct uproto_backend uproto_backend_mock = {

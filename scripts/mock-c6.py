@@ -2,11 +2,15 @@
 """mock-c6.py -- host-side mock ESP32-C6 peer for the C6L track.
 
 A wire-level peer for the frozen wire v1.1 (see
-docs/rencana-komunikasi-c6/WIRE-FREEZE.md) plus the C6L-2
-addition NET.HTTP. It speaks the exact bytes the in-process
-mock (user/uartproto/mock_comcu.c) speaks, over a TCP
-connection, so a guest client cannot tell which peer
-answered -- except for the deliberate differences below.
+docs/rencana-komunikasi-c6/WIRE-FREEZE.md), the C6L-2
+addition NET.HTTP, and the C6L-3 wire v1.2 additions
+(TOOL.DISPATCH, peer-initiated DISPATCH, EVT frames,
+NET.WS framing -- see docs/rencana-komunikasi-c6/
+WIRE-FREEZE-V1.2.md). It speaks the exact bytes the
+in-process mock (user/uartproto/mock_comcu.c) speaks,
+over a TCP connection, so a guest client cannot tell
+which peer answered -- except for the deliberate
+differences below.
 
 Deliberate differences from the in-process mock:
 - State lives in this process's memory. A TCP reconnect
@@ -41,10 +45,15 @@ Transcript lines (appended, flushed per line):
   SESSION <n> ACCEPT / CLOSE <reason>
   REQ <repr of raw request bytes>   (line + body, or frame)
   RESP <repr of response bytes>
+  SEND <repr of scripted outbound bytes> (TEST.SCRIPT /
+    TEST.BADFRAME: DISPATCH lines, EVT frames)
+  RESULT <id> <result JSON>  (DISPATCH.RESULT receipts)
   FRAME AUD <len> ok|bad-crc|bad-type|outside-session
+  FRAME BIN <len> echo|drop|bad-crc
 Stats JSON (rewritten after every completed request):
   sessions, commands, aud_ok, aud_bad, aud_outside,
-  nethttp_bytes, kv_sets.
+  nethttp_bytes, kv_sets, tool_dispatch,
+  dispatch_results, ws_echo, ws_drop.
 """
 import argparse
 import json
@@ -100,7 +109,13 @@ class Peer:
         self.stats_path = stats_path
         self.stats = {"sessions": 0, "commands": 0, "aud_ok": 0,
                       "aud_bad": 0, "aud_outside": 0,
-                      "nethttp_bytes": 0, "kv_sets": 0}
+                      "nethttp_bytes": 0, "kv_sets": 0,
+                      "tool_dispatch": 0, "dispatch_results": 0,
+                      "ws_echo": 0, "ws_drop": 0}
+        # C6L-3 state.
+        self.ws_open = False
+        self.ws_sid = 1
+        self.script_results = []  # (id, result JSON) in order
         # NVS state (mirrors mock_comcu.c defaults).
         self.kv = {}              # key -> bytes (<=63 stored)
         self.wifi_saved = []      # list of ssid, max 2
@@ -251,44 +266,146 @@ class Peer:
                 return ("OK %d\n" % len(body_b)).encode() + body_b
             return err("ARG")
 
+        # --- TOOL.DISPATCH (C6L-3, guest -> peer) ---
+        # line: "TOOL.DISPATCH <tool> <len>", body: args JSON.
+        if cmd == "TOOL.DISPATCH":
+            if body is None or len(parts) < 3:
+                return err("ARG")
+            tool = parts[1]
+            self.stats["tool_dispatch"] += 1
+            if tool == "get_info":
+                res = (b'{"ok":true,"result":{"device":"mock-c6",'
+                       b'"link":"v1.2"}}')
+                return ("OK %d\n" % len(res)).encode() + res
+            if tool == "gpio_read":
+                import re as _re
+                m = _re.search(rb'"pin"\s*:\s*(\d+)', body)
+                if not m:
+                    return err("ARG")
+                pin = int(m.group(1))
+                res = ('{"ok":true,"result":{"pin":%d,'
+                       '"value":%d}}' % (pin, pin & 1)).encode()
+                return ("OK %d\n" % len(res)).encode() + res
+            if tool == "fail_test":
+                res = b'{"ok":false,"error":"test_failure"}'
+                return ("OK %d\n" % len(res)).encode() + res
+            return err("NOTOOL")
+
+        # --- DISPATCH.RESULT (C6L-3, guest answers a
+        # peer-initiated dispatch) ---
+        # line: "DISPATCH.RESULT <id> <len>", body: result JSON.
+        if cmd == "DISPATCH.RESULT":
+            if body is None or len(parts) < 3:
+                return err("ARG")
+            try:
+                rid = int(parts[1])
+            except ValueError:
+                return err("ARG")
+            self.script_results.append(
+                (rid, body.decode("ascii", "replace")))
+            self.stats["dispatch_results"] += 1
+            self.log("RESULT %d %s" % (rid, body.decode(
+                "ascii", "replace")))
+            return ok()
+
+        # --- NET.WS session (C6L-3, framing only) ---
+        if cmd == "NET.WS.OPEN":
+            if self.ws_open:
+                return err("BUSY")
+            self.ws_open = True
+            return ok("1")
+        if cmd == "NET.WS.CLOSE":
+            if not self.ws_open or len(parts) < 2 \
+                    or parts[1] != "1":
+                return err("NOCONN")
+            self.ws_open = False
+            return ok()
+
         return err("UNKNOWN")
+
+    # ---------- C6L-3 scripted outbound units ----------
+    def script_bytes(self):
+        """TEST.SCRIPT c6l3 units, in order: DISPATCH
+        get_info, DISPATCH gpio_read, DISPATCH
+        gpio_write, DISPATCH self_destruct, then an
+        EVT WIFI.DROPPED frame."""
+        out = b""
+        out += b"DISPATCH 1 get_info 2\n{}"
+        out += b'DISPATCH 2 gpio_read 9\n{"pin":3}'
+        out += b'DISPATCH 3 gpio_write 17\n{"pin":3,"val":1}'
+        out += b"DISPATCH 4 self_destruct 2\n{}"
+        payload = b"WIFI.DROPPED"
+        hdr = b"QA" + bytes([0x03, (len(payload) >> 8) & 0xFF,
+                             len(payload) & 0xFF])
+        crc = crc16_ccitt(hdr + payload)
+        out += hdr + payload + bytes([(crc >> 8) & 0xFF,
+                                      crc & 0xFF])
+        return out
+
+    def badframe_bytes(self):
+        """One EVT frame with a corrupt CRC (TEST.BADFRAME)."""
+        payload = b"WIFI.DROPPED"
+        hdr = b"QA" + bytes([0x03, (len(payload) >> 8) & 0xFF,
+                             len(payload) & 0xFF])
+        crc = crc16_ccitt(hdr + payload) ^ 0xFFFF
+        return hdr + payload + bytes([(crc >> 8) & 0xFF,
+                                      crc & 0xFF])
 
     # ---------- frame handling ----------
     def handle_frame(self, frame):
-        """frame: full QA frame bytes. Returns True if accepted
-        (counted), False otherwise. Frames never get a response."""
+        """frame: full QA frame bytes. Returns echo bytes
+        to send back (BIN WS echo while a session is
+        open), or None. AUD frames are counted, never
+        answered; EVT frames never come from the guest."""
         if len(frame) < 7:
             self.stats["aud_bad"] += 1
             self.log("FRAME short bad")
-            return False
+            return None
         typ = frame[2]
         ln = (frame[3] << 8) | frame[4]
         if len(frame) != 5 + ln + 2:
             self.stats["aud_bad"] += 1
             self.log("FRAME AUD %d bad-len" % ln)
-            return False
+            return None
         crc = (frame[5 + ln] << 8) | frame[5 + ln + 1]
         if crc != crc16_ccitt(frame[:5 + ln]):
-            self.stats["aud_bad"] += 1
-            self.log("FRAME AUD %d bad-crc" % ln)
-            return False
+            if typ == 0x02:
+                self.stats["ws_drop"] += 1
+                self.log("FRAME BIN %d bad-crc" % ln)
+            else:
+                self.stats["aud_bad"] += 1
+                self.log("FRAME AUD %d bad-crc" % ln)
+            return None
+        if typ == 0x02:
+            if not self.ws_open:
+                self.stats["ws_drop"] += 1
+                self.log("FRAME BIN %d drop-no-session" % ln)
+                return None
+            self.stats["ws_echo"] += 1
+            self.log("FRAME BIN %d echo" % ln)
+            return frame
+        if typ == 0x03:
+            self.log("FRAME EVT %d unexpected-from-guest" % ln)
+            return None
         if typ != 0x01:
             self.stats["aud_bad"] += 1
             self.log("FRAME type %02x bad-type" % typ)
-            return False
+            return None
         if not self.voice_active:
             self.stats["aud_outside"] += 1
             self.log("FRAME AUD %d outside-session" % ln)
-            return False
+            return None
         self.voice_frames += 1
         self.stats["aud_ok"] += 1
         self.log("FRAME AUD %d ok" % ln)
-        return True
+        return None
 
     # ---------- connection serving ----------
     def serve(self, conn, session_no):
         buf = bytearray()
-        pending_kv = None  # (key, want_len) while body arrives
+        # (kind, arg, want_len) while a body arrives;
+        # kind: KV.SET, TOOL.DISPATCH, DISPATCH.RESULT.
+        pending_body = None
 
         def recv_more():
             try:
@@ -301,20 +418,21 @@ class Peer:
             return True
 
         while True:
-            # -- KV body phase --
-            if pending_kv is not None:
-                key, want = pending_kv
+            # -- body phase (KV.SET / TOOL.DISPATCH /
+            #    DISPATCH.RESULT) --
+            if pending_body is not None:
+                kind, arg, want = pending_body
                 if len(buf) < want:
                     if not recv_more():
                         return "eof"
                     continue
                 body = bytes(buf[:want])
                 del buf[:want]
-                pending_kv = None
+                pending_body = None
+                line_out = "%s %s %d" % (kind, arg, want)
                 self.log("REQ %r" % (
-                    ("KV.SET %s %d\n" % (key, want)).encode() + body))
-                resp = self.dispatch("KV.SET %s %d" % (key, want),
-                                     body)
+                    (line_out + "\n").encode() + body))
+                resp = self.dispatch(line_out, body)
                 if self.args.silent:
                     continue
                 if self.args.delay_ms:
@@ -373,7 +491,9 @@ class Peer:
                     continue
                 frame = bytes(buf[:need])
                 del buf[:need]
-                self.handle_frame(frame)
+                echo = self.handle_frame(frame)
+                if echo is not None:
+                    conn.sendall(echo)
                 self.write_stats()
                 continue
             # Text line phase.
@@ -424,10 +544,73 @@ class Peer:
                     self.served += 1
                     self.write_stats()
                     continue
-                pending_kv = (toks[1], want)
+                pending_body = ("KV.SET", toks[1], want)
+                continue
+            # TOOL.DISPATCH / DISPATCH.RESULT lines: same
+            # body-phase shape as KV.SET.
+            if line.startswith("TOOL.DISPATCH") or \
+                    line.startswith("DISPATCH.RESULT"):
+                toks = line.split(" ")
+                kind = toks[0]
+                if len(toks) != 3 or not toks[2].isdigit():
+                    self.log("REQ %r" % (line + "\n").encode())
+                    resp = b"ERR ARG\n"
+                    if not self.args.silent:
+                        conn.sendall(resp)
+                    self.log("RESP %r" % resp)
+                    self.stats["commands"] += 1
+                    self.served += 1
+                    self.write_stats()
+                    continue
+                want = int(toks[2])
+                if want > BODY_MAX:
+                    self.log("REQ %r" % (line + "\n").encode())
+                    resp = b"ERR ARG\n"
+                    if not self.args.silent:
+                        conn.sendall(resp)
+                    self.log("RESP %r" % resp)
+                    self.stats["commands"] += 1
+                    self.served += 1
+                    self.write_stats()
+                    continue
+                if want == 0:
+                    self.log("REQ %r" % (line + "\n").encode())
+                    resp = self.dispatch(line, b"")
+                    if not self.args.silent:
+                        conn.sendall(resp)
+                    self.log("RESP %r" % resp)
+                    self.served += 1
+                    self.write_stats()
+                    continue
+                pending_body = (kind, toks[1], want)
                 continue
             # Ordinary text command.
             self.log("REQ %r" % (line + "\n").encode())
+            # Test-only scripted outbound units (C6L-3):
+            # the response goes out first, then the
+            # script bytes. Bypasses fault injection.
+            if line == "TEST.SCRIPT c6l3":
+                resp = b"OK ARMED\n"
+                conn.sendall(resp)
+                self.log("RESP %r" % resp)
+                script = self.script_bytes()
+                conn.sendall(script)
+                self.log("SEND %r" % script)
+                self.stats["commands"] += 1
+                self.served += 1
+                self.write_stats()
+                continue
+            if line == "TEST.BADFRAME":
+                resp = b"OK\n"
+                conn.sendall(resp)
+                self.log("RESP %r" % resp)
+                bad = self.badframe_bytes()
+                conn.sendall(bad)
+                self.log("SEND %r" % bad)
+                self.stats["commands"] += 1
+                self.served += 1
+                self.write_stats()
+                continue
             resp = self.dispatch(line, None)
             if self.args.silent:
                 continue
@@ -489,6 +672,9 @@ def run():
     print("mock-c6: listening on %s:%d" % (args.host, args.port),
           flush=True)
     peer = Peer(args, transcript, args.stats_file)
+    peer.write_stats()  # initial zeros, so verify scripts
+    # can read stats (and FAIL cleanly) even when no
+    # guest session ever connects (pre-change runs).
     session_no = 0
     try:
         while True:
