@@ -197,5 +197,6 @@ track (C6L-1..C6L-5) per
 track (UI-1..UI-6, LVGL inside uiapp) per
 `docs/riset-ui-framework/RINGKASAN.md` — owner decision
 2026-10-23 (LVGL adopted; Qt/QML rejected; UI-1 is a
-measure-first go/no-go against the ~287 KB boot-partition
-headroom).
+measure-first go/no-go against the re-measured
+boot-partition headroom — 932,724 B at IPC-5, not the
+retracted ~287 KB figure, which counted bss).

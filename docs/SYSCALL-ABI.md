@@ -127,12 +127,113 @@ terdaftar (Fase D).
 | 106 | `SYS_RESET` | — | tidak kembali / `-1` | Reset software via PSCI `SYSTEM_RESET` (QEMU: conduit HVC). Sebelum reset, kernel mencatat `last_reason=4` (software request) + event bootlog 12. RV1103: seam TODO(HW) di `psci.c` (PMU/WDT) |
 | 107 | `SYS_POWEROFF` | — | tidak kembali / `-1` | Power off via PSCI `SYSTEM_OFF`. Pencatatan reason sama seperti `SYS_RESET` |
 
+## Syscall IPC (IPC-1..IPC-4 ✅, `user/ulib/uipc.h` v1 frozen)
+
+> Language note (2026-10-24): sections added from IPC-5 on
+> follow the English-artifact rule; the older sections of
+> this document predate it and are pending translation.
+> The IPC surface below is complete and authoritative for
+> the frozen `uipc.h` v1 contract (see also
+> `docs/rencana-ipc/DEVLOG-IPC4.md` §7).
+
+Mach IPC, built on the real upstream `ipc/` machinery
+through the extension-layer glue (`mach3-port/src/ext/
+ipc_glue.c`). Identity is the caller's own Mach task
+(`cur_utask`); `mach_msg_trap` is never called (it
+would take the boot thread's identity). A message is a
+24-byte header plus a flat inline body, body cap
+**4096 B** (owner decision D-IPC-3), total max 4120 B,
+wire-rounded up to a multiple of 4 with zero padding.
+COMPLEX is never set: bodies are never parsed.
+Sends never block: a send to a full queue returns
+`UIPC_EFULL` immediately.
+
+| No | Nama | Argumen | Kembali | Keterangan |
+|---|---|---|---|---|
+| 10 | `SYS_SEND` | r0=dest name, r1=buf, r2=len (total, header+body), r3=flags | `0` / `UIPC_E*` | Send a message. Flag bit 0 (`UIPC_F_SEND_ONCE`): dest is a send-once right, moved (the reply path). `hdr.reply` = a reply port in the sender's space (0 = no reply wanted); the glue turns it into a send-once right for the receiver. `hdr.id` carried verbatim |
+| 11 | `SYS_RECV` | r0=port, r1=buf, r2=max, r3=timeout_ms | total len / `UIPC_E*` | Receive. Timeout encoding (IPC-2): `0` = poll (never blocks, empty → `UIPC_EEMPTY`); `>0` = park up to that many ms (expiry → `UIPC_ETIME`); `-1` = park without a deadline (allowed, bootlogged event 17; the watchdog treats a parked daemon as exempt-but-observed). A parked waiter wakes on send to its port; re-dispatch verdict order is: queued message → peer-died `UIPC_EPEER` → deadline `UIPC_ETIME` → park again. On receive, `hdr.reply` = the send-once reply right in the receiver's space (0 = sender wanted no reply); `hdr.dest` = the port the message arrived on |
+| 12 | `SYS_RPC` | r0=dest name, r1=buf (request in, reply out, same buffer), r2=len (request length = reply budget), r3=timeout_ms | reply len / `UIPC_E*` | RPC engine (IPC-4). The wrapper allocates a fresh reply port, sets `hdr.reply`, and destroys the reply port on every return path. Server answers with `uipc_reply()` to the send-once name; a second reply on the same send-once name fails. Server death mid-RPC resolves to `UIPC_EPEER`; a reply larger than the budget returns `UIPC_E2BIG` and the message stays queued (Mach semantics) |
+| 23 | `SYS_RPC_USER` | r0=name string, r1=buf, r2=len, r3=timeout_ms | reply len / `UIPC_E*` | Registry lookup, then the `SYS_RPC` engine. A delivered notify id 71 (Mach send-once death notice) is mapped to `UIPC_EPEER`; reply ids must never be 71 |
+| 25 | `SYS_IPC_PORT` | r0=sub, r1=a1, r2=a2 | name / `0` / `UIPC_E*` | Port management. Sub-ops: `0` ALLOC_RECV → new receive port name; `1` DESTROY (a receive name destroys the port, discarding its queue); `2` SETQLIMIT (name, limit 1..16; default 5, Mach `MACH_PORT_QLIMIT_DEFAULT`; a 16-deep queue at the 4096 B cap is ~66 KB of kmsg zone per port); `3` REGISTER (name string ≤15 chars, port name) → `0`; `4` LOOKUP (name string) → send name; `5` REG_GEN (name string) → generation. Subs ≥3 take a kernel-copied name string in a1 |
+
+Registry (IPC-4): names live in the kernel (8-entry
+table), so the registry survives a registered daemon's
+death and answers lookups during its respawn window.
+A re-registration after death/respawn bumps the
+generation (fresh registration = 1); a lookup on a
+name whose owner died returns `UIPC_EDEST` — the
+registry never mints a right to a dead port (upstream
+`ipc_port_make_send()` asserts the port active).
+Reserved system names may be claimed only by the
+owning program, enforced by the kernel's own spawn
+identity of the caller slot, never by a
+caller-supplied id: `tools` (owner: qabotd,
+daemon_images index 2), `link` (unbound until C6L-5
+binds linkd; any claim refused until then). A
+non-owner claim returns `UIPC_EPERM` and has no side
+effect. An evicted dead entry re-registered later
+restarts at generation 1 (IPC-5 backlog note: C6L
+clients must treat generation as "changed since last
+lookup", not as a monotonic clock across eviction).
+
+Port lifecycle (IPC-3): when a daemon dies (clean
+exit, fault, or watchdog kill), `daemon_reclaim`
+destroys every right in the dead task's space (receive
+rights first, queues discarded) and completes parked
+waiters: a waiter on a destroyed port wakes with
+`UIPC_EPEER` (bootlog event 18 records the death).
+Teardown is surgical, not `task_terminate` (see
+DEVLOG-IPC3): task objects / `vm_map` / `pmap` still
+leak on death, bounded by the FND-3 respawn budget.
+
+Error table (`UIPC_E*`, negative returns; `-2` stays
+the dispatch's ENOSYS for unimplemented numbers and
+is deliberately never reused here): `-1` EINVAL (bad
+argument / wrong right kind), `-3` EDEST (dead port /
+no such name or right), `-4` EFULL (send: queue full,
+poll), `-5` EEMPTY (recv: queue empty, poll), `-6`
+E2BIG (too large; on recv the message stays queued),
+`-7` EBUSY (registry: live entry owned by a different
+caller, or table full of live entries), `-8` ENOMEM
+(kernel resource shortage), `-9` ENORV (registry:
+name never registered), `-10` ETIME (blocking recv:
+deadline expired with the queue still empty), `-11`
+EPARK (internal park/wake handshake, never returned
+to userspace), `-12` EPEER (blocking recv: the peer
+port died while or before the wait), `-13` EPERM
+(registry: reserved name claimed by a non-owner, or
+an unbound reserved name claimed by anyone).
+
+## Syscalls implemented but not yet backfilled here
+
+The following numbers exist in the dispatch
+(`mach3-port/src/ext/user.c` defines, verified
+2026-10-24) and are documented across their track
+plans and dev logs, but their full rows are not yet
+written into this document. Their names below are
+exactly the define names — semantics live in the
+cited tracks, not restated here:
+
+| No | Define | Track |
+|---|---|---|
+| 78 | `SYS_FACE_EXPR` | Qabot face (Q4) |
+| 79, 80 | `SYS_SPAWN`, `SYS_SPAWN_WAIT` | Q9 spawn |
+| 82–88 | `SYS_AUDIO_*` (INIT, REG, START, READ, STOP, GAIN, OVERRUN) | Audio D1–D4 |
+| 89–92 | `SYS_PL330_*` (INIT, RX, UCLEN, UCBYTE) | PL330 stage 1 |
+| 93–97 | `SYS_LFS_*` (RUNTEST, MOUNT, LIST, READ, WRITE) | B1 littlefs |
+| 98 | `SYS_BOOTSTATE` (subs 0–11) | B2/B3/B4, FND-5 |
+| 99 | `SYS_BOOTLOG` | B2 |
+| 100, 101 | `SYS_TIME_QUALITY`, `SYS_TIME_SYNC` | B3 NTP gating |
+| 102 | `SYS_GUI_START` | Boot UX |
+| 103 | `SYS_WEBUI` | ONB-1 |
+| 104 | `SYS_CRED` | B5.5 credential store |
+| 105 | `SYS_EVENT_INJECT` | Button injection (dev/test) |
+
 ## Nomor dicadangkan
 
 | Rentang | Peruntukan | Status |
 |---|---|---|
-| 10–12 | `SYS_SEND` / `SYS_RECV` / `SYS_RPC` (IPC) | belum |
-| 23 | `SYS_RPC_USER` | belum |
+| — | — | Nothing reserved: the IPC numbers (10–12, 23, 25) are implemented since IPC-1..IPC-4; see the IPC section above. Future numbers are allocated by append (principle P2). |
 
 ## Layout memori user (Fase B/C)
 

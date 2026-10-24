@@ -5,12 +5,12 @@ definition, the page that owns the topic is linked.
 
 | Term | Meaning |
 |---|---|
-| **Daemon** | A persistent userspace program in the fixed set: `face` (progid 0), `uiapp` (1), `qabotd` (2), `sh` (3). Daemons are embedded in the kernel image and launched by the kernel; they are *not* Mach IPC servers. |
+| **Daemon** | A persistent userspace program in the fixed set: `face` (progid 0), `uiapp` (1), `qabotd` (2), `sh` (3). Daemons are embedded in the kernel image and launched by the kernel. A daemon is not an IPC server by virtue of being a daemon, but daemons may serve IPC names: `qabotd` serves the registered name `tools` (IPC-4), and `linkd` (C6L-5) will serve `link`. |
 | **One-shot** | A userspace program that runs to completion: boot selftests, `ufirst`, feature probes (`u*.c`). One-shots double as the regression battery, and their PASS is the boot healthy-mark input. |
 | **Progid** | The daemon/program index used by kernel arbiters (display token, console owner, face-request ownership). `0`=face, `1`=uiapp, `2`=qabotd, `3`=sh. |
 | **Extension layer** | The hand-written product layer inside the kernel (`mach3-port/src/ext/`): syscall dispatch, cooperative scheduler, arbiters, and resident services (net stack, HTTP, littlefs, bootstate, credstore). Sits on the frozen Mach 3 core. |
-| **Net pump** | `net_pump()` — one iteration of the whole network server (RX + TCP timers + one HTTP request), called only from the scheduler's two switch points. If daemons stop yielding, the pump starves. |
-| **Cooperative scheduling** | Daemons switch only at `SYS_YIELD` and at exit. No preemption; quantum preemption (THR-3) is gated on a measured jitter need. |
+| **Net pump** | `net_pump()` — one iteration of the whole network server (RX + TCP timers + one HTTP request), called from the scheduler's switch points (yield, exit, IPC-wait prologue). If daemons stop yielding, the pump starves. |
+| **Cooperative scheduling** | Daemons switch at `SYS_YIELD`, at exit, and (since IPC-2) at a blocking `SYS_RECV` park. No preemption; quantum preemption (THR-3) is gated on a measured jitter need. |
 | **Display token** | The kernel-held single-owner right to draw and receive input events. Face holds it by default; uiapp receives it via GRANT and returns it via RELEASE. See [Display, UI & Face](display-ui-face.md). |
 | **Console owner** | The daemon that owns console input (sh, via `SYS_CONSOLE_TAKEOVER`). Reclaimed to −1 when its owner dies (FND-2). |
 | **Bootstate** | The persistent boot-resilience record (magic "BOOT") in a raw tail sector: boot/fail counts, last reason, provisioned + GUI-mode flags, update slot state. Syscall 98. |
@@ -20,7 +20,7 @@ definition, the page that owns the topic is linked.
 | **Sabotage flag** | Bootstate flags bit1: suppresses exactly one healthy mark. The test hook that proves update rollback works. |
 | **QUP1** | The signed update package format: `"QUP1" | ver | len | RSA-2048 signature | payload`. See [Updates](updates.md). |
 | **QSEC** | The credential-store file format: `"QSEC" | ver | nonce | AES-256-GCM ciphertext | tag` inside a `cfg-*` littlefs file. |
-| **Embed (daemon images)** | Userspace programs are linked *into* the kernel image at build time (`uprogs[]`); the boot partition therefore budgets kernel + all programs together (~287 KB headroom). |
+| **Embed (daemon images)** | Userspace programs are linked *into* the kernel image at build time (`uprogs[]`); the boot partition therefore budgets kernel + all programs together (headroom re-measured each track: 932,724 B at IPC-5). |
 | **TODO(HW) seam** | The standing pattern for hardware-only behaviour: a named seam in code with a simulated source on the QEMU side, so callers are testable board-less (e.g. the `psci.c` PMU/WDT seam, the simulated `SYS_POWER` source). |
 | **Simulated source** | A scriptable stand-in for a hardware fact (voltage curve, entropy, mock C6) that lets a subsystem's full stack be verified in QEMU. |
 | **Mock C6 / mock-c6.py** | The simulated ESP32-C6 peer. Today: an in-process mock (`mock_comcu.c`) behind the uartproto library. From C6L-2: a Python host peer that is the *executable spec* for the real firmware. |

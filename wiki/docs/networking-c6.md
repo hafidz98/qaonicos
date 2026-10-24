@@ -11,7 +11,7 @@ the real link layer.
 > **Key facts**
 >
 > - Guest stack: ARP/IPv4/ICMP/UDP/TCP in kernel (`netstack.c`, `tcp.c`), **single TCP connection**, static IP 10.0.2.15 under QEMU slirp — **no DHCP anywhere**; DNS lives in userspace (`ntp.c` carries its own parser).
-> - There is **no network thread**: `net_pump()` runs one server iteration from the scheduler's two switch points, so the stack advances only when daemons yield or exit.
+> - There is **no network thread**: `net_pump()` runs one server iteration from the scheduler's switch points (yield, exit, IPC-wait prologue), so the stack advances only when daemons yield, exit, or park on an IPC receive.
 > - The TCP **server** side has no syscall surface at all; syscalls 73–77 expose only the single **client** connection.
 > - The C6 link today is a **function call**: the uartproto client library calls an in-process mock co-MCU. No byte crosses a device, and there is no data-UART driver in the kernel yet (console PL011 only).
 > - FIDO private keys never cross the UART — in either direction, ever.

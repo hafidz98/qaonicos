@@ -1265,14 +1265,15 @@ user_syscall(struct arm_trap_frame *frame)
 			 *     child that must die holding it has to carry
 			 *     the holder progid. Product spawns (FAT)
 			 *     always get progid -1. */
-			extern unsigned char	uls_img[], ufault_img[],
+				extern unsigned char	uls_img[], ufault_img[],
 						ufaultd_img[], uyield_img[],
 						uhangd_img[], uspin_img[],
 						uhangc_img[], uipkpark_img[],
 						uipknd_img[],
 						uiptoolssrv_img[],
 						uipcregexit_img[],
-						uipcregfull_img[];
+						uipcregfull_img[],
+						uipcaud_img[];
 			extern unsigned int	uls_img_len, ufault_img_len,
 						ufaultd_img_len, uyield_img_len,
 						uhangd_img_len, uspin_img_len,
@@ -1280,7 +1281,8 @@ user_syscall(struct arm_trap_frame *frame)
 						uipknd_img_len,
 						uiptoolssrv_img_len,
 						uipcregexit_img_len,
-						uipcregfull_img_len;
+						uipcregfull_img_len,
+						uipcaud_img_len;
 			static const struct {
 				const char	*name;
 				unsigned char	*img;
@@ -1319,6 +1321,10 @@ user_syscall(struct arm_trap_frame *frame)
 				  &uipcregexit_img_len, -1 },
 				{ "embed:uipcregfull", uipcregfull_img,
 				  &uipcregfull_img_len, -1 },
+				/* IPC-5: AUD-rate queue sizing probe
+				 * (see docs/rencana-ipc/DEVLOG-IPC5). */
+				{ "embed:uipcaud", uipcaud_img,
+				  &uipcaud_img_len, -1 },
 			};
 			unsigned int hi, ei;
 			int matched = 0;

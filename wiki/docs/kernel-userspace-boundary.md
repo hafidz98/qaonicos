@@ -9,11 +9,27 @@ planned work will land.
 
 > **Key facts**
 >
-> - Mach 3 is kept for **VM only**: real tasks, real PL0 isolation; Mach threads are created but never scheduled, and Mach IPC is unused in the product path.
-> - Everything product-shaped in the kernel sits in the **extension layer** (`mach3-port/src/ext/`, centred on the 2,270-line `user.c`).
-> - "IPC" in QaonicOS means **shared kernel globals behind a syscall surface** (display token, web-shell bridge, bootstate record) — there is no message passing.
-> - The ABI is **poll-shaped**: no blocking syscalls, by design.
-> - Consequence that drives everything: a userspace fault kills one program; a kernel-resident fault is a kernel fault — and every resident also spends the ~287 KB boot-partition headroom.
+> - Mach 3 is kept for **VM and, since the IPC track
+>   (IPC-1..IPC-5), message passing**: real tasks, real
+>   PL0 isolation; Mach threads are created but never
+>   scheduled. IPC syscalls 10/11/12/23/25 are live
+>   (registry + RPC, `uipc.h` v1 frozen).
+> - Everything product-shaped in the kernel sits in the
+>   **extension layer** (`mach3-port/src/ext/`,
+>   centred on the 3,475-line `user.c` (at IPC-5)).
+> - "IPC" in QaonicOS now means **two mechanisms**:
+>   real Mach message passing (the second, sanctioned
+>   mechanism) *and* the older per-service pattern of
+>   shared kernel globals behind a syscall surface
+>   (display token, web-shell bridge, bootstate
+>   record), which remains the mechanism for every
+>   service that already uses it.
+> - The ABI is **poll-shaped, with one sanctioned
+>   blocking form**: blocking `SYS_RECV` (IPC-2,
+>   owner decision D-IPC-1) parks a daemon on an empty
+>   port with a mandatory deadline, as the scheduler's
+>   third switch point.
+> - Consequence that drives everything: a userspace fault kills one program; a kernel-resident fault is a kernel fault — and every resident also spends boot-partition headroom (re-measured each track; see the IPC-5 close-out log for the current figure).
 
 ## Placement rules R1–R14 (digest)
 
@@ -43,7 +59,7 @@ planned work will land.
 | R10 | **Atomicity shape** — if correctness needs atomic check-and-act across programs, the kernel may hold the *state* (only the state); policy stays in userspace. |
 | R11 | **Blast radius** — between equal placements, choose the one whose worst bug is a dead program, not a dead device. |
 | R12 | **QEMU testability** — a kernel resident not exercisable in QEMU must ship with a simulated source or a one-shot harness. |
-| R13 | **The image budget** — every resident spends the shared ~287 KB headroom; size is an architectural argument. |
+| R13 | **The image budget** — every resident spends the shared boot-partition headroom (re-measured each track: 932,724 B at IPC-5); size is an architectural argument. |
 | R14 | **Kernel admission rule** — a new kernel resident's plan must state: (a) which of R1–R5 requires it; (b) why a syscall surface over a userspace owner fails; (c) the untrusted-input surface vs R7; (d) its QEMU test story vs R12; (e) its size vs R13. Weak answers ⇒ the default is userspace. |
 
 ## Verdicts on today's kernel residents

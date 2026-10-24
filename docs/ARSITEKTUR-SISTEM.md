@@ -102,7 +102,8 @@ Status: **built** (runs in QEMU today) · **draft**
 | Display arbiter + event queue | `user.c`, syscalls 60–68 | built | one token; face default holder; injection (105) for QEMU/tests |
 | Console arbiter | `user.c` | built | SYS_CONSOLE_TAKEOVER; sh owns in dev mode |
 | Block layer + FAT32 (`/sd`) | `blk.c`, `fat32.c` | built | QEMU virtio-blk; NAND/SFC driver is the hardware step |
-| littlefs (`/data`) | `lfs_port.c` + vendored lfs | built | RAM backend in QEMU (FND-4 makes it persistent); NAND region = blocks 320–999 on HW |
+| littlefs (`/data`) | `lfs_port.c` + vendored lfs | built | Persistent blk backend in QEMU since FND-4 (tail region); NAND region = blocks 320–999 on HW |
+| Mach IPC (registry + RPC) | `ipc_glue.c`, syscalls 10/11/12/23/25 | built (IPC-1..5) | Inline cap 4096 B, default qlimit 5, max 16; registry 8 entries + generations; reserved names `tools` (qabotd), `link` (C6L-5); `uipc.h` v1 frozen; blocking recv = third switch point |
 | Network stack (ARP/IP/UDP/TCP) | `netstack.c`, `tcp.c` | built | single-connection TCP; pumped from scheduler switch points |
 | HTTP server + web UI + dashboard | `http.c`, `webui.c` | built | `/` + `/metrics` public; settings + web shell PIN/session-gated (103) |
 | Boot resilience | `bootstate.c` | built | state sector + 16-record bootlog ring; fail_count ≥ 3 → safe mode |
@@ -526,14 +527,17 @@ flow above silently assumes):
 
 ## 8. Evolution direction
 
-**Committed order** (owner, 2026-10-23): FND-1..5 →
-C6L-1..5 → UI-1..6. **Proposed, unscheduled**: SOC-1..6,
-PWR-1..4, THR-1..5. What each changes *architecturally*:
+**Committed order** (owner, 2026-10-23; IPC inserted
+2026-10-24 by owner decision D-ARCH-4): FND-1..5 →
+IPC-1..5 → C6L-1..5 → UI-1..6. **Proposed,
+unscheduled**: SOC-1..6, PWR-1..4, THR-1..5. What each
+changes *architecturally*:
 
 | Track | Architectural delta |
 |---|---|
 | FND | Completes the resilience story at daemon granularity (reclaim, supervision) and gives updates a real delivery path; littlefs becomes persistent in QEMU, closing the biggest test/reality gap |
-| C6L | Turns a function call into a link layer with one owner (linkd); freezes the wire; creates the first daemon-to-daemon hand-off (TOOL.DISPATCH) — and with it, pressure on open question Q-A3 (IPC) |
+| IPC | Adds the second, sanctioned mechanism: real Mach message passing (syscalls 10/11/12/23/25, kernel registry + RPC, `uipc.h` v1 frozen) beside the per-service syscall surfaces; blocking `SYS_RECV` becomes the scheduler's third switch point (D-IPC-1); the first daemon-to-daemon hand-offs (registry names `tools`, `link`) |
+| C6L | Turns a function call into a link layer with one owner (linkd); freezes the wire; consumes IPC directly (linkd is an IPC server from its first commit; TOOL.DISPATCH becomes an IPC RPC to `tools`) — Q-A3 is answered, not pending |
 | UI | LVGL inside uiapp only; the face stays hand-rolled. UI-1's size measurement feeds Q-A2 (image delivery) |
 | SOC | Platform plumbing first (CRU/pinmux/GIC tables), then entropy + crypto services, storage/USB, RGA2, and — only by explicit owner go — the camera pipeline |
 | PWR | Adds the power ladder and the SYS_POWER surface; policy in userspace, sensing behind a swappable source |
@@ -570,3 +574,17 @@ TOOL.DISPATCH as first consumers. The §1 statement
 that IPC is not the system's service mechanism is
 superseded for that track; per-service syscall surfaces
 remain the mechanism everywhere else.
+
+**Close-out 2026-10-24 (IPC-5):** the IPC track is
+DONE (IPC-1..IPC-5, see `docs/rencana-ipc/DEVLOG-IPC5.md`).
+What Q-A3's answer became in code: real Mach message
+passing via `mach3-port/src/ext/ipc_glue.c`, syscalls
+10/11/12/23/25, an 8-entry kernel registry with
+generations and reserved names (`tools` served by
+qabotd, `link` reserved for linkd), RPC over send-once
+reply ports, inline cap 4096 B, default qlimit 5
+(max 16), and blocking `SYS_RECV` as the scheduler's
+third switch point. The v1 contract is frozen in
+`user/ulib/uipc.h`; C6L builds against it. The
+remaining open questions are Q-A1 (answered: httpd
+after C6L), Q-A2, Q-A4, Q-A5, Q-A6, Q-A7.

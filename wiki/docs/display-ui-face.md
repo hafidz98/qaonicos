@@ -14,7 +14,7 @@ silicon offers.
 > - **Face = procedural C renderer**, drawn directly to the framebuffer (not PNG/SVG assets); concept reference RoboEyes (GPL-3.0 — concept reimplemented, code never copied).
 > - **Input is physical buttons only** (EV queue); touch is a long-term plan. In QEMU, events are injected via syscall 105.
 > - **LVGL v9.5 (MIT) is adopted — inside uiapp only.** The face stays hand-rolled. Qt/QML was rejected (no platform under a custom kernel; licensing/target mismatch).
-> - **The gate is size:** daemon images are embedded in the kernel image — 3,907,484 B measured against the 4,194,304 B boot partition leaves **~287 KB headroom**; an LVGL uiapp is estimated at 250–400 KB. UI-1 is a measure-first go/no-go.
+> - **The gate is size:** daemon images are embedded in the kernel image — the boot-partition headroom is re-measured each track (932,724 B at IPC-5; the old ~287 KB figure counted bss and was retracted at IPC-1); an LVGL uiapp is estimated at 250–400 KB. UI-1 is a measure-first go/no-go.
 
 ## Display arbitration
 
@@ -79,7 +79,7 @@ QEMU's virtio-gpu hides this completely.
 
 | Phase | Content |
 |---|---|
-| UI-1 | Vendor LVGL + port + **measure** — the go/no-go against the ~287 KB headroom |
+| UI-1 | Vendor LVGL + port + **measure** — the go/no-go against the re-measured boot-partition headroom (932,724 B at IPC-5) |
 | UI-2 | Shell + status bar + menu proof screen |
 | UI-3 | Settings subtree (incl. the Wi-Fi password-entry decision) |
 | UI-4 | Monitor + Power screens |
