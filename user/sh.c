@@ -208,7 +208,7 @@ bi_help(void)
 	sh_puts("  setup [name <x>|tz <x>|pin <x>|done|reset]  first-boot setup\n");
 	sh_puts("  gui                   start the GUI dashboard\n");
 	sh_puts("  key <up|down|left|right|ok|back|menu>  inject a button event (dev/test)\n");
-	sh_puts("  update [stage <ver>|cancel|sabotage]  A/B updates\n");
+	sh_puts("  update [stage <ver>|stagepkg <path>|cancel|sabotage]  A/B updates\n");
 	sh_puts("  reboot          software reset (bootstate reason 4)\n");
 	sh_puts("  poweroff        power off (bootstate reason 4)\n");
 	sh_puts("  run <path>      run program (Q9 spawn)\n");
@@ -729,11 +729,130 @@ bi_poweroff(void)
 		sh_puts("poweroff: failed (platform refused)\n");
 }
 
+/* svc 98 with a buffer argument (the sub 9/10 shape), cf.
+ * uupdsig's sys_bs_buf. */
+static int
+sh_bootstate_buf(unsigned sub, const void *buf, unsigned len)
+{
+	register unsigned _r0 __asm__("r0") = sub;
+	register unsigned _r1 __asm__("r1") = (unsigned)buf;
+	register unsigned _r2 __asm__("r2") = len;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #98\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret) : "r" (_r0), "r" (_r1), "r" (_r2)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+static int
+sh_is_sd(const char *p)
+{
+	return p[0] == '/' && p[1] == 's' && p[2] == 'd' &&
+	    (p[3] == 0 || p[3] == '/');
+}
+
+#define	SH_PKG_MAX	8192u	/* kernel package cap (syscall 98/9) */
+
+/* Staging buffer: one byte over the cap so an oversized file
+ * is detectable -- both file readers return at most the
+ * requested count, so asking for cap+1 separates "exactly at
+ * the cap" (legal) from "over the cap" (reject in the shell;
+ * a truncated package must never be staged). */
+static unsigned char	sh_pkgbuf[SH_PKG_MAX + 1u];
+
+/* update stagepkg <path>: FND-5 update delivery path.
+ *
+ * Reads a signed QUP1 package FILE from /sd (FAT) or /data
+ * (littlefs) and hands the bytes to the existing kernel
+ * verify+stage path (syscall 98 sub 9), which verifies the
+ * RSA-2048 signature BEFORE staging: -3 bad signature or
+ * format, -2 downgrade, -1 busy, 0 staged. The shell adds
+ * no format knowledge of its own (ARSITEKTUR.md 4.5: reading
+ * the file is a userspace act; verify+stage is the kernel
+ * invariant) and never stages a file it could not read in
+ * full: the whole-file readers + the cap+1 probe make
+ * missing/empty/oversized files shell-side errors. */
+static void
+bi_update_stagepkg(void)
+{
+	const char	*path;
+	unsigned	info[4];
+	int		n, r;
+
+	if (sh_argc < 3) {
+		sh_puts("update: usage: update stagepkg "
+		    "</sd/FILE.BIN|/data/name>\n");
+		return;
+	}
+	path = sh_argv[2];
+	if (sh_is_data(path) && path[5] == '/') {
+		if (sh_lfs_mount() != 0) {
+			sh_puts("update: stagepkg: /data mount failed\n");
+			return;
+		}
+		n = sh_lfs_read(path + 6, (char *)sh_pkgbuf,
+		    sizeof(sh_pkgbuf));
+	} else if (sh_is_sd(path) && path[3] == '/') {
+		n = sys_fat_read(path, sh_pkgbuf, sizeof(sh_pkgbuf));
+	} else {
+		sh_puts("update: usage: update stagepkg "
+		    "</sd/FILE.BIN|/data/name>\n");
+		return;
+	}
+	if (n < 0) {
+		sh_puts("update: stagepkg: cannot read '");
+		sh_puts(path);
+		sh_puts("'\n");
+		return;
+	}
+	if (n == 0) {
+		sh_puts("update: stagepkg: '");
+		sh_puts(path);
+		sh_puts("' is empty\n");
+		return;
+	}
+	if ((unsigned)n > SH_PKG_MAX) {
+		sh_puts("update: stagepkg: '");
+		sh_puts(path);
+		sh_puts("' too large (> 8192 bytes)\n");
+		return;
+	}
+	r = sh_bootstate_buf(9u, sh_pkgbuf, (unsigned)n);
+	if (r == -3) {
+		sh_puts("update: rejected (bad signature or format)\n");
+		return;
+	}
+	if (r == -2) {
+		sh_puts("update: rejected (downgrade)\n");
+		return;
+	}
+	if (r != 0) {
+		sh_puts("update: stagepkg failed (busy)\n");
+		return;
+	}
+	sh_puts("update: stagepkg: ");
+	sh_putu((unsigned)n);
+	sh_puts(" bytes, version ");
+	if (sh_bootstate(6u, info) == 0 && info[2] == 1u)
+		sh_putu(info[3]);
+	else
+		sh_puts("?");
+	sh_puts("\n");
+	sh_puts("update: staged (reboot to trial)\n");
+}
+
 static void
 bi_update(void)
 {
 	unsigned info[4];
 
+	if (sh_argc > 1 && sh_streq(sh_argv[1], "stagepkg")) {
+		bi_update_stagepkg();
+		return;
+	}
 	if (sh_argc > 2 && sh_streq(sh_argv[1], "stage")) {
 		unsigned v = sh_atou(sh_argv[2]);
 
