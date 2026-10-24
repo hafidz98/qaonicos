@@ -44,9 +44,14 @@ repo-wide rule set.
 ## Division of labour (what goes where)
 
 **To the PC agent:**
-- Hardware-phase work (it sits next to the board; the lead
-  supervises flash/serial sessions over the Tailscale SSH
-  bridge — see `~/workspace/your_files/hw-bridge-setup/`).
+- Hardware-phase work (it sits next to the board; the PC
+  agent executes flash/serial steps locally under its Issue
+  spec and attaches the logs/evidence to the PR — the lead
+  reviews asynchronously. **No Tailscale/SSH bridge**
+  (parked 2026-10-24, owner security call): the lead has no
+  remote access to the PC. A live supervised session is an
+  optional, ephemeral exception the owner enables per
+  session and turns off afterwards).
 - ESP32-C6 firmware (ESP-IDF is native on the PC).
 - Windows-side tooling (e.g. the HW bridge runner).
 - Parallel tracks whose files do not collide with the VM
