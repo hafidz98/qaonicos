@@ -121,6 +121,17 @@ struct uipc_msg {
 				 * when a blocking call was parked and
 				 * then woken; uipc_recv() loops on it
 				 * and never returns it to callers */
+#define UIPC_EPEER	(-12)	/* IPC-3: blocking recv: the peer
+				 * port died while (or before) the
+				 * wait — distinct from UIPC_ETIME.
+				 * A wait is peer-annotated iff the
+				 * caller sent a reply-carrying
+				 * request and then parks on that
+				 * request's reply port; a queued
+				 * message still beats it (poll
+				 * first), and the annotation is
+				 * released at wait resolution or
+				 * at the waiter's death. */
 
 /* Port management. */
 int	uipc_port_alloc(void);		/* -> name or UIPC_E* */

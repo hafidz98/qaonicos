@@ -468,6 +468,24 @@ struct daemon {
 	void		*ipc_wait_port;
 	unsigned	ipc_wait_deadline;
 	unsigned char	ipc_wait_active;
+	/* IPC-3: peer annotation. When this daemon sends a
+	 * reply-carrying COPY_SEND, the dispatch records
+	 * the pending peer here: the reply port NAME in
+	 * this daemon's space plus a held reference on the
+	 * destination port OBJECT. At park-open the
+	 * pending peer is adopted into the wait record
+	 * ONLY if the parked port name is exactly that
+	 * reply name (the RPC shape); a second request
+	 * replaces the pending peer (old ref released).
+	 * ipc_wait_peer_died is set by the reclaim scan
+	 * when the annotated peer port is destroyed; the
+	 * re-dispatch verdict is then UIPC_EPEER. The
+	 * wait-record ref and the pending ref are never
+	 * both held for the same wait (transfer). */
+	void		*ipc_peer_next_obj;
+	unsigned	ipc_peer_next_reply;
+	void		*ipc_wait_peer_obj;
+	unsigned char	ipc_wait_peer_died;
 };
 
 static struct daemon	daemons[NDAEMON];
@@ -1199,6 +1217,13 @@ user_syscall(struct arm_trap_frame *frame)
 			 *     embed:uipkpark (65 s deadline park)
 			 *     and embed:uipknd (no-deadline park)
 			 *     are IPC-2's park probes.
+			 *   embed:uipcdsetup / embed:uipcdclean /
+			 *     embed:uipcdfault / embed:uipcdwedge /
+			 *     embed:uipcdrain  IPC-3 lifecycle legs
+			 *     (driven from sh via the test-only
+			 *     `ipc` builtins: a spawn child cannot
+			 *     spawn, so no driver program can
+			 *     parent them).
 			 *   embed:ufault  FND-2: takes the console, faults.
 			 *   embed:ufaultd FND-2: becomes the display
 			 *     holder, then faults. Its progid override
@@ -1213,14 +1238,20 @@ user_syscall(struct arm_trap_frame *frame)
 						uhangc_img[], uipcsrv_img[],
 						uipccli_img[], uipksrv_img[],
 						uipkcli_img[], uipkpark_img[],
-						uipknd_img[];
+						uipknd_img[],
+						uipcdsetup_img[], uipcdclean_img[],
+						uipcdfault_img[], uipcdwedge_img[],
+						uipcdrain_img[];
 			extern unsigned int	uls_img_len, ufault_img_len,
 						ufaultd_img_len, uyield_img_len,
 						uhangd_img_len, uspin_img_len,
 						uhangc_img_len, uipcsrv_img_len,
 						uipccli_img_len, uipksrv_img_len,
 						uipkcli_img_len, uipkpark_img_len,
-						uipknd_img_len;
+						uipknd_img_len,
+						uipcdsetup_img_len, uipcdclean_img_len,
+						uipcdfault_img_len, uipcdwedge_img_len,
+						uipcdrain_img_len;
 			static const struct {
 				const char	*name;
 				unsigned char	*img;
@@ -1260,6 +1291,17 @@ user_syscall(struct arm_trap_frame *frame)
 				  &uipkpark_img_len, -1 },
 				{ "embed:uipknd", uipknd_img,
 				  &uipknd_img_len, -1 },
+				/* IPC-3: lifecycle legs (see docs/rencana-ipc). */
+				{ "embed:uipcdsetup", uipcdsetup_img,
+				  &uipcdsetup_img_len, -1 },
+				{ "embed:uipcdclean", uipcdclean_img,
+				  &uipcdclean_img_len, -1 },
+				{ "embed:uipcdfault", uipcdfault_img,
+				  &uipcdfault_img_len, -1 },
+				{ "embed:uipcdwedge", uipcdwedge_img,
+				  &uipcdwedge_img_len, -1 },
+				{ "embed:uipcdrain", uipcdrain_img,
+				  &uipcdrain_img_len, -1 },
 			};
 			unsigned int hi, ei;
 			int matched = 0;
@@ -1322,6 +1364,17 @@ user_syscall(struct arm_trap_frame *frame)
 		child->wd_hangs = 0;
 		child->wd_respawns = 0;
 		child->wd_imgidx = -1;
+		/* IPC-3: a fresh slot starts with no peer
+		 * state (defense in depth: reclaim clearing
+		 * covers the funnel, setup clearing covers
+		 * any future path that skips reclaim). */
+		child->ipc_wait_active = 0;
+		child->ipc_wait_port = (void *)0;
+		child->ipc_wait_deadline = 0u;
+		child->ipc_peer_next_obj = (void *)0;
+		child->ipc_peer_next_reply = 0u;
+		child->ipc_wait_peer_obj = (void *)0;
+		child->ipc_wait_peer_died = 0;
 
 		spawn_parent = sched_cur;
 		spawn_done = 0;
@@ -1657,15 +1710,46 @@ user_syscall(struct arm_trap_frame *frame)
 		return (unsigned int)lfs_port_write(kpath,
 		    (const unsigned char *)a1, a2);
 	}
-	case SYS_SEND:
+	case SYS_SEND: {
 		/* IPC-1: a0=dest name a1=buf a2=len a3=flags.
 		 * user_range_ok is window-based, so an
 		 * oversize probe length still validates here
-		 * and the glue answers its documented -6. */
+		 * and the glue answers its documented -6.
+		 * IPC-3: on a successful reply-carrying
+		 * COPY_SEND (not a send-once reply), the
+		 * pending peer is (re)set: the old ref is
+		 * released first, a ref on the destination
+		 * object is taken and stored. A failed
+		 * send stages nothing and touches nothing;
+		 * a no-reply send leaves a pending peer
+		 * untouched for a later park on its reply
+		 * port. v1 tracks only the most recent
+		 * outstanding request: parking on an older
+		 * reply port after a newer request is
+		 * unannotated (its deadline still bounds
+		 * it). */
+		void *dest_obj = (void *)0;
+		unsigned int reply = 0u, rc;
+
 		if (cur_utask == TASK_NULL || !user_range_ok(a1, a2))
 			return (unsigned int)-1;
-		return ipc_glue_send(cur_utask, a0,
-				     (const void *)a1, a2, a3);
+		rc = ipc_glue_send_ex(cur_utask, a0,
+				      (const void *)a1, a2, a3,
+				      &dest_obj, &reply);
+		if (rc == 0u && sched_active && sched_cur >= 0 &&
+		    !(a3 & UIPC_F_SEND_ONCE) && reply != 0u &&
+		    dest_obj != (void *)0) {
+			struct daemon *sd = &daemons[sched_cur];
+
+			if (sd->ipc_peer_next_obj != (void *)0)
+				ipc_glue_release_ref(
+				    sd->ipc_peer_next_obj);
+			ipc_glue_take_ref(dest_obj);
+			sd->ipc_peer_next_obj = dest_obj;
+			sd->ipc_peer_next_reply = reply;
+		}
+		return rc;
+	}
 	case SYS_RECV:
 		/* IPC-1: a0=port name a1=buf a2=max, a3=0
 		 * (poll). IPC-2: a3 != 0 is the blocking
@@ -1776,8 +1860,13 @@ sched_activate(struct daemon *d)
  *  (3) never, for the no-deadline (-1) form -- allowed,
  *      but bootlogged (event 17) so a parked-forever
  *      daemon is visible in post-mortem, per D-IPC-1's
- *      "never an *unobserved* infinite park". Daemon
- *      death as a completion is IPC-3's lifecycle work.
+ *      "never an *unobserved* infinite park". IPC-3
+ *      closes the remaining strand: a wait annotated
+ *      with a peer (see the IPC-3 block below) also
+ *      completes when that peer's port is destroyed
+ *      (daemon death, or a live owner's DESTROY),
+ *      with UIPC_EPEER -- so no park is ever stranded
+ *      by a dead peer, with or without a deadline.
  * Wakes only flip state + stamp wd_last_progress
  * (D-IPC-1: the wake restarts the progress clock, the
  * Q9 spawn-wake precedent); the wait record stays open
@@ -1839,6 +1928,80 @@ sched_ipc_wake_port(void *port_obj)
 		if (daemons[i].ipc_wait_active &&
 		    daemons[i].ipc_wait_port == port_obj)
 			ipc_wait_wake_idx(i);
+}
+
+/*
+ * IPC-3: peer annotation + peer-death wake.
+ *
+ * A waiter parks on its OWN receive port, so "the
+ * port whose owner dies" can only mean the RPC
+ * counterparty: a client parked on its reply port
+ * waiting for a server that dies. Plain own-port
+ * waits need no completion (the waiter's own death
+ * is impossible while it waits -- it is not running).
+ * The annotation is therefore (reply port NAME,
+ * peer port OBJECT + held ref), recorded at send
+ * time and adopted at park-open only for the exact
+ * RPC shape (see sys_recv_block). The held ref is
+ * what makes every dereference below safe: the
+ * object cannot be freed while the waiter holds it
+ * (destruction clears ACTIVE but does not free
+ * while refs remain).
+ *
+ * Refs are released at wait resolution (message,
+ * deadline, peer-died), at pending replacement, and
+ * at slot cleanup in daemon_reclaim -- all three
+ * paths must hold or refs leak.
+ */
+static void
+ipc_peer_release(struct daemon *d)
+{
+	if (d->ipc_wait_peer_obj != (void *)0) {
+		ipc_glue_release_ref(d->ipc_wait_peer_obj);
+		d->ipc_wait_peer_obj = (void *)0;
+	}
+	d->ipc_wait_peer_died = 0;
+}
+
+static void
+ipc_peer_clear_slot(struct daemon *d)
+{
+	if (d->ipc_peer_next_obj != (void *)0) {
+		ipc_glue_release_ref(d->ipc_peer_next_obj);
+		d->ipc_peer_next_obj = (void *)0;
+	}
+	d->ipc_peer_next_reply = 0u;
+	ipc_peer_release(d);
+	d->ipc_wait_active = 0;
+	d->ipc_wait_port = (void *)0;
+	d->ipc_wait_deadline = 0u;
+}
+
+/* Called by the glue (ipc_glue.c) after a port OBJECT
+ * has been destroyed (teardown pass 1, or a live
+ * owner's DESTROY): every waiter peer-annotated with
+ * that object is woken with the peer-died flag. The
+ * verdict itself is decided in the waiter's own
+ * context on re-dispatch (peer-died beats deadline,
+ * queued message beats both -- see sys_recv_block),
+ * so no copyout ever happens in a waker's context
+ * (the IPC-2 rule, preserved). */
+void
+sched_ipc_wake_peer(void *port_obj)
+{
+	unsigned int i;
+
+	if (port_obj == (void *)0)
+		return;
+	for (i = 0; i < NDAEMON; i++) {
+		struct daemon *d = &daemons[i];
+
+		if (d->ipc_wait_active &&
+		    d->ipc_wait_peer_obj == port_obj) {
+			d->ipc_wait_peer_died = 1;
+			ipc_wait_wake_idx(i);
+		}
+	}
 }
 
 static void
@@ -1981,24 +2144,64 @@ sys_recv_block(struct arm_trap_frame *frame, unsigned int port,
 		unsigned int now;
 
 		if (rc != (unsigned int)UIPC_EEMPTY) {
+			/* Message delivered (or a hard error):
+			 * the wait resolves; the peer ref ends
+			 * with it. Poll-first is what makes a
+			 * message racing a wake beat the wake. */
+			ipc_peer_release(d);
 			d->ipc_wait_active = 0;
 			return rc;
 		}
 		now = arm_timer_ticks();
 		if (d->ipc_wait_active && d->ipc_wait_port == obj) {
 			/* Re-dispatch of an open wait. Still
-			 * empty: an expired deadline is the
-			 * verdict; otherwise park again under
-			 * the same record. */
+			 * empty: verdict order is peer-died
+			 * first (if both happened, EPEER is the
+			 * truthful verdict -- the wait can never
+			 * succeed), then deadline, else park
+			 * again under the same record. */
+			if (d->ipc_wait_peer_died) {
+				ipc_peer_release(d);
+				d->ipc_wait_active = 0;
+				return (unsigned int)UIPC_EPEER;
+			}
 			if (d->ipc_wait_deadline != 0u &&
 			    now >= d->ipc_wait_deadline) {
+				ipc_peer_release(d);
 				d->ipc_wait_active = 0;
 				return (unsigned int)UIPC_ETIME;
 			}
 		} else {
-			/* Open the wait record. */
+			/* Open the wait record. Adopt the
+			 * pending peer ONLY for the exact RPC
+			 * shape: the parked port name is the
+			 * pending reply name (generation bits
+			 * included -- a stale name never
+			 * matches). Parking on any other port
+			 * leaves the pending peer untouched
+			 * for a later park on the reply port.
+			 * Park-open liveness: if the peer is
+			 * already dead, return EPEER without
+			 * parking -- otherwise a no-deadline
+			 * wait on a dead peer would strand
+			 * forever. */
 			d->ipc_wait_active = 1;
 			d->ipc_wait_port = obj;
+			d->ipc_wait_peer_died = 0;
+			if (d->ipc_peer_next_obj != (void *)0 &&
+			    port == d->ipc_peer_next_reply) {
+				d->ipc_wait_peer_obj =
+				    d->ipc_peer_next_obj;
+				d->ipc_peer_next_obj = (void *)0;
+				d->ipc_peer_next_reply = 0u;
+				if (!ipc_glue_port_alive(
+					d->ipc_wait_peer_obj)) {
+					ipc_peer_release(d);
+					d->ipc_wait_active = 0;
+					return (unsigned int)UIPC_EPEER;
+				}
+			} else
+				d->ipc_wait_peer_obj = (void *)0;
 			if (timeout_ms < 0) {
 				d->ipc_wait_deadline = 0u;
 				ipc_park_log_nodeadline(d);
@@ -2074,10 +2277,98 @@ sched_yield_switch(struct arm_trap_frame *f)
  * ownership are index-keyed. Full state inventory:
  * docs/rencana-fondasi-tanpa-board/DEVLOG-FND2.md.
  */
+#define	IPC_EV_DEAD_NOTE	18u	/* bootlog: ipc port teardown */
+
+static void
+ipc_dead_note(struct daemon *d, unsigned int ports,
+	      unsigned int msgs)
+{
+	char note[40];
+	unsigned int i = 0, j;
+	const char *pre = "ipc dead ";
+
+	for (j = 0; pre[j] && i < sizeof(note) - 1u; j++)
+		note[i++] = pre[j];
+	for (j = 0; d->name[j] && i < sizeof(note) - 1u; j++)
+		note[i++] = d->name[j];
+	if (i < sizeof(note) - 1u)
+		note[i++] = ' ';
+	/* Ports, decimal (no %u into a note string). */
+	{
+		char rev[10];
+		unsigned int n = 0u, v = ports;
+
+		do {
+			rev[n++] = (char)('0' + (int)(v % 10u));
+			v /= 10u;
+		} while (v != 0u && n < sizeof(rev));
+		while (n > 0u && i < sizeof(note) - 1u)
+			note[i++] = rev[--n];
+	}
+	if (i < sizeof(note) - 2u) {
+		note[i++] = 'p';
+		note[i++] = ' ';
+	}
+	{
+		char rev[10];
+		unsigned int n = 0u, v = msgs;
+
+		do {
+			rev[n++] = (char)('0' + (int)(v % 10u));
+			v /= 10u;
+		} while (v != 0u && n < sizeof(rev));
+		while (n > 0u && i < sizeof(note) - 1u)
+			note[i++] = rev[--n];
+	}
+	if (i < sizeof(note) - 1u)
+		note[i++] = 'm';
+	note[i] = 0;
+	bootstate_log_event(IPC_EV_DEAD_NOTE,
+			    arm_timer_ticks() * 10u, note);
+}
+
 static void
 daemon_reclaim(int idx)
 {
 	struct daemon *d = &daemons[idx];
+
+	/* IPC-3: lifecycle. FIRST, before anything that
+	 * could wake waiters: the dying daemon's own
+	 * peer refs and wait record are released and
+	 * cleared, so it cannot be woken by its own
+	 * port deaths (the woken-but-not-redispatched
+	 * case: state 1 with the record still open).
+	 * THEN the space is torn down: every receive
+	 * port destroyed (queues discarded, other
+	 * waiters annotated with those ports woken
+	 * peer-died), then every remaining right.
+	 * Reclaim runs BEFORE the slot is marked dead
+	 * in both sched_exit_switch and wd_supervise,
+	 * and BEFORE wd_respawn replaces d->task, so
+	 * teardown always sees the dying task and the
+	 * waiter completion lands before/while the
+	 * respawn lands. A respawned incarnation gets
+	 * a fresh task (hence a fresh space) from
+	 * setup_uprog_task, so it starts with a clean
+	 * port table by construction. The rendezvous
+	 * table is deliberately NOT touched: slots are
+	 * owned by the table, not the publisher (a
+	 * publish-then-exit flow requires slot survival
+	 * across the publisher's death); the
+	 * respawn-republish case is IPC-4's registry
+	 * problem. */
+	{
+		unsigned int ports = 0u, msgs = 0u;
+
+		ipc_peer_clear_slot(d);
+		if (d->task != TASK_NULL)
+			ipc_glue_teardown(d->task, &ports, &msgs);
+		if (ports != 0u || msgs != 0u) {
+			ipc_dead_note(d, ports, msgs);
+			printf("reclaim: '%s' ipc teardown %up "
+			    "%um\n", d->name, ports, msgs);
+		}
+	}
 
 	/* Display token. */
 	if (d->progid >= 0 && d->progid == dpy_holder) {

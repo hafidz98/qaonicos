@@ -26,6 +26,7 @@
 #define UIPC_ENORV	(-9)
 #define UIPC_ETIME	(-10)	/* IPC-2: blocking deadline expiry */
 #define UIPC_EPARK	(-11)	/* IPC-2: internal park/wake code */
+#define UIPC_EPEER	(-12)	/* IPC-3: RPC peer died while waiting */
 
 #define UIPC_F_SEND_ONCE	1u
 
@@ -64,5 +65,38 @@ extern unsigned int ipc_glue_recv_ex(task_t who, unsigned int port,
 extern unsigned int ipc_glue_port(task_t who, unsigned int sub,
 				  const char *kname, unsigned int x,
 				  unsigned int y);
+/* IPC-3: send variant that also reports the destination
+ * port OBJECT (an ipc_port_t, opaque void *) and the
+ * reply port NAME from the message header, on success
+ * only (NULL out-params are ignored). The dispatch
+ * uses them for the peer annotation: a reply-carrying
+ * COPY_SEND makes the sender's next park on that reply
+ * port a peer-annotated wait. The object is reported
+ * WITHOUT a reference; the dispatch takes one when it
+ * stores the annotation (same trap context, so nothing
+ * can free the object in between). */
+extern unsigned int ipc_glue_send_ex(task_t who, unsigned int dest,
+				     const void *ubuf, unsigned int len,
+				     unsigned int flags,
+				     void **dest_obj_out,
+				     unsigned int *reply_out);
+/* IPC-3: IO_BITS_ACTIVE test on a pinned object (a
+ * destroyed port has the bit cleared but is not freed
+ * while a reference is held, so this is safe on any
+ * object the caller holds a ref on). */
+extern int ipc_glue_port_alive(void *obj);
+extern void ipc_glue_take_ref(void *obj);
+extern void ipc_glue_release_ref(void *obj);
+/* IPC-3: destroy every right in a dead task's space:
+ * receive ports first (their queues are discarded by
+ * upstream port destruction, and parked RPC waiters
+ * annotated with the port are woken peer-died), then
+ * all remaining entries. Reports the number of rights
+ * destroyed and queued messages discarded (NULL
+ * out-params ignored). The task object, its vm_map
+ * and its pmap are NOT freed: that is the pre-existing
+ * task leak (see DEVLOG-IPC3), unchanged by IPC-3. */
+extern void ipc_glue_teardown(task_t who, unsigned int *ports_out,
+			      unsigned int *msgs_out);
 
 #endif /* QAON_IPC_GLUE_H */
