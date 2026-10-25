@@ -65,11 +65,87 @@ lv_lfs_read(const char *path, char *buf, unsigned max)
 static uint8_t draw_buf[UI_W * STRIP_H * 2];
 static lv_display_t *disp;
 static lv_group_t *grp;
+static lv_indev_t *indev;
 static lv_obj_t *status_label;
 static int exit_requested;
 static unsigned last_input_ms;
 static unsigned flush_fail_count;
 static int lv_inited;
+
+/* Callbacks, defined below begin(). */
+static void flush_cb(lv_display_t *d, const lv_area_t *area,
+		     uint8_t *px_map);
+static void indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data);
+
+/* Shared port lifecycle (UI-2): one display + keypad
+ * indev + focus group per run, created by begin() and
+ * torn down by end(). Smoke and shell both use it, so
+ * neither can leak an indev across token grants. */
+lv_group_t *
+uilvgl_shell_begin(void)
+{
+	if (!lv_inited) {
+		lv_init();
+		lv_inited = 1;
+	}
+	disp = lv_display_create(UI_W, UI_H);
+	lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
+	lv_display_set_buffers(disp, draw_buf, NULL, sizeof(draw_buf),
+			       LV_DISPLAY_RENDER_MODE_PARTIAL);
+	lv_display_set_flush_cb(disp, flush_cb);
+
+	indev = lv_indev_create();
+	lv_indev_set_type(indev, LV_INDEV_TYPE_KEYPAD);
+	lv_indev_set_read_cb(indev, indev_read_cb);
+
+	grp = lv_group_create();
+	lv_indev_set_group(indev, grp);
+
+	exit_requested = 0;
+	last_input_ms = sys_uptime();
+	flush_fail_count = 0;
+	return grp;
+}
+
+void
+uilvgl_shell_end(void)
+{
+	/* Indev first: it holds the group pointer, so
+	 * deleting it first leaves no dangling link. */
+	if (indev) {
+		lv_indev_delete(indev);
+		indev = NULL;
+	}
+	if (grp) {
+		lv_group_delete(grp);
+		grp = NULL;
+	}
+	if (disp) {
+		lv_display_delete(disp);
+		disp = NULL;
+	}
+}
+
+int
+uilvgl_take_back(void)
+{
+	if (!exit_requested)
+		return 0;
+	exit_requested = 0;
+	return 1;
+}
+
+unsigned
+uilvgl_last_input_ms(void)
+{
+	return last_input_ms;
+}
+
+unsigned
+uilvgl_flush_failures(void)
+{
+	return flush_fail_count;
+}
 
 static void
 flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px_map)
@@ -189,25 +265,9 @@ void
 uilvgl_run(void)
 {
 	lv_obj_t *scr, *title, *btn_press, *btn_back;
-	lv_indev_t *indev;
 	unsigned last, now;
 
-	if (!lv_inited) {
-		lv_init();
-		lv_inited = 1;
-	}
-	disp = lv_display_create(UI_W, UI_H);
-	lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
-	lv_display_set_buffers(disp, draw_buf, NULL, sizeof(draw_buf),
-			       LV_DISPLAY_RENDER_MODE_PARTIAL);
-	lv_display_set_flush_cb(disp, flush_cb);
-
-	indev = lv_indev_create();
-	lv_indev_set_type(indev, LV_INDEV_TYPE_KEYPAD);
-	lv_indev_set_read_cb(indev, indev_read_cb);
-
-	grp = lv_group_create();
-	lv_indev_set_group(indev, grp);
+	grp = uilvgl_shell_begin();
 
 	scr = lv_screen_active();
 	title = lv_label_create(scr);
@@ -223,10 +283,7 @@ uilvgl_run(void)
 	lv_label_set_text(status_label, "READY");
 	lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 190);
 
-	exit_requested = 0;
-	flush_fail_count = 0;
 	last = sys_uptime();
-	last_input_ms = last;
 	puts("UILV: start\n");
 
 	while (sys_display_status() == 1 && !exit_requested) {
@@ -264,8 +321,5 @@ uilvgl_run(void)
 		}
 		puts("\n");
 	}
-	lv_group_delete(grp);
-	grp = NULL;
-	lv_display_delete(disp);
-	disp = NULL;
+	uilvgl_shell_end();
 }
