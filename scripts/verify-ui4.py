@@ -522,14 +522,10 @@ try:
     wait_from(pos, "UILV2: release", 20)
     check("old status-bar clock follows +0800 (glyph-exact)",
           old_clock_check(ser, mon, 480, "old+0800"))
-    # Malformed tz -> WIB fallback.
-    pos = len(serial)
-    ser.sendall(b"key ok\n")  # Monitor BACK button -> menu
-    wait_from(pos, "UILV2: focus qabot", 20)
-    pos = len(serial)
-    ser.sendall(b"key back\n")
-    check("BACK at menu root releases (bogus tz)",
-          wait_from(pos, "UILV2: release", 20))
+    # Malformed tz -> WIB fallback. Note: we are
+    # already at the shell here -- old_clock_check
+    # backs out to a release itself -- so no
+    # Monitor-BACK / menu-release dance first.
     t1 = read_unix_time(ser)
     check("shell sets malformed timezone",
           shell_cmd(ser, "setup tz bogus", "setup: tz saved", 10))
@@ -567,7 +563,10 @@ try:
     qemu, ser, mon = launch_qemu()
     check("shutdown boot reaches qaon> prompt",
           wait_from(0, "qaon>", 120))
-    check("shutdown setup flow reaches finale", setup_flow(ser))
+    # No setup dance here: this relaunch lands on a
+    # provisioned disk, where setup_flow cannot reach
+    # finale (face picks setup-vs-normal at startup).
+    # The menu grant works regardless of provisioning.
     check("shutdown grant starts the shell menu", grant_menu(ser))
     check("shutdown: 7x down + OK opens Power",
           goto_entry(ser, 7, "UILV4: power", 20))
@@ -587,7 +586,10 @@ try:
     qemu, ser, mon = launch_qemu()
     check("restart boot reaches qaon> prompt",
           wait_from(0, "qaon>", 120))
-    check("restart setup flow reaches finale", setup_flow(ser))
+    # No setup dance here: this relaunch lands on a
+    # provisioned disk, where setup_flow cannot reach
+    # finale (face picks setup-vs-normal at startup).
+    # The menu grant works regardless of provisioning.
     check("restart grant starts the shell menu", grant_menu(ser))
     check("restart: 7x down + OK opens Power",
           goto_entry(ser, 7, "UILV4: power", 20))
@@ -607,7 +609,10 @@ try:
     qemu, ser, mon = launch_qemu()
     check("sleep boot reaches qaon> prompt",
           wait_from(0, "qaon>", 120))
-    check("sleep setup flow reaches finale", setup_flow(ser))
+    # No setup dance here: this relaunch lands on a
+    # provisioned disk, where setup_flow cannot reach
+    # finale (face picks setup-vs-normal at startup).
+    # The menu grant works regardless of provisioning.
     check("sleep grant starts the shell menu", grant_menu(ser))
     check("sleep: 7x down + OK opens Power",
           goto_entry(ser, 7, "UILV4: power", 20))
