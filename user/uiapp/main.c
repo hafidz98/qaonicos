@@ -9,6 +9,7 @@
 #include "ulib/ulib.h"
 #include "screen.h"
 #include "ui_draw.h"
+#include "lv_port.h"
 
 #define FRAME_MS	33		/* ~30 fps */
 #define UI_IDLE_RETURN_S	30u	/* auto-return ke Qabot (§11) */
@@ -39,6 +40,21 @@ _start(void)
 		while (sys_display_acquire() == 0)
 			sys_yield();
 		puts("uiapp: token acquired\n");
+
+		/* UI-1: marker-gated LVGL smoke screen. Without
+		 * /data/ui1-test == "1" the menu loop below is
+		 * exactly as before; the smoke run returns on
+		 * BACK, token loss, or 30 s idle, and the
+		 * common release path below still runs. */
+		if (uilvgl_smoke_enabled()) {
+			uilvgl_run();
+			ui_clear_release();
+			if (sys_display_release() != 0)
+				puts("uiapp: release FAIL\n");
+			else
+				puts("uiapp: token released\n");
+			continue;
+		}
 
 		ui_reset(&scr_menu);
 		last = sys_uptime();

@@ -145,6 +145,31 @@ for f in uartproto mock_comcu bridge linkcli; do
     clang $UCFLAGS2 -c "$USR/uartproto/$f.c" -o "$BUILD/uartproto_$f.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/uartproto/$f.c (see $LOG)"; exit 1; }
 done
+# --- 1d0. LVGL (UI-1): vendored v9.5.0 under user/uiapp/lvgl,
+# linked into uiapp ONLY (the face stays hand-rolled).
+# Headers for non-vendored subsystems (drivers/libs/others/
+# debugging) are vendored header-only so the root lvgl.h
+# umbrella parses; only the .c files below are compiled.
+# lv_conf.h lives in user/uiapp/ (found via -I below and
+# lv_conf_internal.h's __has_include probe).
+echo "BUILD LVGL (uiapp)"
+LVFLAGS="$UCFLAGS -I$USR/uiapp -I$USR/uiapp/lvgl -I$USR/uiapp/lvgl/src"
+LVOBJS=""
+for f in $(find "$USR/uiapp/lvgl/src" -name '*.c' | sort); do
+    rel=${f#"$USR/uiapp/lvgl/src/"}
+    o="$BUILD/lv_$(echo "$rel" | tr '/.' '__').o"
+    # shellcheck disable=SC2086
+    clang $LVFLAGS -c "$f" -o "$o" >>"$LOG" 2>&1 || \
+        { echo "FAIL user/uiapp/lvgl/src/$rel (see $LOG)"; exit 1; }
+    LVOBJS="$LVOBJS $o"
+done
+# Port + freestanding libcall shim.
+# shellcheck disable=SC2086
+clang $UCFLAGS2 -c "$USR/uiapp/lv_port.c" -o "$BUILD/uiapp_lv_port.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/uiapp/lv_port.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang $UCFLAGS2 -c "$USR/uiapp/lv_shim.c" -o "$BUILD/uiapp_lv_shim.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/uiapp/lv_shim.c (see $LOG)"; exit 1; }
 # NVS persistensi setting (App A4): user/cfg/cfg.c -> cfg.o, link ke uiapp.
 # shellcheck disable=SC2086
 clang $UCFLAGS2 -c "$USR/cfg/cfg.c" -o "$BUILD/cfg.o" >>"$LOG" 2>&1 || \
@@ -158,6 +183,8 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     "$BUILD/uiapp_scr_ble.o" "$BUILD/uiapp_scr_llm.o" \
     "$BUILD/uiapp_scr_passkey.o" "$BUILD/uiapp_scr_textedit.o" \
     "$BUILD/uartproto_linkcli.o" \
+    "$BUILD/uiapp_lv_port.o" "$BUILD/uiapp_lv_shim.o" \
+    $LVOBJS \
     "$BUILD/cfg.o" \
     "$BUILD/ulib.o" "$BUILD/udiv.o" \
     >>"$LOG" 2>&1 || \
@@ -179,7 +206,14 @@ python3 "$USR/pad-bss.py" "$BUILD/uiapp.bin" "$BUILD/uiapp.elf" \
 # (linkcli) -- the direct layer + mock leave the uiapp
 # link, so uiapp.bin shrinks; the 98304 cap stays as an
 # upper bound (measured shrinkage in DEVLOG-C6L5).
-python3 "$USR/embed.py" "$BUILD/uiapp.bin" "$GEN/uiapp_img.c" "uiapp_img" 98304 >>"$LOG" 2>&1 || \
+# UI-1: uiapp links LVGL v9.5.0 (trimmed: label+button,
+# Montserrat 14, 64 KiB pool) and grows to ~539 KB;
+# the cap rises to 786432 (guard only -- the binding
+# constraint is the 4 MiB boot partition, see
+# DEVLOG-UI1: UI-1 fits with ~86 KB headroom left, so
+# the full UI-2..6 migration needs a structural
+# decision before UI-2, not a bigger cap here).
+python3 "$USR/embed.py" "$BUILD/uiapp.bin" "$GEN/uiapp_img.c" "uiapp_img" 786432 >>"$LOG" 2>&1 || \
     { echo "FAIL embed uiapp_img"; exit 1; }
 echo "USER: uiapp.elf entry=$ENTRY ok"
 
