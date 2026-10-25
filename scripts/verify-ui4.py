@@ -193,6 +193,28 @@ def close_qemu(p, mon):
     time.sleep(0.5)
 
 
+def find_after(pos, needle):
+    return needle.encode() in serial[pos:]
+
+
+def wait_shell_ready(ser, tries=4):
+    """Probe that sh (not face) owns the console.
+
+    After a display release there is a window where face drains
+    the console: bytes of a typed shell command are translated
+    to key events ('m' -> EV_MENU re-grants uiapp!) and never
+    reach sh. 'setup status' contains no 'm', so a stolen probe
+    is harmless; a printed 'setup: tz ' proves sh owns the
+    console again.
+    """
+    for _ in range(tries):
+        pos = len(serial)
+        ser.sendall(b"setup status\n")
+        if wait_from(pos, "setup: tz ", 5):
+            return True
+    return False
+
+
 def shell_cmd(ser, cmd, wait_for, timeout=30):
     cb = cmd.encode()
     for _ in range(3):
@@ -266,10 +288,21 @@ def send_keys(ser, seq, delay=0.35):
 
 
 def grant_menu(ser):
-    """Fresh token grant -> shell menu."""
-    pos = len(serial)
-    ser.sendall(b"key menu\n")
-    return wait_from(pos, "UILV2: start", 60)
+    """Fresh token grant -> shell menu, with retries.
+
+    A grant can be lost when face is not up yet on a fresh
+    boot, and a menu may already run from a stolen-'m'
+    grant (see wait_shell_ready): a focus marker after our
+    send proves the menu is alive, which counts as granted.
+    """
+    for _ in range(3):
+        pos = len(serial)
+        ser.sendall(b"key menu\n")
+        if wait_from(pos, "UILV2: start", 20):
+            return True
+        if find_after(pos, "UILV2: focus"):
+            return True
+    return False
 
 
 def setup_flow(ser):
@@ -347,14 +380,24 @@ def old_clock_check(ser, mon, off_min, label):
 
 
 def read_unix_time(ser):
-    """Shell `time` -> unix seconds, or None."""
-    pos = len(serial)
-    ser.sendall(b"time\n")
-    if not wait_from(pos, "time=", 10):
-        return None
-    seg = serial[pos:].decode("utf-8", "replace")
-    m = re.search(r"time=(\d+)", seg)
-    return int(m.group(1)) if m else None
+    """Shell `time` -> unix seconds, or None.
+
+    Retries through wait_shell_ready: a bare 'time' typed
+    while face drains the console is stolen (its 'm' becomes
+    EV_MENU) and never reaches sh.
+    """
+    for _ in range(3):
+        if not wait_shell_ready(ser):
+            continue
+        pos = len(serial)
+        ser.sendall(b"time\n")
+        if not wait_from(pos, "time=", 10):
+            continue
+        seg = serial[pos:].decode("utf-8", "replace")
+        m = re.search(r"time=(\d+)", seg)
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def expected_hhmm(unix, off_min):
@@ -370,9 +413,14 @@ def expected_hhmm(unix, off_min):
     return {(hh, mm), (hh2, mm2)}
 
 
-def mon_time_row(ser):
-    """Most recent 'UILV4: mon Time: HH:MM' -> (hh, mm)."""
-    seg = serial.decode("utf-8", "replace")
+def mon_time_row(ser, pos=0):
+    """Most recent 'UILV4: mon Time: HH:MM' at/after pos.
+
+    Positional: searching the whole history returns a stale
+    row from an earlier Monitor visit when the current
+    visit's grant failed.
+    """
+    seg = serial[pos:].decode("utf-8", "replace")
     ms = re.findall(r"UILV4: mon Time: (\d\d):(\d\d)", seg)
     if not ms:
         return None
@@ -504,10 +552,11 @@ try:
           shell_cmd(ser, "setup tz +0800", "setup: tz saved", 10))
     time.sleep(6.0)  # tz cache TTL (shell path writes around it)
     check("grant starts the shell menu (tz +0800)", grant_menu(ser))
+    mon_pos = len(serial)
     check("6x down + OK opens Monitor (tz +0800)",
           goto_entry(ser, 6, "UILV4: monitor", 20))
     time.sleep(1.0)
-    got = mon_time_row(ser)
+    got = mon_time_row(ser, mon_pos)
     exp = expected_hhmm(t0, 480) if t0 else set()
     print(f"  tz +0800: monitor time={got} expected in {sorted(exp)}",
           flush=True)
@@ -531,10 +580,11 @@ try:
           shell_cmd(ser, "setup tz bogus", "setup: tz saved", 10))
     time.sleep(6.0)
     check("grant starts the shell menu (bogus tz)", grant_menu(ser))
+    mon_pos = len(serial)
     check("6x down + OK opens Monitor (bogus tz)",
           goto_entry(ser, 6, "UILV4: monitor", 20))
     time.sleep(1.0)
-    got = mon_time_row(ser)
+    got = mon_time_row(ser, mon_pos)
     exp = expected_hhmm(t1, 420) if t1 else set()
     print(f"  tz bogus: monitor time={got} expected in {sorted(exp)}",
           flush=True)
@@ -677,8 +727,15 @@ finally:
             qemu.wait(timeout=10)
         except Exception:
             qemu.kill()
-    leftq = subprocess.run(["pgrep", "-x", "qemu-system-arm"],
-                           capture_output=True, text=True).stdout.strip()
+    # A kill takes a moment to reap: poll before the
+    # pgrep verdict, or a dying QEMU reads as leftover.
+    leftq = ""
+    for _ in range(10):
+        leftq = subprocess.run(["pgrep", "-x", "qemu-system-arm"],
+                               capture_output=True, text=True).stdout.strip()
+        if leftq == "":
+            break
+        time.sleep(0.5)
     check("no qemu-system-arm left running", leftq == "")
 
 npass = sum(1 for _, c in results if c)
