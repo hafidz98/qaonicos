@@ -167,6 +167,10 @@ done
 # shellcheck disable=SC2086
 clang $UCFLAGS2 -c "$USR/uiapp/lv_port.c" -o "$BUILD/uiapp_lv_port.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/uiapp/lv_port.c (see $LOG)"; exit 1; }
+# Shell: status bar + menu (UI-2).
+# shellcheck disable=SC2086
+clang $UCFLAGS2 -c "$USR/uiapp/lv_shell.c" -o "$BUILD/uiapp_lv_shell.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/uiapp/lv_shell.c (see $LOG)"; exit 1; }
 # shellcheck disable=SC2086
 clang $UCFLAGS2 -c "$USR/uiapp/lv_shim.c" -o "$BUILD/uiapp_lv_shim.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/uiapp/lv_shim.c (see $LOG)"; exit 1; }
@@ -183,7 +187,8 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     "$BUILD/uiapp_scr_ble.o" "$BUILD/uiapp_scr_llm.o" \
     "$BUILD/uiapp_scr_passkey.o" "$BUILD/uiapp_scr_textedit.o" \
     "$BUILD/uartproto_linkcli.o" \
-    "$BUILD/uiapp_lv_port.o" "$BUILD/uiapp_lv_shim.o" \
+    "$BUILD/uiapp_lv_port.o" "$BUILD/uiapp_lv_shell.o" \
+    "$BUILD/uiapp_lv_shim.o" \
     $LVOBJS \
     "$BUILD/cfg.o" \
     "$BUILD/ulib.o" "$BUILD/udiv.o" \
@@ -720,6 +725,14 @@ for src in "$MACH3_DIR/src/md/arm/"*.s; do
 done
 echo "MD: $pass ok, $fail failed"
 [ "$fail" -ne 0 ] && exit 1
+
+# Purge stale embedded-image objects first: the link below globs
+# obj-md, so _img.o files of retired programs would otherwise be
+# linked forever (found in UI-2: 9 retired IPC test images worth
+# ~70,008 B rode along in the main-tree build). Phase C rebuilds
+# every listed image right after, so this only deletes outputs
+# that are about to be regenerated — or that no longer exist.
+rm -f "$OBJMD"/*_img.o
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
 for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice ulinktest ulinkbr ulink3 ulinkaud linkd ulink5d ulink5 ulinktools ulink5die upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud; do
