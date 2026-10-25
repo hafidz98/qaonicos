@@ -14,11 +14,11 @@ key menu), and checks:
   * keypad navigation walks every menu entry: 7x down
     moves focus qabot -> wifi -> ble -> llm -> passkey
     -> settings -> monitor -> power, up moves back;
-  * OK on Settings shows the honest placeholder
-    ("UILV2: placeholder settings", BACK button blue
+  * OK on Settings opens the UI-3 settings list
+    ("UILV3: settings list", BACK button blue
     in the dump, frame differs from the menu);
-  * BACK on the placeholder returns to the menu
-    ("UILV2: back menu", focus qabot again, light dump);
+  * BACK on the settings list returns to the menu
+    ("UILV3: back menu", focus qabot again, light dump);
   * OK on Wi-Fi runs the existing hand-rolled screen
     ("UILV2: oldscreen wifi", dump turns dark = old
     renderer), BACK there pops back to the shell
@@ -283,31 +283,33 @@ try:
     check("key up moves focus back to settings",
           key(ser, "up", "UILV2: focus settings"))
 
-    # Placeholder: OK on Settings.
+    # UI-3: OK on Settings opens the settings list
+    # (the UI-2 placeholder is gone; the list's BACK
+    # button sits at y=102, band 102-126).
     pos = len(serial)
     ser.sendall(b"key ok\n")
-    check("key ok activates Settings placeholder",
-          wait_from(pos, "UILV2: placeholder settings", 20))
+    check("key ok activates Settings list",
+          wait_from(pos, "UILV3: settings list", 20))
     time.sleep(2.0)
     ppm2 = screendump(mon, "ui2-dump2")
     check("screendump 2 saved", ppm2 is not None)
     if ppm1 is not None and ppm2 is not None:
         im2, _, _ = band_stats(ppm2, 0, 20)
-        _, _, back_blue = band_stats(ppm2, 160, 204)
+        _, _, back_blue = band_stats(ppm2, 102, 126)
         fd = frame_diff(im1, im2)
         print(f"  dump2: BACK blue={back_blue} frame diff={fd}",
               flush=True)
-        check("dump2: placeholder BACK button rendered (blue)",
+        check("dump2: settings BACK button rendered (blue)",
               back_blue > 1000)
-        check("dump2: placeholder screen differs from menu", fd > 1000)
+        check("dump2: settings screen differs from menu", fd > 1000)
     else:
         im2 = None
 
-    # BACK on the placeholder returns to the menu, and
-    # the rebuild refocuses the first entry (Qabot)
-    # with no key press at all. ORDERING QUIRK: the
-    # rebuild's focus print comes BEFORE the
-    # "back menu" print in the stream (build_menu
+    # BACK on the settings list returns to the menu,
+    # and the rebuild refocuses the first entry
+    # (Qabot) with no key press at all. ORDERING
+    # QUIRK: the rebuild's focus print comes BEFORE
+    # the "back menu" print in the stream (build_menu
     # runs, then the loop prints), so both markers
     # must be checked in the segment captured BEFORE
     # the key is sent — a fresh window after
@@ -315,7 +317,7 @@ try:
     pos = len(serial)
     ser.sendall(b"key back\n")
     check("key back returns to menu",
-          wait_from(pos, "UILV2: back menu", 20))
+          wait_from(pos, "UILV3: back menu", 20))
     check("menu rebuild refocuses Qabot",
           b"UILV2: focus qabot" in serial[pos:])
     time.sleep(2.0)

@@ -17,17 +17,20 @@
  * level exists). A failed flush is counted, never
  * fatal (same rule as the UI-1 smoke screen).
  *
- * Navigation contract (UI-2): the LVGL menu replaces
- * the old hand-rolled menu and settings-list screens.
- * Leaf screens (Wi-Fi, Bluetooth, LLM, Passkey) still
- * run hand-rolled under the same token grant and
- * return here when popped; their full LVGL rebuild
- * is UI-3. Settings/Monitor/Power are honest
- * placeholders until UI-3/UI-4.
+ * Navigation contract (UI-2, extended UI-3): the LVGL
+ * menu replaces the old hand-rolled menu and
+ * settings-list screens. Leaf screens (Wi-Fi,
+ * Bluetooth, LLM, Passkey) still run hand-rolled
+ * under the same token grant and return here when
+ * popped; Power runs the existing hand-rolled power
+ * screen the same way. Settings is the UI-3 LVGL
+ * submenu (lv_settings.c); Monitor stays an honest
+ * placeholder until UI-4.
  */
 #include "ulib/ulib.h"
 #include "lv_port.h"
 #include "lv_shell.h"
+#include "lv_settings.h"
 #include "lvgl/lvgl.h"
 
 #define UI_W		240
@@ -39,10 +42,12 @@
 #define IDLE_LIMIT_MS	30000u		/* mirrors UI_IDLE_RETURN_S */
 
 /* Menu entry kinds. PLACEHOLDER entries carry the
- * phase that will build them (UI-3/UI-4). */
+ * phase that will build them (UI-4). SETTINGS is
+ * the UI-3 submenu, owned by lv_settings.c. */
 #define KIND_RELEASE	0
 #define KIND_OLD	1
 #define KIND_PLACEHOLDER 2
+#define KIND_SETTINGS	3
 
 struct shell_entry {
 	const char *label;
@@ -58,7 +63,7 @@ static const struct shell_entry entries[] = {
 	{ "Bluetooth", "ble", KIND_OLD, SHELL_BLE, NULL },
 	{ "LLM", "llm", KIND_OLD, SHELL_LLM, NULL },
 	{ "Passkey", "passkey", KIND_OLD, SHELL_PASSKEY, NULL },
-	{ "Settings", "settings", KIND_PLACEHOLDER, 0, "UI-3" },
+	{ "Settings", "settings", KIND_SETTINGS, 0, NULL },
 	{ "Monitor", "monitor", KIND_PLACEHOLDER, 0, "UI-4" },
 	{ "Power", "power", KIND_OLD, SHELL_POWER, NULL },
 };
@@ -66,12 +71,15 @@ static const struct shell_entry entries[] = {
 
 #define VIEW_MENU	0
 #define VIEW_PLACEHOLDER 1
+#define VIEW_SETTINGS	2
 
 static lv_group_t *grp;
 static lv_obj_t *time_label;
 static lv_timer_t *clock_timer;
 static int view;
 static const struct shell_entry *placeholder_entry;
+static int settings_requested;
+static int settings_active;
 static int pending_action;
 static int shell_done;
 
@@ -132,6 +140,11 @@ activate_cb(lv_event_t *e)
 	} else if (en->kind == KIND_OLD) {
 		pending_action = en->action;
 		shell_done = 1;
+	} else if (en->kind == KIND_SETTINGS) {
+		/* Settings submenu: handled by switching
+		 * screens in the loop below, like the
+		 * placeholder entries. */
+		settings_requested = 1;
 	} else {
 		/* Placeholder: handled by switching screens
 		 * in the loop below (the callback only marks
@@ -273,6 +286,8 @@ uilvgl_shell_run(void)
 	build_menu();
 
 	pending_action = -1;
+	settings_requested = 0;
+	settings_active = 0;
 	shell_done = 0;
 	last = sys_uptime();
 	puts("UILV2: start\n");
@@ -290,8 +305,29 @@ uilvgl_shell_run(void)
 			build_placeholder();
 		else if (!placeholder_entry && view == VIEW_PLACEHOLDER)
 			build_menu();
+		/* Same rule for the Settings submenu. */
+		if (settings_requested && view == VIEW_MENU) {
+			settings_requested = 0;
+			settings_active = 1;
+			lvset_enter(grp);
+			view = VIEW_SETTINGS;
+		} else if (settings_active) {
+			if (lvset_tick()) {
+				/* List BACK button: back to menu. */
+				settings_active = 0;
+				view = VIEW_MENU;
+				build_menu();
+			}
+		}
 		if (uilvgl_take_back()) {
-			if (view == VIEW_PLACEHOLDER) {
+			if (settings_active) {
+				if (!lvset_on_back()) {
+					settings_active = 0;
+					view = VIEW_MENU;
+					build_menu();
+					puts("UILV3: back menu\n");
+				}
+			} else if (view == VIEW_PLACEHOLDER) {
 				placeholder_entry = NULL;
 				build_menu();
 				puts("UILV2: back menu\n");
@@ -335,6 +371,7 @@ uilvgl_shell_run(void)
 		lv_timer_delete(clock_timer);
 		clock_timer = NULL;
 	}
+	lvset_exit();
 	uilvgl_shell_end();
 	return pending_action < 0 ? SHELL_RELEASE : pending_action;
 }

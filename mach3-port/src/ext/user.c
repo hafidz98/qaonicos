@@ -40,6 +40,7 @@ extern int	webui_shell_post(const char *, unsigned int);
 extern void	webui_shell_executor_died(void);	/* FND-2 */
 extern int	webui_pin_set(const char *, unsigned int);
 extern int	webui_pin_present(void);
+extern int	webui_pin_verify(const char *, unsigned int);
 extern int	credstore_set(const char *, const unsigned char *,
 		    unsigned int);
 extern int	credstore_get(const char *, unsigned char *,
@@ -1583,7 +1584,11 @@ user_syscall(struct arm_trap_frame *frame)
 		 * 0 take web-shell command (a1 buf, a2 max) -> len/-1
 		 * 1 post web-shell result (a1 buf, a2 len) -> 0/-1
 		 * 2 set device PIN (a1 buf, a2 len) -> 0/-1
-		 * 3 PIN present -> 1/0 */
+		 * 3 PIN present -> 1/0
+		 * 4 verify device PIN (a1 buf, a2 len) -> 1/0/-1
+		 *   (UI-3: device Settings screen; same
+		 *   webui_pin_verify as the web login, so the
+		 *   constant-time compare + throttle apply) */
 		if (a0 == 0u) {
 			static char kcmd[192];
 			int n;
@@ -1619,6 +1624,20 @@ user_syscall(struct arm_trap_frame *frame)
 		}
 		if (a0 == 3u)
 			return (unsigned int)webui_pin_present();
+		if (a0 == 4u) {
+			/* UI-3: same bounds as sub 2; the return
+			 * is tri-state (1 ok, 0 wrong, -1 locked)
+			 * and must stay signed for the caller. */
+			static char kpin[20];
+			unsigned int i;
+			if (a2 < 4u || a2 > 16u ||
+			    !user_range_ok(a1, a2))
+				return (unsigned int)-1;
+			for (i = 0; i < a2; i++)
+				kpin[i] = ((const char *)a1)[i];
+			kpin[a2] = 0;
+			return (unsigned int)webui_pin_verify(kpin, a2);
+		}
 		return (unsigned int)-1;
 	}
 	case SYS_CRED: {
