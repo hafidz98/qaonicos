@@ -166,6 +166,30 @@ sys_stat(struct qaon_stat *st)
 	return ret;
 }
 
+/* Boot state (syscall 98, B2): sub 0 fills info[0..3] with
+ * boot count, fail_count, safe_mode, last_reason. Same
+ * r0/r1 convention as the shell's sh_bootstate wrapper;
+ * promoted to ulib so uiapp screens (Monitor, UI-4) can
+ * read it without duplicating raw asm. Named
+ * sys_bootinfo (not sys_bootstate) because ufirst.c
+ * already owns a static sys_bootstate(sub) with a
+ * different signature. */
+int
+sys_bootinfo(unsigned *info)
+{
+	int ret;
+	__asm__ volatile(
+		"mov r0, #0\n\t"
+		"mov r1, %1\n\t"
+		"mov r7, #98\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret)
+		: "r" (info)
+		: "r0", "r1", "r7", "lr", "memory", "cc");
+	return ret;
+}
+
 int
 sys_tlist(struct qaon_tentry *e, unsigned max)
 {

@@ -96,6 +96,7 @@ int	sys_ls(char *buf, unsigned max);
 int	sys_delete(const char *path);
 int	sys_stat(struct qaon_stat *st);
 int	sys_tlist(struct qaon_tentry *e, unsigned max);
+int	sys_bootinfo(unsigned *info);
 int	sys_read_console(void);		/* byte 0-255, -1 bila kosong */
 int	sys_gpio_set(unsigned pin, unsigned val);	/* -> 0 / -1 */
 int	sys_gpio_get(unsigned pin);			/* -> 0/1 / -1 */

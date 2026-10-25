@@ -2,7 +2,7 @@
  * lv_shell.c - LVGL shell: status bar + menu (UI-2).
  *
  * One screen object, rebuilt on every navigation step
- * (menu <-> placeholder), so no screen is ever leaked
+ * (menu <-> submenu/screen), so no screen is ever leaked
  * across switches. The status bar lives on the top
  * layer, above all screens, and is deleted with the
  * display at teardown. The focus group is the port's
@@ -17,20 +17,22 @@
  * level exists). A failed flush is counted, never
  * fatal (same rule as the UI-1 smoke screen).
  *
- * Navigation contract (UI-2, extended UI-3): the LVGL
- * menu replaces the old hand-rolled menu and
- * settings-list screens. Leaf screens (Wi-Fi,
+ * Navigation contract (UI-2, extended UI-3/UI-4):
+ * the LVGL menu replaces the old hand-rolled menu
+ * and settings-list screens. Leaf screens (Wi-Fi,
  * Bluetooth, LLM, Passkey) still run hand-rolled
  * under the same token grant and return here when
- * popped; Power runs the existing hand-rolled power
- * screen the same way. Settings is the UI-3 LVGL
- * submenu (lv_settings.c); Monitor stays an honest
- * placeholder until UI-4.
+ * popped. Settings is the UI-3 LVGL submenu
+ * (lv_settings.c); Monitor (lv_monitor.c) and Power
+ * (lv_power.c) are UI-4 LVGL screens. No placeholder
+ * entries remain in UI-4.
  */
 #include "ulib/ulib.h"
 #include "lv_port.h"
 #include "lv_shell.h"
 #include "lv_settings.h"
+#include "lv_monitor.h"
+#include "lv_power.h"
 #include "lvgl/lvgl.h"
 
 #define UI_W		240
@@ -41,62 +43,73 @@
 #define BTN_GAP		2
 #define IDLE_LIMIT_MS	30000u		/* mirrors UI_IDLE_RETURN_S */
 
-/* Menu entry kinds. PLACEHOLDER entries carry the
- * phase that will build them (UI-4). SETTINGS is
- * the UI-3 submenu, owned by lv_settings.c. */
+/* Menu entry kinds. SETTINGS is the UI-3 submenu,
+ * owned by lv_settings.c; MONITOR and POWER are
+ * the UI-4 screens, owned by lv_monitor.c and
+ * lv_power.c. */
 #define KIND_RELEASE	0
 #define KIND_OLD	1
-#define KIND_PLACEHOLDER 2
-#define KIND_SETTINGS	3
+#define KIND_SETTINGS	2
+#define KIND_MONITOR	3
+#define KIND_POWER	4
 
 struct shell_entry {
 	const char *label;
 	const char *key;
 	int kind;
 	int action;		/* SHELL_* for KIND_OLD */
-	const char *coming;	/* "UI-3"/"UI-4" for placeholders */
 };
 
 static const struct shell_entry entries[] = {
-	{ "Qabot", "qabot", KIND_RELEASE, SHELL_RELEASE, NULL },
-	{ "Wi-Fi", "wifi", KIND_OLD, SHELL_WIFI, NULL },
-	{ "Bluetooth", "ble", KIND_OLD, SHELL_BLE, NULL },
-	{ "LLM", "llm", KIND_OLD, SHELL_LLM, NULL },
-	{ "Passkey", "passkey", KIND_OLD, SHELL_PASSKEY, NULL },
-	{ "Settings", "settings", KIND_SETTINGS, 0, NULL },
-	{ "Monitor", "monitor", KIND_PLACEHOLDER, 0, "UI-4" },
-	{ "Power", "power", KIND_OLD, SHELL_POWER, NULL },
+	{ "Qabot", "qabot", KIND_RELEASE, SHELL_RELEASE },
+	{ "Wi-Fi", "wifi", KIND_OLD, SHELL_WIFI },
+	{ "Bluetooth", "ble", KIND_OLD, SHELL_BLE },
+	{ "LLM", "llm", KIND_OLD, SHELL_LLM },
+	{ "Passkey", "passkey", KIND_OLD, SHELL_PASSKEY },
+	{ "Settings", "settings", KIND_SETTINGS, 0 },
+	{ "Monitor", "monitor", KIND_MONITOR, 0 },
+	{ "Power", "power", KIND_POWER, 0 },
 };
 #define NENTRIES	(sizeof(entries) / sizeof(entries[0]))
 
 #define VIEW_MENU	0
-#define VIEW_PLACEHOLDER 1
-#define VIEW_SETTINGS	2
+#define VIEW_SETTINGS	1
+#define VIEW_MONITOR	2
+#define VIEW_POWER	3
 
 static lv_group_t *grp;
 static lv_obj_t *time_label;
 static lv_timer_t *clock_timer;
 static int view;
-static const struct shell_entry *placeholder_entry;
 static int settings_requested;
 static int settings_active;
+static int monitor_requested;
+static int monitor_active;
+static int power_requested;
+static int power_active;
 static int pending_action;
 static int shell_done;
 
 static void
 fmt_clock(char *out, unsigned ms)
 {
-	/* Same rule as ui.c fmt_clock: wall clock (WIB)
+	/* Same rule as ui.c fmt_clock: wall clock in the
+	 * configured timezone (cfg-tz via
+	 * uilvgl_tz_offset_min(), WIB fallback, UI-4)
 	 * when set, else uptime. No seconds (owner
-	 * feedback 2026-10-22). */
+	 * feedback 2026-10-22). The +86400 keeps the
+	 * day sum positive for negative offsets without
+	 * any 32-bit overflow (day seconds < 86400). */
 	unsigned t = sys_time_get();
-	unsigned s, hh, mm;
+	int day, hh, mm;
 	if (t != 0u)
-		s = t + 7u * 3600u;
+		day = (int)(t % 86400u) + 86400 +
+		    uilvgl_tz_offset_min() * 60;
 	else
-		s = ms / 1000u;
-	hh = (s / 3600u) % 24u;
-	mm = (s / 60u) % 60u;
+		day = (int)((ms / 1000u) % 86400u);
+	day %= 86400;
+	hh = day / 3600;
+	mm = (day / 60) % 60;
 	out[0] = (char)('0' + hh / 10u); out[1] = (char)('0' + hh % 10u);
 	out[2] = ':';
 	out[3] = (char)('0' + mm / 10u); out[4] = (char)('0' + mm % 10u);
@@ -141,24 +154,15 @@ activate_cb(lv_event_t *e)
 		pending_action = en->action;
 		shell_done = 1;
 	} else if (en->kind == KIND_SETTINGS) {
-		/* Settings submenu: handled by switching
-		 * screens in the loop below, like the
-		 * placeholder entries. */
+		/* Submenu/screen: handled by switching
+		 * screens in the loop below (the callback
+		 * only marks it; the loop owns rebuilds). */
 		settings_requested = 1;
+	} else if (en->kind == KIND_MONITOR) {
+		monitor_requested = 1;
 	} else {
-		/* Placeholder: handled by switching screens
-		 * in the loop below (the callback only marks
-		 * it; the loop owns screen rebuilds). */
-		placeholder_entry = en;
+		power_requested = 1;
 	}
-}
-
-static void
-back_btn_cb(lv_event_t *e)
-{
-	(void)e;
-	placeholder_entry = NULL;
-	puts("UILV2: back menu\n");
 }
 
 static lv_obj_t *
@@ -204,43 +208,6 @@ build_menu(void)
 	if (first)
 		lv_group_focus_obj(first);
 	view = VIEW_MENU;
-	placeholder_entry = NULL;
-}
-
-static void
-build_placeholder(void)
-{
-	lv_obj_t *scr = lv_screen_active();
-	lv_obj_t *title, *sub, *btn, *lbl;
-	const struct shell_entry *en = placeholder_entry;
-
-	lv_group_remove_all_objs(grp);
-	lv_obj_clean(scr);
-	title = lv_label_create(scr);
-	lv_label_set_text(title, en->label);
-	lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 80);
-	sub = lv_label_create(scr);
-	lv_label_set_text(sub, "Coming soon");
-	lv_obj_align(sub, LV_ALIGN_TOP_MID, 0, 110);
-	lbl = lv_label_create(scr);
-	/* Keep the phase promise visible on screen, not
-	 * just in the dev log: "UI-3"/"UI-4" is short
-	 * enough to render as its own line. */
-	lv_label_set_text(lbl, en->coming);
-	lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 132);
-	btn = lv_button_create(scr);
-	lv_obj_set_size(btn, 160, 44);
-	lv_obj_align(btn, LV_ALIGN_TOP_MID, 0, 160);
-	lbl = lv_label_create(btn);
-	lv_label_set_text(lbl, "BACK");
-	lv_obj_center(lbl);
-	lv_group_add_obj(grp, btn);
-	lv_obj_add_event_cb(btn, back_btn_cb, LV_EVENT_CLICKED, NULL);
-	lv_group_focus_obj(btn);
-	view = VIEW_PLACEHOLDER;
-	puts("UILV2: placeholder ");
-	puts(en->key);
-	puts("\n");
 }
 
 static void
@@ -288,6 +255,10 @@ uilvgl_shell_run(void)
 	pending_action = -1;
 	settings_requested = 0;
 	settings_active = 0;
+	monitor_requested = 0;
+	monitor_active = 0;
+	power_requested = 0;
+	power_active = 0;
 	shell_done = 0;
 	last = sys_uptime();
 	puts("UILV2: start\n");
@@ -297,15 +268,11 @@ uilvgl_shell_run(void)
 		lv_tick_inc(now - last);
 		last = now;
 		lv_timer_handler();
-		/* Placeholder activation is a screen switch,
-		 * done here (not in the click callback) so
-		 * the group/screen rebuild never runs inside
-		 * an event handler for a deleted object. */
-		if (placeholder_entry && view == VIEW_MENU)
-			build_placeholder();
-		else if (!placeholder_entry && view == VIEW_PLACEHOLDER)
-			build_menu();
-		/* Same rule for the Settings submenu. */
+		/* Submenu/screen activation is a screen
+		 * switch, done here (not in the click
+		 * callback) so the group/screen rebuild
+		 * never runs inside an event handler for
+		 * a deleted object. */
 		if (settings_requested && view == VIEW_MENU) {
 			settings_requested = 0;
 			settings_active = 1;
@@ -319,6 +286,46 @@ uilvgl_shell_run(void)
 				build_menu();
 			}
 		}
+		if (monitor_requested && view == VIEW_MENU) {
+			monitor_requested = 0;
+			monitor_active = 1;
+			lvmon_enter(grp);
+			view = VIEW_MONITOR;
+		} else if (monitor_active) {
+			if (lvmon_tick()) {
+				/* BACK button: back to menu. The
+				 * exit deletes the refresh timer:
+				 * without it the timer would keep
+				 * writing to labels build_menu
+				 * just deleted. */
+				monitor_active = 0;
+				lvmon_exit();
+				view = VIEW_MENU;
+				build_menu();
+			}
+		}
+		if (power_requested && view == VIEW_MENU) {
+			power_requested = 0;
+			power_active = 1;
+			lvpower_enter(grp);
+			view = VIEW_POWER;
+		} else if (power_active) {
+			int pr = lvpower_tick();
+			if (pr == 1) {
+				/* BACK button: back to menu. */
+				power_active = 0;
+				lvpower_exit();
+				view = VIEW_MENU;
+				build_menu();
+			} else if (pr == 2) {
+				/* Sleep Now: display already
+				 * blanked; release the token. */
+				power_active = 0;
+				pending_action = SHELL_RELEASE;
+				shell_done = 1;
+				puts("UILV2: release\n");
+			}
+		}
 		if (uilvgl_take_back()) {
 			if (settings_active) {
 				if (!lvset_on_back()) {
@@ -327,10 +334,22 @@ uilvgl_shell_run(void)
 					build_menu();
 					puts("UILV3: back menu\n");
 				}
-			} else if (view == VIEW_PLACEHOLDER) {
-				placeholder_entry = NULL;
-				build_menu();
-				puts("UILV2: back menu\n");
+			} else if (monitor_active) {
+				if (!lvmon_on_back()) {
+					monitor_active = 0;
+					lvmon_exit();
+					view = VIEW_MENU;
+					build_menu();
+					puts("UILV4: back menu\n");
+				}
+			} else if (power_active) {
+				if (!lvpower_on_back()) {
+					power_active = 0;
+					lvpower_exit();
+					view = VIEW_MENU;
+					build_menu();
+					puts("UILV4: back menu\n");
+				}
 			} else {
 				pending_action = SHELL_RELEASE;
 				shell_done = 1;
@@ -372,6 +391,8 @@ uilvgl_shell_run(void)
 		clock_timer = NULL;
 	}
 	lvset_exit();
+	lvmon_exit();
+	lvpower_exit();
 	uilvgl_shell_end();
 	return pending_action < 0 ? SHELL_RELEASE : pending_action;
 }

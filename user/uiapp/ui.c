@@ -10,6 +10,7 @@
 #include "ulib/ulib.h"
 #include "screen.h"
 #include "ui_draw.h"
+#include "lv_port.h"
 
 #define STRIP_H		24
 #define NSTRIP		(UI_H / STRIP_H)
@@ -82,18 +83,21 @@ ui_clear_release(void)
 }
 
 /* HH:MM (owner feedback 2026-10-22: no seconds). Wall clock
- * (NTP, WIB = UTC+7) when available, else uptime. */
+ * (NTP, configured timezone via uilvgl_tz_offset_min(),
+ * WIB fallback, UI-4) when available, else uptime. */
 static void
 fmt_clock(char *out, unsigned ms)
 {
 	unsigned t = sys_time_get();
-	unsigned s, hh, mm;
+	int day, hh, mm;
 	if (t != 0u)
-		s = t + 7u * 3600u;	/* WIB */
+		day = (int)(t % 86400u) + 86400 +
+		    uilvgl_tz_offset_min() * 60;
 	else
-		s = ms / 1000u;
-	hh = (s / 3600u) % 24u;
-	mm = (s / 60u) % 60u;
+		day = (int)((ms / 1000u) % 86400u);
+	day %= 86400;
+	hh = day / 3600;
+	mm = (day / 60) % 60;
 	out[0] = (char)('0' + hh / 10u); out[1] = (char)('0' + hh % 10u);
 	out[2] = ':';
 	out[3] = (char)('0' + mm / 10u); out[4] = (char)('0' + mm % 10u);

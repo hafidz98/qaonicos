@@ -7,10 +7,10 @@
  * claimed under QEMU) above a keypad-navigable menu.
  * Wired entries return their action so main.c can run
  * the existing hand-rolled screen under the same token
- * grant; placeholder entries (targets of UI-3/UI-4)
- * show an honest "coming in UI-x" screen instead of
- * fake functionality. BACK at the menu root, token
- * loss, or 30 s idle all return SHELL_RELEASE.
+ * grant; Settings, Monitor, and Power are LVGL
+ * screens owned by their own modules (UI-3/UI-4).
+ * BACK at the menu root, token loss, or 30 s idle
+ * all return SHELL_RELEASE.
  */
 #ifndef UIAPP_LV_SHELL_H
 #define UIAPP_LV_SHELL_H
@@ -20,7 +20,6 @@
 #define SHELL_BLE	2	/* run the existing Bluetooth screen */
 #define SHELL_LLM	3	/* run the existing LLM screen */
 #define SHELL_PASSKEY	4	/* run the existing Passkey screen */
-#define SHELL_POWER	5	/* run the existing Power screen */
 
 /* Run the shell until it returns an action. The caller
  * owns the display-token release, as the menu loop does. */
