@@ -20,6 +20,7 @@
 #define SHELL_BLE	2	/* run the existing Bluetooth screen */
 #define SHELL_LLM	3	/* run the existing LLM screen */
 #define SHELL_PASSKEY	4	/* run the existing Passkey screen */
+#define SHELL_POWER	5	/* run the existing Power screen */
 
 /* Run the shell until it returns an action. The caller
  * owns the display-token release, as the menu loop does. */

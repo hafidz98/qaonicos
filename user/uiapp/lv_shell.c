@@ -60,7 +60,7 @@ static const struct shell_entry entries[] = {
 	{ "Passkey", "passkey", KIND_OLD, SHELL_PASSKEY, NULL },
 	{ "Settings", "settings", KIND_PLACEHOLDER, 0, "UI-3" },
 	{ "Monitor", "monitor", KIND_PLACEHOLDER, 0, "UI-4" },
-	{ "Power", "power", KIND_PLACEHOLDER, 0, "UI-4" },
+	{ "Power", "power", KIND_OLD, SHELL_POWER, NULL },
 };
 #define NENTRIES	(sizeof(entries) / sizeof(entries[0]))
 
