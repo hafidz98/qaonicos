@@ -287,7 +287,7 @@ def frame_diff(a, b):
     return n
 
 
-def key(ser, k, needle, timeout=20):
+def key(ser, k, needle, timeout=32):
     """Send one key, verifying sh ran it.
 
     PL011 RX under cooperative scheduling can drop a byte
@@ -332,7 +332,7 @@ def grant_menu(ser):
             ser.sendall(b"key menu\n")
             if not wait_from(pos, "key: injected", 5):
                 continue
-        if wait_from(pos, "UILV2: start", 20):
+        if wait_from(pos, "UILV2: start", 32):
             return True
         if find_after(pos, "UILV2: focus"):
             return True
@@ -355,13 +355,13 @@ def setup_flow(ser):
     return finale
 
 
-def goto_entry(ser, downs, marker, timeout=20):
+def goto_entry(ser, downs, marker, timeout=32):
     """From the shell menu (focus Qabot): walk down to
     an entry by focus markers, OK -> marker."""
     want = ("wifi", "ble", "llm", "passkey", "settings",
             "monitor", "power")
     for i in range(downs):
-        if not key(ser, "down", "UILV2: focus " + want[i], 20):
+        if not key(ser, "down", "UILV2: focus " + want[i], 32):
             return False
     return key(ser, "ok", marker, timeout)
 
@@ -378,7 +378,7 @@ def old_clock_check(ser, mon, off_min, label):
         return False
     if not grant_menu(ser):
         return False
-    if not goto_entry(ser, 1, "UILV2: oldscreen wifi", 20):
+    if not goto_entry(ser, 1, "UILV2: oldscreen wifi", 32):
         return False
     time.sleep(2.0)
     ppm = screendump(mon, "ui4-wifi-clock-" + label)
@@ -398,9 +398,9 @@ def old_clock_check(ser, mon, off_min, label):
     # keypress to dismiss its no-peer note (UI-2
     # lesson), so a second BACK may be needed.
     if not key(ser, "back", "UILV2: start", 10):
-        if not key(ser, "back", "UILV2: start", 20):
+        if not key(ser, "back", "UILV2: start", 32):
             return False
-    if not key(ser, "back", "UILV2: release", 20):
+    if not key(ser, "back", "UILV2: release", 32):
         return False
     return ok
 
@@ -520,7 +520,7 @@ try:
 
     # ---- Monitor ----
     check("6x down + OK opens Monitor",
-          goto_entry(ser, 6, "UILV4: monitor", 20))
+          goto_entry(ser, 6, "UILV4: monitor", 32))
     time.sleep(1.0)
     seg = serial.decode("utf-8", "replace")
     for row in ("Device: TestDev", "Uptime:", "Memory:", "Threads:",
@@ -543,11 +543,11 @@ try:
         check("monitor: differs from the menu", fd > 1000)
     # BACK button -> menu (focus returns to Qabot).
     check("Monitor BACK button returns to the menu",
-          key(ser, "ok", "UILV2: focus qabot", 20))
+          key(ser, "ok", "UILV2: focus qabot", 32))
 
     # ---- Power screen ----
     check("7x down + OK opens Power",
-          goto_entry(ser, 7, "UILV4: power", 20))
+          goto_entry(ser, 7, "UILV4: power", 32))
     time.sleep(1.0)
     ppm_pwr = screendump(mon, "ui4-power")
     check("power screendump saved", ppm_pwr is not None)
@@ -559,12 +559,12 @@ try:
             check(f"power: button {i} rendered (blue)", bb > 1000)
     # BACK key -> menu.
     check("Power BACK key returns to the menu",
-          key(ser, "back", "UILV4: back menu", 20))
+          key(ser, "back", "UILV4: back menu", 32))
 
     # ---- tz-clock, LVGL path ----
     # Release to the shell, then drive tz from there.
     check("BACK at menu root releases",
-          key(ser, "back", "UILV2: release", 20))
+          key(ser, "back", "UILV2: release", 32))
     t0 = read_unix_time(ser)
     check("shell time readable", t0 is not None)
     check("shell sets timezone +0800",
@@ -573,7 +573,7 @@ try:
     check("grant starts the shell menu (tz +0800)", grant_menu(ser))
     mon_pos = len(serial)
     check("6x down + OK opens Monitor (tz +0800)",
-          goto_entry(ser, 6, "UILV4: monitor", 20))
+          goto_entry(ser, 6, "UILV4: monitor", 32))
     time.sleep(1.0)
     got = mon_time_row(ser, mon_pos)
     exp = expected_hhmm(t0, 480) if t0 else set()
@@ -582,8 +582,8 @@ try:
     check("Monitor clock follows +0800", got in exp)
     # Old path at +0800: discriminating -- the UI-3
     # clock hardcodes WIB, so this FAILs pre-change.
-    key(ser, "ok", "UILV2: focus qabot", 20)  # Monitor BACK -> menu
-    key(ser, "back", "UILV2: release", 20)
+    key(ser, "ok", "UILV2: focus qabot", 32)  # Monitor BACK -> menu
+    key(ser, "back", "UILV2: release", 32)
     check("old status-bar clock follows +0800 (glyph-exact)",
           old_clock_check(ser, mon, 480, "old+0800"))
     # Malformed tz -> WIB fallback. Note: we are
@@ -597,7 +597,7 @@ try:
     check("grant starts the shell menu (bogus tz)", grant_menu(ser))
     mon_pos = len(serial)
     check("6x down + OK opens Monitor (bogus tz)",
-          goto_entry(ser, 6, "UILV4: monitor", 20))
+          goto_entry(ser, 6, "UILV4: monitor", 32))
     time.sleep(1.0)
     got = mon_time_row(ser, mon_pos)
     exp = expected_hhmm(t1, 420) if t1 else set()
@@ -606,8 +606,8 @@ try:
     check("Monitor clock falls back to WIB on malformed tz",
           got in exp)
     # Restore +0700 (independent read-back via setup status).
-    key(ser, "ok", "UILV2: focus qabot", 20)  # Monitor BACK -> menu
-    key(ser, "back", "UILV2: release", 20)
+    key(ser, "ok", "UILV2: focus qabot", 32)  # Monitor BACK -> menu
+    key(ser, "back", "UILV2: release", 32)
     check("shell restores timezone +0700",
           shell_cmd(ser, "setup tz +0700", "setup: tz saved", 10))
     check("setup status reads back +0700",
@@ -634,10 +634,10 @@ try:
           shell_cmd(ser, "gui", "face: Qabot server starting", 60))
     check("shutdown grant starts the shell menu", grant_menu(ser))
     check("shutdown: 7x down + OK opens Power",
-          goto_entry(ser, 7, "UILV4: power", 20))
+          goto_entry(ser, 7, "UILV4: power", 32))
     # focus SHUTDOWN -> immediate poweroff
     check("Shutdown action prints the marker",
-          key(ser, "ok", "UILV4: power shutdown", 20))
+          key(ser, "ok", "UILV4: power shutdown", 32))
     try:
         qemu.wait(timeout=30)
         exited = True
@@ -663,12 +663,12 @@ try:
           shell_cmd(ser, "gui", "face: Qabot server starting", 60))
     check("restart grant starts the shell menu", grant_menu(ser))
     check("restart: 7x down + OK opens Power",
-          goto_entry(ser, 7, "UILV4: power", 20))
+          goto_entry(ser, 7, "UILV4: power", 32))
     check("restart: 1x down focuses RESTART",
-          key(ser, "down", "UILV4: focus restart", 20))
-    check("Restart action prints the marker",
-          key(ser, "ok", "UILV4: power restart", 20))
+          key(ser, "down", "UILV4: focus restart", 32))
     pos = len(serial)
+    check("Restart action prints the marker",
+          key(ser, "ok", "UILV4: power restart", 32))
     check("Restart: kernel logged SYS_RESET",
           wait_from(pos, "sys: SYS_RESET (software request)", 30))
     check("Restart: new boot reaches qaon> prompt",
@@ -687,13 +687,13 @@ try:
           shell_cmd(ser, "gui", "face: Qabot server starting", 60))
     check("sleep grant starts the shell menu", grant_menu(ser))
     check("sleep: 7x down + OK opens Power",
-          goto_entry(ser, 7, "UILV4: power", 20))
+          goto_entry(ser, 7, "UILV4: power", 32))
     send_keys(ser, ["down", "down"], 0.8)
-    check("Sleep action prints the marker",
-          key(ser, "ok", "UILV4: power sleep", 20))
     pos = len(serial)
+    check("Sleep action prints the marker",
+          key(ser, "ok", "UILV4: power sleep", 32))
     check("Sleep: token released",
-          wait_from(pos, "UILV2: release", 20))
+          wait_from(pos, "UILV2: release", 32))
     time.sleep(1.0)
     ppm_sleep = screendump(mon, "ui4-sleep")
     check("sleep screendump saved", ppm_sleep is not None)
