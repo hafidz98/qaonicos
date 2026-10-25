@@ -287,6 +287,34 @@ def frame_diff(a, b):
     return n
 
 
+def send_key(ser, k):
+    """Send one key with injection verification (resend
+    once on PL011 byte-loss). True if sh ran it."""
+    for _ in range(2):
+        pos = len(serial)
+        ser.sendall(f"key {k}\n".encode())
+        if wait_from(pos, "key: injected", 5):
+            return True
+    return False
+
+
+def wait_either(pos, needles, timeout=32):
+    """First of needles to appear in serial[pos:], or None."""
+    t0 = time.time()
+    nbs = [n.encode() for n in needles]
+    while time.time() - t0 < timeout * TSCALE:
+        seg = serial[pos:]
+        for nb, n in zip(nbs, needles):
+            if nb in seg:
+                return n
+        time.sleep(0.2)
+    seg = serial[pos:]
+    for nb, n in zip(nbs, needles):
+        if nb in seg:
+            return n
+    return None
+
+
 def key(ser, k, needle, timeout=32):
     """Send one key, verifying sh ran it.
 
@@ -326,7 +354,7 @@ def grant_menu(ser):
         ser.sendall(b"key menu\n")
         if not wait_from(pos, "key: injected", 5):
             # Byte-loss on the send ('ey menu'): resend once
-            # before spending 20 s waiting for a grant that
+            # before spending 32 s waiting for a grant that
             # can never arrive.
             pos = len(serial)
             ser.sendall(b"key menu\n")
@@ -336,7 +364,28 @@ def grant_menu(ser):
             return True
         if find_after(pos, "UILV2: focus"):
             return True
-    return False
+    # Recovery: the menu may be alive at unknown focus
+    # (a lagged transition left it running), in which
+    # case menu keys are ignored. BACK out, let any
+    # pending release complete (release clears evq, so
+    # the fresh menu key must come after it), then
+    # grant fresh. A BACK that lands on the menu
+    # (leaf screen -> menu at qabot) also counts.
+    pos = len(serial)
+    send_key(ser, "back")
+    if wait_from(pos, "UILV2: start", 32):
+        return True
+    wait_from(pos, "UILV2: release", 32)  # best effort
+    pos = len(serial)
+    ser.sendall(b"key menu\n")
+    if not wait_from(pos, "key: injected", 5):
+        pos = len(serial)
+        ser.sendall(b"key menu\n")
+        if not wait_from(pos, "key: injected", 5):
+            return False
+    if wait_from(pos, "UILV2: start", 32):
+        return True
+    return find_after(pos, "UILV2: focus")
 
 
 def setup_flow(ser):
@@ -396,10 +445,23 @@ def old_clock_check(ser, mon, off_min, label):
             break
     # BACK out: the Wi-Fi screen eats its first
     # keypress to dismiss its no-peer note (UI-2
-    # lesson), so a second BACK may be needed.
-    if not key(ser, "back", "UILV2: start", 10):
-        if not key(ser, "back", "UILV2: start", 32):
-            return False
+    # lesson), so a second BACK may be needed. Under
+    # guest lag each BACK takes up to ~30 s to act,
+    # and a BACK that overshoots straight to release
+    # still ends at the desired shell state -- accept
+    # either marker as progress.
+    at_menu = False
+    for _ in range(3):
+        pos = len(serial)
+        send_key(ser, "back")
+        m = wait_either(pos, ("UILV2: start", "UILV2: release"), 32)
+        if m == "UILV2: release":
+            return ok
+        if m == "UILV2: start":
+            at_menu = True
+            break
+    if not at_menu:
+        return False
     if not key(ser, "back", "UILV2: release", 32):
         return False
     return ok
