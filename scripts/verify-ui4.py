@@ -105,6 +105,10 @@ for s in (SER, MON):
 serial = b""
 
 
+T0 = time.time()
+mark_log = []
+
+
 def start_reader(ser):
     def _reader():
         global serial
@@ -113,6 +117,13 @@ def start_reader(ser):
                 d = ser.recv(4096)
                 if d:
                     serial += d
+                    # Timestamped marker arrivals: adjudicates
+                    # wait-expired-vs-device-slow disputes.
+                    if (b"UILV2:" in d or b"UILV4:" in d or
+                            b"key: injected" in d or
+                            b"perintah tak dikenal" in d):
+                        mark_log.append((round(time.time() - T0, 1),
+                                         d[:200]))
             except socket.timeout:
                 pass
             except OSError:
@@ -197,20 +208,21 @@ def find_after(pos, needle):
     return needle.encode() in serial[pos:]
 
 
-def wait_shell_ready(ser, tries=4):
-    """Probe that sh (not face) owns the console.
+def wait_shell_ready(ser, tries=3):
+    """Probe that sh answers before a `time` read.
 
-    After a display release there is a window where face drains
-    the console: bytes of a typed shell command are translated
-    to key events ('m' -> EV_MENU re-grants uiapp!) and never
-    reach sh. 'setup status' contains no 'm', so a stolen probe
-    is harmless; a printed 'setup: tz ' proves sh owns the
-    console again.
+    'setup status' prints a '  tz: ...' line; seeing it proves
+    sh processed a command after the last release, so the
+    following `time` send is not racing shell state.
+    (Note: face cannot steal console bytes -- sh takes
+    console ownership at startup and never releases it --
+    so a failed probe means sh itself is unresponsive, not
+    a face drain.)
     """
     for _ in range(tries):
         pos = len(serial)
         ser.sendall(b"setup status\n")
-        if wait_from(pos, "setup: tz ", 5):
+        if wait_from(pos, "  tz: ", 5):
             return True
     return False
 
@@ -276,14 +288,28 @@ def frame_diff(a, b):
 
 
 def key(ser, k, needle, timeout=20):
-    pos = len(serial)
-    ser.sendall(f"key {k}\n".encode())
+    """Send one key, verifying sh ran it.
+
+    PL011 RX under cooperative scheduling can drop a byte
+    ('key menu' -> 'ey menu' -> unknown command, seen in
+    run 2); 'key: injected' proves sh parsed the full line,
+    so a missing confirmation triggers one resend.
+    """
+    for _ in range(2):
+        pos = len(serial)
+        ser.sendall(f"key {k}\n".encode())
+        if wait_from(pos, "key: injected", 5):
+            break
     return wait_from(pos, needle, timeout)
 
 
 def send_keys(ser, seq, delay=0.35):
     for k in seq:
-        ser.sendall(f"key {k}\n".encode())
+        for _ in range(2):
+            pos = len(serial)
+            ser.sendall(f"key {k}\n".encode())
+            if wait_from(pos, "key: injected", 5):
+                break
         time.sleep(delay * TSCALE)
 
 
@@ -298,6 +324,14 @@ def grant_menu(ser):
     for _ in range(3):
         pos = len(serial)
         ser.sendall(b"key menu\n")
+        if not wait_from(pos, "key: injected", 5):
+            # Byte-loss on the send ('ey menu'): resend once
+            # before spending 20 s waiting for a grant that
+            # can never arrive.
+            pos = len(serial)
+            ser.sendall(b"key menu\n")
+            if not wait_from(pos, "key: injected", 5):
+                continue
         if wait_from(pos, "UILV2: start", 20):
             return True
         if find_after(pos, "UILV2: focus"):
@@ -329,9 +363,7 @@ def goto_entry(ser, downs, marker, timeout=20):
     for i in range(downs):
         if not key(ser, "down", "UILV2: focus " + want[i], 20):
             return False
-    pos = len(serial)
-    ser.sendall(b"key ok\n")
-    return wait_from(pos, marker, timeout)
+    return key(ser, "ok", marker, timeout)
 
 
 def old_clock_check(ser, mon, off_min, label):
@@ -365,16 +397,10 @@ def old_clock_check(ser, mon, off_min, label):
     # BACK out: the Wi-Fi screen eats its first
     # keypress to dismiss its no-peer note (UI-2
     # lesson), so a second BACK may be needed.
-    pos = len(serial)
-    ser.sendall(b"key back\n")
-    if not wait_from(pos, "UILV2: start", 10):
-        pos = len(serial)
-        ser.sendall(b"key back\n")
-        if not wait_from(pos, "UILV2: start", 20):
+    if not key(ser, "back", "UILV2: start", 10):
+        if not key(ser, "back", "UILV2: start", 20):
             return False
-    pos = len(serial)
-    ser.sendall(b"key back\n")
-    if not wait_from(pos, "UILV2: release", 20):
+    if not key(ser, "back", "UILV2: release", 20):
         return False
     return ok
 
@@ -382,9 +408,8 @@ def old_clock_check(ser, mon, off_min, label):
 def read_unix_time(ser):
     """Shell `time` -> unix seconds, or None.
 
-    Retries through wait_shell_ready: a bare 'time' typed
-    while face drains the console is stolen (its 'm' becomes
-    EV_MENU) and never reaches sh.
+    Retries through wait_shell_ready so a transiently
+    unresponsive shell does not poison the tz checks.
     """
     for _ in range(3):
         if not wait_shell_ready(ser):
@@ -517,10 +542,8 @@ try:
         check("monitor: BACK button rendered (blue)", back_blue > 1000)
         check("monitor: differs from the menu", fd > 1000)
     # BACK button -> menu (focus returns to Qabot).
-    pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("Monitor BACK button returns to the menu",
-          wait_from(pos, "UILV2: focus qabot", 20))
+          key(ser, "ok", "UILV2: focus qabot", 20))
 
     # ---- Power screen ----
     check("7x down + OK opens Power",
@@ -535,17 +558,13 @@ try:
             print(f"  power button {i} blue={bb}", flush=True)
             check(f"power: button {i} rendered (blue)", bb > 1000)
     # BACK key -> menu.
-    pos = len(serial)
-    ser.sendall(b"key back\n")
     check("Power BACK key returns to the menu",
-          wait_from(pos, "UILV4: back menu", 20))
+          key(ser, "back", "UILV4: back menu", 20))
 
     # ---- tz-clock, LVGL path ----
     # Release to the shell, then drive tz from there.
-    pos = len(serial)
-    ser.sendall(b"key back\n")
     check("BACK at menu root releases",
-          wait_from(pos, "UILV2: release", 20))
+          key(ser, "back", "UILV2: release", 20))
     t0 = read_unix_time(ser)
     check("shell time readable", t0 is not None)
     check("shell sets timezone +0800",
@@ -563,12 +582,8 @@ try:
     check("Monitor clock follows +0800", got in exp)
     # Old path at +0800: discriminating -- the UI-3
     # clock hardcodes WIB, so this FAILs pre-change.
-    pos = len(serial)
-    ser.sendall(b"key ok\n")  # Monitor BACK button -> menu
-    wait_from(pos, "UILV2: focus qabot", 20)
-    pos = len(serial)
-    ser.sendall(b"key back\n")
-    wait_from(pos, "UILV2: release", 20)
+    key(ser, "ok", "UILV2: focus qabot", 20)  # Monitor BACK -> menu
+    key(ser, "back", "UILV2: release", 20)
     check("old status-bar clock follows +0800 (glyph-exact)",
           old_clock_check(ser, mon, 480, "old+0800"))
     # Malformed tz -> WIB fallback. Note: we are
@@ -591,12 +606,8 @@ try:
     check("Monitor clock falls back to WIB on malformed tz",
           got in exp)
     # Restore +0700 (independent read-back via setup status).
-    pos = len(serial)
-    ser.sendall(b"key ok\n")
-    wait_from(pos, "UILV2: focus qabot", 20)
-    pos = len(serial)
-    ser.sendall(b"key back\n")
-    wait_from(pos, "UILV2: release", 20)
+    key(ser, "ok", "UILV2: focus qabot", 20)  # Monitor BACK -> menu
+    key(ser, "back", "UILV2: release", 20)
     check("shell restores timezone +0700",
           shell_cmd(ser, "setup tz +0700", "setup: tz saved", 10))
     check("setup status reads back +0700",
@@ -616,14 +627,17 @@ try:
     # No setup dance here: this relaunch lands on a
     # provisioned disk, where setup_flow cannot reach
     # finale (face picks setup-vs-normal at startup).
-    # The menu grant works regardless of provisioning.
+    # Dev mode boots shell-first: daemons launch only on
+    # `gui` (run 2 proved a grant without gui can never
+    # arrive -- no face exists to grant it).
+    check("shutdown boot dashboard starts",
+          shell_cmd(ser, "gui", "face: Qabot server starting", 60))
     check("shutdown grant starts the shell menu", grant_menu(ser))
     check("shutdown: 7x down + OK opens Power",
           goto_entry(ser, 7, "UILV4: power", 20))
-    pos = len(serial)
-    ser.sendall(b"key ok\n")  # focus SHUTDOWN -> immediate poweroff
+    # focus SHUTDOWN -> immediate poweroff
     check("Shutdown action prints the marker",
-          wait_from(pos, "UILV4: power shutdown", 20))
+          key(ser, "ok", "UILV4: power shutdown", 20))
     try:
         qemu.wait(timeout=30)
         exited = True
@@ -632,7 +646,12 @@ try:
     check("Shutdown: QEMU exits on its own", exited)
     check("Shutdown: QEMU exit code 0", exited and qemu.poll() == 0)
 
-    # Restart.
+    # Restart. Defensive close first: if the Shutdown
+    # QEMU is still alive (its action never ran), a
+    # bare relaunch collides on hostfwd 18080 and the
+    # new QEMU dies before creating its sockets (run 2
+    # crash).
+    close_qemu(qemu, mon)
     qemu, ser, mon = launch_qemu()
     check("restart boot reaches qaon> prompt",
           wait_from(0, "qaon>", 120))
@@ -640,15 +659,16 @@ try:
     # provisioned disk, where setup_flow cannot reach
     # finale (face picks setup-vs-normal at startup).
     # The menu grant works regardless of provisioning.
+    check("restart boot dashboard starts",
+          shell_cmd(ser, "gui", "face: Qabot server starting", 60))
     check("restart grant starts the shell menu", grant_menu(ser))
     check("restart: 7x down + OK opens Power",
           goto_entry(ser, 7, "UILV4: power", 20))
     check("restart: 1x down focuses RESTART",
           key(ser, "down", "UILV4: focus restart", 20))
-    pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("Restart action prints the marker",
-          wait_from(pos, "UILV4: power restart", 20))
+          key(ser, "ok", "UILV4: power restart", 20))
+    pos = len(serial)
     check("Restart: kernel logged SYS_RESET",
           wait_from(pos, "sys: SYS_RESET (software request)", 30))
     check("Restart: new boot reaches qaon> prompt",
@@ -663,14 +683,15 @@ try:
     # provisioned disk, where setup_flow cannot reach
     # finale (face picks setup-vs-normal at startup).
     # The menu grant works regardless of provisioning.
+    check("sleep boot dashboard starts",
+          shell_cmd(ser, "gui", "face: Qabot server starting", 60))
     check("sleep grant starts the shell menu", grant_menu(ser))
     check("sleep: 7x down + OK opens Power",
           goto_entry(ser, 7, "UILV4: power", 20))
     send_keys(ser, ["down", "down"], 0.8)
-    pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("Sleep action prints the marker",
-          wait_from(pos, "UILV4: power sleep", 20))
+          key(ser, "ok", "UILV4: power sleep", 20))
+    pos = len(serial)
     check("Sleep: token released",
           wait_from(pos, "UILV2: release", 20))
     time.sleep(1.0)
@@ -714,6 +735,9 @@ finally:
     try:
         with open(os.path.join(LOGDIR, "ui4-serial.log"), "wb") as f:
             f.write(serial)
+        with open(os.path.join(LOGDIR, "ui4-marks.log"), "w") as f:
+            for (t, d) in mark_log:
+                f.write(f"{t} {d!r}\n")
     except Exception:
         pass
     if qemu is not None:
