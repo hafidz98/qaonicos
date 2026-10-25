@@ -171,6 +171,10 @@ clang $UCFLAGS2 -c "$USR/uiapp/lv_port.c" -o "$BUILD/uiapp_lv_port.o" >>"$LOG" 2
 # shellcheck disable=SC2086
 clang $UCFLAGS2 -c "$USR/uiapp/lv_shell.c" -o "$BUILD/uiapp_lv_shell.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/uiapp/lv_shell.c (see $LOG)"; exit 1; }
+# Settings submenu (UI-3).
+# shellcheck disable=SC2086
+clang $UCFLAGS2 -c "$USR/uiapp/lv_settings.c" -o "$BUILD/uiapp_lv_settings.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/uiapp/lv_settings.c (see $LOG)"; exit 1; }
 # shellcheck disable=SC2086
 clang $UCFLAGS2 -c "$USR/uiapp/lv_shim.c" -o "$BUILD/uiapp_lv_shim.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/uiapp/lv_shim.c (see $LOG)"; exit 1; }
@@ -188,7 +192,7 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     "$BUILD/uiapp_scr_passkey.o" "$BUILD/uiapp_scr_textedit.o" \
     "$BUILD/uartproto_linkcli.o" \
     "$BUILD/uiapp_lv_port.o" "$BUILD/uiapp_lv_shell.o" \
-    "$BUILD/uiapp_lv_shim.o" \
+    "$BUILD/uiapp_lv_settings.o" "$BUILD/uiapp_lv_shim.o" \
     $LVOBJS \
     "$BUILD/cfg.o" \
     "$BUILD/ulib.o" "$BUILD/udiv.o" \

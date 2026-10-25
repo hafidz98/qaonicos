@@ -46,6 +46,22 @@ void	uilvgl_shell_end(void);
  * releases). */
 int	uilvgl_take_back(void);
 
+/* Raw-key mode (UI-3): while on, the keypad indev
+ * stops draining the EV queue and uilvgl_take_key()
+ * returns one raw EV code per call (EV_NONE when the
+ * queue holds no key). BACK in raw mode is a plain
+ * key and does not set the exit edge. */
+void	uilvgl_raw_keys(int on);
+int	uilvgl_take_key(void);
+
+/* Littlefs read/write for uiapp screens (syscalls
+ * 96/97; returns len/0 or a negative error). The
+ * Settings screen reads cfg-name/cfg-tz and writes
+ * cfg-tz through these -- the same files the web
+ * settings page and the shell setup command use. */
+int	uilvgl_lfs_read(const char *path, char *buf, unsigned max);
+int	uilvgl_lfs_write(const char *path, const char *buf, unsigned len);
+
 /* Milliseconds of the last keypad press (any key),
  * for idle tracking. Set by the keypad callback and
  * initialised by begin(). */

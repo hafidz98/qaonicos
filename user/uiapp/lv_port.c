@@ -26,7 +26,8 @@
 
 /* lfs syscalls are not exposed by ulib (same file-local
  * trap wrappers as user/ulink5d.c): 94 = MOUNT,
- * 96 = READ. Only used for the smoke marker. */
+ * 96 = READ, 97 = WRITE. Used for the smoke marker
+ * (UI-1) and the Settings screen (UI-3). */
 static int
 lv_lfs_simple(unsigned num)
 {
@@ -40,8 +41,8 @@ lv_lfs_simple(unsigned num)
 	return ret;
 }
 
-static int
-lv_lfs_read(const char *path, char *buf, unsigned max)
+int
+uilvgl_lfs_read(const char *path, char *buf, unsigned max)
 {
 	register unsigned _r0 __asm__("r0") = (unsigned)path;
 	register unsigned _r1 __asm__("r1") = (unsigned)buf;
@@ -49,6 +50,22 @@ lv_lfs_read(const char *path, char *buf, unsigned max)
 	int ret;
 	__asm__ volatile(
 		"mov r7, #96\n\t"
+		"svc #0\n\t"
+		"mov %0, r0"
+		: "=r" (ret) : "r" (_r0), "r" (_r1), "r" (_r2)
+		: "r7", "lr", "memory", "cc");
+	return ret;
+}
+
+int
+uilvgl_lfs_write(const char *path, const char *buf, unsigned len)
+{
+	register unsigned _r0 __asm__("r0") = (unsigned)path;
+	register unsigned _r1 __asm__("r1") = (unsigned)buf;
+	register unsigned _r2 __asm__("r2") = len;
+	int ret;
+	__asm__ volatile(
+		"mov r7, #97\n\t"
 		"svc #0\n\t"
 		"mov %0, r0"
 		: "=r" (ret) : "r" (_r0), "r" (_r1), "r" (_r2)
@@ -68,6 +85,7 @@ static lv_group_t *grp;
 static lv_indev_t *indev;
 static lv_obj_t *status_label;
 static int exit_requested;
+static int raw_keys;
 static unsigned last_input_ms;
 static unsigned flush_fail_count;
 static int lv_inited;
@@ -102,6 +120,7 @@ uilvgl_shell_begin(void)
 	lv_indev_set_group(indev, grp);
 
 	exit_requested = 0;
+	raw_keys = 0;
 	last_input_ms = sys_uptime();
 	flush_fail_count = 0;
 	return grp;
@@ -141,6 +160,41 @@ uilvgl_last_input_ms(void)
 	return last_input_ms;
 }
 
+/* Raw-key mode (UI-3, for the PIN digit-picker): while
+ * on, the keypad indev stops draining the EV queue and
+ * uilvgl_take_key() hands raw EV codes to the caller
+ * instead. BACK in raw mode is a plain key for the
+ * picker to consume as cancel -- it deliberately does
+ * NOT set exit_requested, so the shell loop's BACK
+ * branch cannot double-handle it. Leaving raw mode
+ * is always paired with a view rebuild, so no stale
+ * key can leak into the next view. */
+void
+uilvgl_raw_keys(int on)
+{
+	raw_keys = on ? 1 : 0;
+}
+
+int
+uilvgl_take_key(void)
+{
+	int ev = sys_display_get_event();
+
+	switch (ev) {
+	case EV_UP:
+	case EV_DOWN:
+	case EV_LEFT:
+	case EV_RIGHT:
+	case EV_OK:
+	case EV_BACK:
+		last_input_ms = sys_uptime();
+		return ev;
+	default:
+		break;	/* EV_NONE, EV_TICK, EV_MENU: no key */
+	}
+	return EV_NONE;
+}
+
 unsigned
 uilvgl_flush_failures(void)
 {
@@ -167,6 +221,12 @@ indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 	int ev, key;
 
 	(void)indev;
+	/* Raw-key mode: the picker owns the EV queue, so
+	 * the indev reports nothing and drains nothing. */
+	if (raw_keys) {
+		data->state = LV_INDEV_STATE_RELEASED;
+		return;
+	}
 	/* A press is reported once, then a release: the
 	 * keypad model needs the pair, and the EV queue
 	 * holds at most one event per read. */
@@ -256,7 +316,7 @@ uilvgl_smoke_enabled(void)
 	 * marker cannot exist, so plain "not enabled". */
 	if (lv_lfs_simple(94u) != 0)
 		return 0;
-	if (lv_lfs_read("ui1-test", marker, sizeof(marker)) < 0)
+	if (uilvgl_lfs_read("ui1-test", marker, sizeof(marker)) < 0)
 		return 0;
 	return marker[0] == '1';
 }
