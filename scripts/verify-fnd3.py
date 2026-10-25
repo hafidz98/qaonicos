@@ -207,14 +207,20 @@ def eye_count(ppm):
     return cnt
 
 
-def sel_count(ppm):
+def blue_count(ppm):
+    """Theme-button blue pixels (UI-2 LVGL menu).
+
+    Same predicate as verify-ui2.py's band_stats: b > 150 and
+    b - r > 80. Replaces the old menu's C_SEL tile count,
+    which the LVGL menu no longer renders.
+    """
     from PIL import Image
     img = Image.open(ppm).convert("RGB")
     cnt = 0
     for yy in range(0, 240):
         for xx in range(0, 240):
             r, g, b = img.getpixel((xx, yy))
-            if abs(r - 24) < 14 and abs(g - 45) < 16 and abs(b - 74) < 18:
+            if b > 150 and b - r > 80:
                 cnt += 1
     return cnt
 
@@ -420,7 +426,8 @@ if finale_ok:
     # must hold either way: the token IS home (the eyes /
     # re-grant / menu checks below).
     via_reclaim = "died holding display" in txt()[pos:]
-    via_idle = "uiapp: idle -> release" in txt()[pos:]
+    via_idle = "uiapp: idle -> release" in txt()[pos:] or \
+        "UILV2: idle exit" in txt()[pos:]
     print(f"  token returned via: "
           f"{'supervisor reclaim' if via_reclaim else 'uiapp idle release' if via_idle else 'NEITHER'}",
           flush=True)
@@ -451,10 +458,10 @@ if finale_ok:
     check("B: face grants again + uiapp re-acquires", ok_grant)
     time.sleep(2.0)
     ppm = screendump("fnd3-menu-again")
-    sc = sel_count(ppm)
-    print(f"  selected-tile pixels in re-granted menu: {sc}",
+    sc = blue_count(ppm)
+    print(f"  LVGL button-blue pixels in re-granted menu: {sc}",
           flush=True)
-    check("B: menu renders again after re-grant", sc > 800)
+    check("B: menu renders again after re-grant", sc > 1000)
 else:
     for name in ("B: uhangd child became display holder via grant",
                  "B: supervisor killed the wedged holder",

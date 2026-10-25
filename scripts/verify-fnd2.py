@@ -181,15 +181,20 @@ def eye_count(ppm):
     return cnt
 
 
-def sel_count(ppm):
-    """Pixels of the selected-tile fill C_SEL (RGB ~ (24,45,74))."""
+def blue_count(ppm):
+    """Theme-button blue pixels (UI-2 LVGL menu).
+
+    Same predicate as verify-ui2.py's band_stats: b > 150 and
+    b - r > 80. Replaces the old menu's C_SEL tile count,
+    which the LVGL menu no longer renders.
+    """
     from PIL import Image
     img = Image.open(ppm).convert("RGB")
     cnt = 0
     for yy in range(0, 240):
         for xx in range(0, 240):
             r, g, b = img.getpixel((xx, yy))
-            if abs(r - 24) < 14 and abs(g - 45) < 16 and abs(b - 74) < 18:
+            if b > 150 and b - r > 80:
                 cnt += 1
     return cnt
 
@@ -355,10 +360,10 @@ if finale_ok:
     check("face grants again + uiapp re-acquires", ok_grant)
     time.sleep(2.0)
     ppm = screendump("fnd2-menu-again")
-    sc = sel_count(ppm)
-    print(f"  selected-tile pixels in re-granted menu: {sc}",
+    sc = blue_count(ppm)
+    print(f"  LVGL button-blue pixels in re-granted menu: {sc}",
           flush=True)
-    check("menu renders again after re-grant", sc > 800)
+    check("menu renders again after re-grant", sc > 1000)
 else:
     for name in ("ufaultd child became display holder via grant",
                  "holder child fault isolated",

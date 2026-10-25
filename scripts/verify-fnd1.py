@@ -194,7 +194,7 @@ for line in seg.splitlines():
 # ----------------------------------------------------------------
 # Phase C: GUI Power screen (same boot). Drive the standard
 # flow: unprovision -> gui (QR) -> setup done (finale) ->
-# menu -> POWER tile -> Power screen.
+# LVGL shell menu -> Power entry -> Power screen.
 send_pos = len(serial)
 ser.sendall(b"setup reset\n")
 time.sleep(0.6)
@@ -214,10 +214,12 @@ ser.sendall(b"key menu\n")
 time.sleep(1.5)
 ser.sendall(b"key menu\n")
 time.sleep(2.5)
-ser.sendall(b"key down\n")     # menu sel 0 -> 2 (SETTINGS row)
-time.sleep(0.8)
-ser.sendall(b"key right\n")    # 2 -> 3 (POWER)
-time.sleep(0.8)
+# UI-2: the LVGL shell menu replaces the old grid menu.
+# Focus starts on Qabot (entry 0); Power is entry 7, so
+# 7x DOWN then OK runs the existing scr_power screen.
+for _ in range(7):
+    ser.sendall(b"key down\n")
+    time.sleep(0.8)
 ser.sendall(b"key ok\n")       # open Power screen
 time.sleep(2.5)
 
