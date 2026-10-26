@@ -57,19 +57,90 @@ uilvgl_lfs_read(const char *path, char *buf, unsigned max)
 	return ret;
 }
 
+/* Timezone offset cache (UI-4): fmt_clock in lv_shell.c
+ * and ui.c both call uilvgl_tz_offset_min() on every
+ * clock render, so the cfg-tz read is cached. The
+ * cache is invalidated on any cfg-tz write through
+ * this file (the Settings screen's path) and expires
+ * after 5 s otherwise (shell `setup tz` writes around
+ * this cache, from another program). */
+static int	tz_cached = 0;
+static int	tz_cache_min = 420;	/* WIB fallback */
+static unsigned	tz_cache_ms;
+
+static int
+tz_parse(const char *s)
+{
+	/* Strict "+HHMM"/"-HHMM" (the format setup and
+	 * the Settings screen write). Anything else is
+	 * malformed and falls back to WIB. */
+	int sign = 1, hh, mm, i;
+	if (s[0] == '+')
+		i = 1;
+	else if (s[0] == '-')
+		i = 1, sign = -1;
+	else
+		return 420;
+	while (i < 5) {
+		if (s[i] < '0' || s[i] > '9')
+			return 420;
+		i++;
+	}
+	if (s[5] != 0)
+		return 420;
+	hh = (s[1] - '0') * 10 + (s[2] - '0');
+	mm = (s[3] - '0') * 10 + (s[4] - '0');
+	if (hh > 14 || mm > 59)
+		return 420;
+	return sign * (hh * 60 + mm);
+}
+
+int
+uilvgl_tz_offset_min(void)
+{
+	char buf[16];
+	int n;
+	unsigned now = sys_uptime();
+
+	if (tz_cached && now - tz_cache_ms < 5000u)
+		return tz_cache_min;
+	n = uilvgl_lfs_read("cfg-tz", buf, sizeof(buf) - 1u);
+	if (n <= 0)
+		tz_cache_min = 420;
+	else {
+		buf[n] = 0;
+		tz_cache_min = tz_parse(buf);
+	}
+	tz_cached = 1;
+	tz_cache_ms = now;
+	return tz_cache_min;
+}
+
 int
 uilvgl_lfs_write(const char *path, const char *buf, unsigned len)
 {
 	register unsigned _r0 __asm__("r0") = (unsigned)path;
 	register unsigned _r1 __asm__("r1") = (unsigned)buf;
 	register unsigned _r2 __asm__("r2") = len;
-	int ret;
+	int ret, i, same = 1;
+	const char *want = "cfg-tz";
 	__asm__ volatile(
 		"mov r7, #97\n\t"
 		"svc #0\n\t"
 		"mov %0, r0"
 		: "=r" (ret) : "r" (_r0), "r" (_r1), "r" (_r2)
 		: "r7", "lr", "memory", "cc");
+	/* A cfg-tz write invalidates the offset cache so
+	 * the clocks move on the next render, not after
+	 * the 5 s TTL. Compare without strlen (no libc). */
+	for (i = 0; i < 6; i++) {
+		if (path[i] != want[i]) {
+			same = 0;
+			break;
+		}
+	}
+	if (same)
+		tz_cached = 0;
 	return ret;
 }
 

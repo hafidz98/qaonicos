@@ -62,6 +62,11 @@ int	uilvgl_take_key(void);
 int	uilvgl_lfs_read(const char *path, char *buf, unsigned max);
 int	uilvgl_lfs_write(const char *path, const char *buf, unsigned len);
 
+/* Timezone offset in minutes from cfg-tz (UI-4):
+ * parsed "+HHMM"/"-HHMM", WIB (+420) on missing or
+ * malformed values. Cached (see lv_port.c). */
+int	uilvgl_tz_offset_min(void);
+
 /* Milliseconds of the last keypad press (any key),
  * for idle tracking. Set by the keypad callback and
  * initialised by begin(). */

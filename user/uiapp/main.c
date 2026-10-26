@@ -25,7 +25,6 @@ extern const screen_t scr_wifi;
 extern const screen_t scr_ble;
 extern const screen_t scr_llm;
 extern const screen_t scr_passkey;
-extern const screen_t scr_power;
 
 /* dari ui.c */
 void	ui_render_frame(void);
@@ -123,7 +122,6 @@ _start(void)
 			case SHELL_BLE: tgt = &scr_ble; tname = "ble"; break;
 			case SHELL_LLM: tgt = &scr_llm; tname = "llm"; break;
 			case SHELL_PASSKEY: tgt = &scr_passkey; tname = "passkey"; break;
-			case SHELL_POWER: tgt = &scr_power; tname = "power"; break;
 			default: break;	/* SHELL_RELEASE */
 			}
 			if (tgt == NULL)

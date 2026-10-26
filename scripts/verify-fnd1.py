@@ -216,12 +216,14 @@ ser.sendall(b"key menu\n")
 time.sleep(2.5)
 # UI-2: the LVGL shell menu replaces the old grid menu.
 # Focus starts on Qabot (entry 0); Power is entry 7, so
-# 7x DOWN then OK runs the existing scr_power screen.
+# 7x DOWN then OK opens the UI-4 LVGL Power screen
+# (no longer the hand-rolled scr_power screen).
 for _ in range(7):
     ser.sendall(b"key down\n")
     time.sleep(0.8)
 ser.sendall(b"key ok\n")       # open Power screen
 time.sleep(2.5)
+pwr_ok = wait_from(len(serial) - 200, "UILV4: power", 20)
 
 ppm = os.path.join(ROOT, "logs", "fnd1-power.ppm")
 mon.sendall(f"screendump {ppm}\n".encode())
@@ -237,25 +239,31 @@ if dump_ok:
     from PIL import Image
     im = Image.open(ppm).convert("RGB")
     im.save(png)
-    # Item rows in scr_power.c: Y0=58, LH=30 -> labels at
-    # y = 58, 88, 118, 148 (SHUTDOWN/RESTART/SLEEP NOW/BACK).
-    # Count bright (glyph) pixels in each label band; the
-    # face/menu use a near-black background (8,12,24).
-    for i, y in enumerate((58, 88, 118, 148)):
+    # LVGL Power buttons (lv_power.c): BTN_Y0=48,
+    # BTN_H=24, BTN_GAP=2 -> bands 48-72, 74-98,
+    # 100-124, 126-150 (SHUTDOWN/RESTART/SLEEP/BACK).
+    # Count theme-button blue pixels (b > 150 and
+    # b - r > 80, same predicate as verify-ui2.py).
+    for y0, y1 in ((48, 72), (74, 98), (100, 124), (126, 150)):
         n = 0
-        for yy in range(y, y + 9):
-            for xx in range(60, 181):
+        for yy in range(y0, y1):
+            for xx in range(240):
                 r, g, b = im.getpixel((xx, yy))
-                if r + g + b > 200:
+                if b > 150 and b - r > 80:
                     n += 1
         bands.append(n)
-    print("  label-band glyph pixels (SHUTDOWN/RESTART/SLEEP/BACK):",
+    print("  power-button blue pixels (SHUTDOWN/RESTART/SLEEP/BACK):",
           bands, flush=True)
 check("power screen screendump saved", dump_ok)
-check("power screen: SHUTDOWN row rendered", len(bands) == 4 and bands[0] > 20)
-check("power screen: RESTART item visible", len(bands) == 4 and bands[1] > 20)
-check("power screen: SLEEP NOW row rendered", len(bands) == 4 and bands[2] > 20)
-check("power screen: BACK row rendered", len(bands) == 4 and bands[3] > 20)
+check("power screen opened (UILV4: power)", pwr_ok)
+check("power screen: SHUTDOWN button rendered",
+      len(bands) == 4 and bands[0] > 1000)
+check("power screen: RESTART button rendered",
+      len(bands) == 4 and bands[1] > 1000)
+check("power screen: SLEEP NOW button rendered",
+      len(bands) == 4 and bands[2] > 1000)
+check("power screen: BACK button rendered",
+      len(bands) == 4 and bands[3] > 1000)
 
 p.kill()
 p.wait()
