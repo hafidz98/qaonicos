@@ -251,6 +251,16 @@ refresh_timer_cb(lv_timer_t *t)
 }
 
 static void
+focus_cb(lv_event_t *e)
+{
+	/* Like the shell menu and Power buttons:
+	 * focus on the BACK button is observable. */
+	puts("UILV4: focus ");
+	puts((const char *)lv_event_get_user_data(e));
+	puts("\n");
+}
+
+static void
 back_btn_cb(lv_event_t *e)
 {
 	(void)e;
@@ -288,6 +298,8 @@ lvmon_enter(lv_group_t *g)
 	lv_label_set_text(lbl, "BACK");
 	lv_obj_center(lbl);
 	lv_group_add_obj(grp, btn);
+	lv_obj_add_event_cb(btn, focus_cb, LV_EVENT_FOCUSED,
+			    (void *)"monback");
 	lv_obj_add_event_cb(btn, back_btn_cb, LV_EVENT_CLICKED, NULL);
 	lv_group_focus_obj(btn);
 	refresh_timer = lv_timer_create(refresh_timer_cb, 500, NULL);
