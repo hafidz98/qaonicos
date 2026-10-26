@@ -76,4 +76,12 @@ unsigned uilvgl_last_input_ms(void);
  * current port session began. */
 unsigned uilvgl_flush_failures(void);
 
+/* Status-bar icons (UI-7): enables port-painted
+ * wifi/bluetooth/battery icons on the top strip and
+ * sets their states (1 = on, 0 = off/slashed).
+ * Called by the shell when it builds its status bar;
+ * the smoke screen never calls it and stays
+ * icon-free. QEMU callers pass 0, 0 (no radio). */
+void	uilvgl_set_radio_icons(int wifi_on, int bt_on);
+
 #endif /* UIAPP_LV_PORT_H */

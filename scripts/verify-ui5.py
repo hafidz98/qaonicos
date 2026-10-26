@@ -1,58 +1,65 @@
 #!/usr/bin/env python3
-"""UI5-VERIFY: LVGL device-name text editor + polish (UI-5).
+"""UI5-VERIFY: name detail web-note + status-bar icons (UI-7
+revision of the UI-5 script).
 
-The Settings name detail's "Edit in UI-5" note becomes a
-real keypad-driven char-picker editor (UP/DOWN cycles the
-character, LEFT/RIGHT moves, LEFT at 0 deletes the last
-character, RIGHT at the end appends, OK saves, BACK
-cancels -- the old scr_textedit semantics re-hosted in
-LVGL raw-key mode, reusing the UI-3 PIN picker's
-pattern). Polish: Monitor BACK focus marker, and the
-BACK-button paths to the shell menu print the same
-back-menu marker as the BACK-key paths.
+UI-7 decision: device-name editing is WEB CONFIG ONLY.
+The UI-5 char-picker editor is removed: the Settings
+name detail shows the value + a "Edit via web settings"
+note, focus starts on BACK, and OK on BACK returns to
+the list. No UILV5 marker may appear anywhere. The
+web-config write path is exercised through the shell
+`setup name` command (the same littlefs cfg-name the
+web page writes); the device side only has to display
+it. Polish (UI-5) is kept: Monitor BACK focus marker,
+and the BACK-button paths print the same back-menu
+marker as the BACK-key paths.
+
+Status-bar icons (UI-7): the shell's "WiFi BT [ ]"
+text label is replaced by port-painted icons -- wifi
++ bluetooth OFF (slashed) + battery outline-only --
+at fixed strip coordinates. Icon checks sample exact
+slash/glyph/battery points (mid-gray); the clock-band
+dark check still proves the clock renders. The slash
+itself is the visual proof, read by the coordinator
+from the dumps.
 
 This script boots QEMU, drives the standard flow
 (setup reset -> gui -> setup done), sets known state
 via the shell (setup name AB; the shared PIN 246810 is
 NEVER changed -- UI-3's battery lesson), then checks:
 
-  * the name detail renders an Edit name button (blue)
-    and focus starts on it; OK opens the editor
-    ("UILV5: edit name");
-  * the full edit round trip: AB -> ABC via three UP
-    keys -> OK saves ("UILV5: edit saved ABC") ->
-    shell `setup` reads back ABC -> re-grant shows
-    the new name (detail dump differs) -> shell
-    restores AB;
-  * BACK-cancel: edit KeepMe, change a character,
-    BACK cancels ("UILV5: edit cancel") -> shell
-    still reads KeepMe;
-  * the 40-char bound: a 40-char name in the editor
-    refuses appends (RIGHT/UP at the cap) and saves
-    back exactly 40 chars;
+  * the name detail renders the value + web note
+    (dark) and focus starts on BACK; OK on BACK
+    returns to the settings list; no UILV5 marker;
+  * the rename round trip through the shell: AB ->
+    ABC via `setup name` -> re-grant shows the new
+    name (detail dump differs) -> shell restores AB;
+  * BACK-button parity: BACK from the detail returns
+    to the list and the name is unchanged;
+  * the 40-char bound: a 40-char name set via the
+    shell renders in the detail and reads back as
+    the 39-char legacy display prefix;
   * polish: Monitor BACK focus marker ("UILV4: focus
     monback"); button-BACK from Settings list,
     Monitor, and Power prints the same back-menu
-    marker as key-BACK; the status bar (clock band)
-    renders on every LVGL screen (menu, settings
-    list, name detail, editor, Monitor, Power);
-    raw keys reset the idle timer and 30 s idle in
-    the editor exits to release;
-  * no FAULT, no uiapp FAIL, no flush failures;
-    teardown restores name qaon and tz +0700, leaves
-    the disk unprovisioned and no QEMU running; PIN
-    246810 untouched throughout;
+    marker as key-BACK; the status bar (clock band
+    + icons) renders on every LVGL screen (menu,
+    settings list, name detail, Monitor, Power);
+    30 s idle in the detail exits to release;
+  * no FAULT, no uiapp FAIL, no flush failures, no
+    UILV5 markers; teardown restores name qaon and
+    tz +0700, leaves the disk unprovisioned and no
+    QEMU running; PIN 246810 untouched throughout;
   * size evidence: uiapp.bin size and objcopy-binary
     headroom are printed (method: llvm-objcopy-18 -O
     binary on the linked mach3.elf vs the 4,194,304 B
-    boot partition, same as UI-1..UI-4).
+    boot partition, same as UI-1..UI-6).
 
-Pre-change shape: on the UI-4 kernel the name detail
-has no Edit button (no blue at y=100-124) and OK on
-the detail returns to the list instead of opening an
-editor -- every UILV5 check FAILs. No UILV5 string
-exists anywhere in the base tree. Set KERNEL to that
-ELF to reproduce.
+Pre-change shape: on the UI-6 kernel the name detail
+has an Edit button (blue at y=100-124), OK opens the
+editor ("UILV5: edit name"), and no web note renders
+-- the note, BACK-focus, no-editor, and no-UILV5
+checks FAIL. Set KERNEL to that ELF to reproduce.
 
 Harness rules: the serial socket is drained
 continuously by a reader thread; leftover
@@ -211,6 +218,32 @@ def shell_cmd(ser, cmd, wait_for, timeout=30):
     for _ in range(3):
         pos = len(serial)
         ser.sendall(cb + b"\n")
+        if wait_for == "" or wait_from(pos, wait_for, timeout):
+            return True
+        seg = serial[pos:]
+        if b"\n" + cb in seg or b"qaon> " + cb in seg:
+            return False
+    return False
+
+
+def shell_cmd_chunked(ser, cmd, wait_for, timeout=30, chunk=8, delay=0.3):
+    """Send a long shell line in small chunks with pauses.
+
+    A long single-send burst loses chars in the PL011
+    RX FIFO when the guest drains slowly (UI-6/UI-7
+    bound flake: 29 of 40 A's stored, three times).
+    Chunking keeps the line identical -- only the
+    delivery pacing changes -- and the caller still
+    validates the full stored value, so a bad
+    delivery fails loudly instead of being greened.
+    """
+    cb = cmd.encode()
+    for _ in range(2):
+        pos = len(serial)
+        for i in range(0, len(cb), chunk):
+            ser.sendall(cb[i:i + chunk])
+            time.sleep(delay * TSCALE)
+        ser.sendall(b"\n")
         if wait_for == "" or wait_from(pos, wait_for, timeout):
             return True
         seg = serial[pos:]
@@ -413,7 +446,8 @@ def release_to_shell(ser):
 
 def open_name_detail(ser):
     """Grant -> Settings -> Device name detail. Assumes
-    the shell prompt is current."""
+    the shell prompt is current. UI-7: focus starts
+    on BACK (no editor)."""
     if not grant_menu(ser):
         return False
     if not goto_entry(ser, 5, "UILV3: settings list", 32):
@@ -421,16 +455,58 @@ def open_name_detail(ser):
     pos = len(serial)
     if not key(ser, "ok", "UILV3: detail name", 32):
         return False
-    return wait_from(pos, "UILV3: focus editname", 32)
+    return wait_from(pos, "UILV3: focus nameback", 32)
 
 
 def bar_dark(ppm):
     """Dark pixels in the status-bar band (rows 0-20):
-    the bar background is light gray and the radio
-    label is mid-gray, so dark pixels are the clock
+    the bar background is light gray and the icons
+    are mid-gray, so dark pixels are the clock
     glyphs. Proves the bar renders on a screen."""
     _, dark, _ = band_stats(ppm, 0, 20)
     return dark
+
+
+def _is_icon_gray(px):
+    r, g, b = px[0], px[1], px[2]
+    return 100 < r < 200 and max(r, g, b) - min(r, g, b) < 30
+
+
+def icons_ok(ppm):
+    """Status-bar icons (UI-7) at the port-painted
+    coordinates: wifi + bluetooth OFF (slashed) +
+    battery outline, all in icon gray. Slash sample
+    points must ALL be gray (a text label would not
+    put gray on the full diagonals); wifi glyph
+    points and battery corners gray with an empty
+    interior. Returns (ok, text)."""
+    from PIL import Image
+    im = Image.open(ppm).convert("RGB")
+
+    def gray(x, y):
+        return _is_icon_gray(im.getpixel((x, y)))
+
+    # Wifi slash diagonal, box x 174..188, y 6..16.
+    wslash = [(174 + i, 6 + (i * 10) // 14)
+              for i in range(0, 15, 2)]
+    # BT slash diagonal, box x 194..201, y 6..16.
+    bslash = [(194 + i, 6 + (i * 10) // 7)
+              for i in range(0, 8, 2)]
+    wok = all(gray(x, y) for x, y in wslash)
+    bok = all(gray(x, y) for x, y in bslash)
+    # Wifi glyph points (dot + outer arc), off-slash.
+    wglyph = [(180, 14), (181, 8), (174, 13), (188, 13)]
+    wg = all(gray(x, y) for x, y in wglyph)
+    # BT glyph points (spine + tips), off-slash.
+    bglyph = [(197, 11), (201, 8), (201, 14)]
+    bg = all(gray(x, y) for x, y in bglyph)
+    # Battery outline: corners gray, interior bar-bg.
+    corners = [(210, 8), (229, 8), (210, 15), (229, 15)]
+    cok = all(gray(x, y) for x, y in corners)
+    iok = all(not gray(x, y) for x, y in [(219, 11), (215, 11)])
+    txt = (f"wifi-slash={wok} bt-slash={bok} wifi-glyph={wg} "
+           f"bt-glyph={bg} batt-corners={cok} batt-empty={iok}")
+    return wok and bok and wg and bg and cok and iok, txt
 
 
 qemu = None
@@ -449,29 +525,37 @@ try:
     check("shell sets timezone +0700",
           shell_cmd(ser, "setup tz +0700", "setup: tz saved", 10))
 
-    # ---- Name detail + editor entry ----
+    # ---- Name detail + web note (UI-7) ----
     check("grant starts the shell menu", grant_menu(ser))
     time.sleep(2.0)
     ppm_menu = screendump(mon, "ui5-menu")
     check("menu screendump saved", ppm_menu is not None)
     if ppm_menu is not None:
-        print(f"  menu: status-bar dark={bar_dark(ppm_menu)}", flush=True)
+        ok_icons, icons_txt = icons_ok(ppm_menu)
+        print(f"  menu: status-bar dark={bar_dark(ppm_menu)} "
+              f"icons: {icons_txt}", flush=True)
         check("menu: status bar renders (clock band)",
               bar_dark(ppm_menu) > 20)
+        check("menu: status bar icons render (wifi+bt+battery)",
+              ok_icons)
     check("5x down + OK opens Settings",
           goto_entry(ser, 5, "UILV3: settings list", 32))
     time.sleep(1.0)
     ppm_list = screendump(mon, "ui5-list")
     check("settings list screendump saved", ppm_list is not None)
     if ppm_list is not None:
-        print(f"  list: status-bar dark={bar_dark(ppm_list)}", flush=True)
+        ok_icons, icons_txt = icons_ok(ppm_list)
+        print(f"  list: status-bar dark={bar_dark(ppm_list)} "
+              f"icons: {icons_txt}", flush=True)
         check("settings list: status bar renders (clock band)",
               bar_dark(ppm_list) > 20)
+        check("settings list: status bar icons render",
+              ok_icons)
     pos = len(serial)
     check("OK opens the Device name detail",
           key(ser, "ok", "UILV3: detail name", 32))
-    check("name detail focuses Edit name first",
-          wait_from(pos, "UILV3: focus editname", 32))
+    check("name detail focuses BACK first (no editor)",
+          wait_from(pos, "UILV3: focus nameback", 32))
     time.sleep(1.5)
     ppm_detail_ab = screendump(mon, "ui5-detail-ab")
     check("name detail screendump saved", ppm_detail_ab is not None)
@@ -479,52 +563,36 @@ try:
         from PIL import Image
         im_detail_ab = Image.open(ppm_detail_ab).convert("RGB")
         _, val_dark, _ = band_stats(ppm_detail_ab, 62, 80)
-        _, _, edit_blue = band_stats(ppm_detail_ab, 100, 124)
+        _, note_dark, _ = band_stats(ppm_detail_ab, 100, 124)
         _, _, back_blue = band_stats(ppm_detail_ab, 130, 154)
-        print(f"  detail AB: value dark={val_dark} edit blue={edit_blue} "
-              f"back blue={back_blue} bar dark={bar_dark(ppm_detail_ab)}",
-              flush=True)
+        ok_icons, icons_txt = icons_ok(ppm_detail_ab)
+        print(f"  detail AB: value dark={val_dark} note dark={note_dark} "
+              f"back blue={back_blue} bar dark={bar_dark(ppm_detail_ab)} "
+              f"icons: {icons_txt}", flush=True)
         check("name detail: value rendered (dark)", val_dark > 20)
-        check("name detail: Edit button rendered (blue)",
-              edit_blue > 1000)
+        check("name detail: web note rendered (dark)", note_dark > 100)
         check("name detail: BACK button rendered (blue)",
               back_blue > 1000)
         check("name detail: status bar renders (clock band)",
               bar_dark(ppm_detail_ab) > 20)
+        check("name detail: status bar icons render", ok_icons)
     else:
         im_detail_ab = None
-
-    # ---- Edit round trip: AB -> ABC ----
-    check("OK opens the editor",
-          key(ser, "ok", "UILV5: edit name", 32))
-    time.sleep(1.5)
-    ppm_edit = screendump(mon, "ui5-edit")
-    check("editor screendump saved", ppm_edit is not None)
-    if ppm_edit is not None and ppm_detail_ab is not None:
-        from PIL import Image
-        im_edit = Image.open(ppm_edit).convert("RGB")
-        _, val_dark, _ = band_stats(ppm_edit, 56, 80)
-        fd = frame_diff(im_detail_ab, im_edit)
-        print(f"  editor: value dark={val_dark} diff vs detail={fd} "
-              f"bar dark={bar_dark(ppm_edit)}", flush=True)
-        check("editor: value rendered (dark)", val_dark > 20)
-        check("editor: differs from the detail", fd > 1000)
-        check("editor: status bar renders (clock band)",
-              bar_dark(ppm_edit) > 20)
-    # AB, cursor at end: UP appends ' ' then cycles to
-    # 'A' (ABA), UP -> 'B' (ABB), UP -> 'C' (ABC).
-    check("editor: UP appends + cycles to A",
-          key(ser, "up", "UILV5: edit name", 32))
-    check("editor: UP cycles to B",
-          key(ser, "up", "UILV5: edit name", 32))
-    check("editor: UP cycles to C",
-          key(ser, "up", "UILV5: edit name", 32))
+    # Focus is BACK: OK returns to the list, and no
+    # editor opens (no UILV5 marker anywhere yet).
     pos = len(serial)
-    check("editor: OK saves ABC",
-          key(ser, "ok", "UILV5: edit saved ABC", 32))
-    check("save returns to the name detail",
-          wait_from(pos, "UILV3: detail name", 32))
+    check("OK on BACK returns to the settings list",
+          key(ser, "ok", "UILV3: settings list", 32))
+    check("no editor opened from the detail",
+          b"UILV5:" not in serial[pos:])
+
+    # ---- Rename round trip via the shell: AB -> ABC ----
+    # The device side only displays now; the web
+    # config (here: the shell setup command writing
+    # the same cfg-name) owns the write.
     release_to_shell(ser)
+    check("shell renames AB to ABC",
+          shell_cmd(ser, "setup name ABC", "setup: name saved", 10))
     check("shell reads back ABC",
           shell_cmd(ser, "setup", "  name: ABC", 10))
     # Re-grant shows the new name (detail re-reads cfg).
@@ -556,38 +624,41 @@ try:
     check("shell reads back AB",
           shell_cmd(ser, "setup", "  name: AB", 10))
 
-    # ---- BACK-cancel: KeepMe unchanged ----
+    # ---- BACK-button parity: detail BACK -> list ----
     check("shell sets name KeepMe",
           shell_cmd(ser, "setup name KeepMe", "setup: name saved", 10))
-    check("cancel: name detail opens", open_name_detail(ser))
-    check("cancel: OK opens the editor",
-          key(ser, "ok", "UILV5: edit name", 32))
-    check("cancel: UP changes a character",
-          key(ser, "up", "UILV5: edit name", 32))
+    check("back: name detail opens", open_name_detail(ser))
     pos = len(serial)
-    check("cancel: BACK cancels the edit",
-          key(ser, "back", "UILV5: edit cancel", 32))
-    check("cancel returns to the name detail",
-          wait_from(pos, "UILV3: detail name", 32))
+    check("back: OK on BACK returns to the settings list",
+          key(ser, "ok", "UILV3: settings list", 32))
     release_to_shell(ser)
-    check("cancel: shell still reads KeepMe",
+    check("back: shell still reads KeepMe",
           shell_cmd(ser, "setup", "  name: KeepMe", 10))
 
-    # ---- 40-char bound ----
+    # ---- 40-char bound (shell write, device display) ----
     bound = "A" * 40
+    # Probe first: a long `setup name` burst sent in
+    # the racy post-release window has lost chars
+    # before (UI-6 flake note); prove the shell is
+    # responsive before sending it. The set itself
+    # goes chunked: single-send bursts lost chars
+    # three times (29 of 40 A's stored); chunking
+    # only paces delivery, the stored-value check
+    # below still validates the full 40 chars.
+    check("bound: shell responsive before long burst",
+          shell_probe(ser, "setup", "  name: KeepMe"))
     check("shell sets a 40-char name",
-          shell_cmd(ser, "setup name " + bound, "setup: name saved", 10))
+          shell_cmd_chunked(ser, "setup name " + bound,
+                            "setup: name saved", 10))
     check("bound: name detail opens", open_name_detail(ser))
-    check("bound: OK opens the editor",
-          key(ser, "ok", "UILV5: edit name", 32))
-    # At the cap: appends are refused (the editor
-    # rebuilds, but the buffer cannot grow).
-    check("bound: RIGHT at the cap refused (rebuilds)",
-          key(ser, "right", "UILV5: edit name", 32))
-    check("bound: UP at the cap refused (rebuilds)",
-          key(ser, "up", "UILV5: edit name", 32))
-    check("bound: OK saves exactly 40 chars",
-          key(ser, "ok", "UILV5: edit saved " + bound, 32))
+    time.sleep(1.5)
+    ppm_bound = screendump(mon, "ui5-detail-bound")
+    check("bound: detail screendump saved", ppm_bound is not None)
+    if ppm_bound is not None:
+        _, bound_dark, _ = band_stats(ppm_bound, 62, 90)
+        print(f"  bound detail: value dark={bound_dark}", flush=True)
+        check("bound: detail renders the long value (dark)",
+              bound_dark > 20)
     release_to_shell(ser)
     check("bound: shell reads back the 40-char prefix",
           shell_cmd(ser, "setup", "  name: " + "A" * 39, 10))
@@ -605,9 +676,12 @@ try:
     ppm_mon = screendump(mon, "ui5-monitor")
     check("polish: monitor screendump saved", ppm_mon is not None)
     if ppm_mon is not None:
-        print(f"  monitor: bar dark={bar_dark(ppm_mon)}", flush=True)
+        ok_icons, icons_txt = icons_ok(ppm_mon)
+        print(f"  monitor: bar dark={bar_dark(ppm_mon)} "
+              f"icons: {icons_txt}", flush=True)
         check("polish: monitor status bar renders (clock band)",
               bar_dark(ppm_mon) > 20)
+        check("polish: monitor status bar icons render", ok_icons)
     check("polish: Monitor BACK button returns to menu",
           key(ser, "ok", "UILV4: back menu", 32))
     # Settings list button-BACK parity.
@@ -628,9 +702,12 @@ try:
     ppm_pwr = screendump(mon, "ui5-power")
     check("polish: power screendump saved", ppm_pwr is not None)
     if ppm_pwr is not None:
-        print(f"  power: bar dark={bar_dark(ppm_pwr)}", flush=True)
+        ok_icons, icons_txt = icons_ok(ppm_pwr)
+        print(f"  power: bar dark={bar_dark(ppm_pwr)} "
+              f"icons: {icons_txt}", flush=True)
         check("polish: power status bar renders (clock band)",
               bar_dark(ppm_pwr) > 20)
+        check("polish: power status bar icons render", ok_icons)
     check("polish: Power DOWN to RESTART",
           key(ser, "down", "UILV4: focus restart", 32))
     check("polish: Power DOWN to SLEEP",
@@ -640,23 +717,17 @@ try:
     check("polish: Power BACK button returns to menu",
           key(ser, "ok", "UILV4: back menu", 32))
 
-    # ---- Polish: idle exit from the editor ----
+    # ---- Polish: idle exit from the detail ----
     check("idle: Settings opens",
           goto_entry(ser, 5, "UILV3: settings list", 32))
     check("idle: name detail opens",
           key(ser, "ok", "UILV3: detail name", 32))
-    check("idle: editor opens",
-          key(ser, "ok", "UILV5: edit name", 32))
-    # One raw key proves raw input resets the idle
-    # timer; the 30 s guest idle exit then fires.
-    check("idle: one editor key still in editor",
-          key(ser, "up", "UILV5: edit name", 32))
     # One pos for both waits: idle exit and release
     # can arrive in a single reader chunk, so a fresh
     # pos for the release wait would miss a release
     # that already arrived (run-1 lesson).
     pos = len(serial)
-    check("idle: editor idles out (30 s guest)",
+    check("idle: detail idles out (30 s guest)",
           wait_from(pos, "UILV2: idle exit", 70))
     check("idle: token released after idle exit",
           wait_from(pos, "uiapp: token released", 32))
@@ -665,7 +736,8 @@ try:
     check("no kernel FAULT anywhere", "FAULT" not in seg)
     check("no uiapp FAIL anywhere", "uiapp FAIL" not in seg)
     check("no UILV2 flush failures", "UILV2: flush failures" not in seg)
-    check("no UILV5 flush failures", "UILV5: flush failures" not in seg)
+    check("no UILV5 markers anywhere (editor removed)",
+          "UILV5:" not in seg)
     check("PIN untouched (setup status shows pin set)",
           shell_probe(ser, "setup", "  pin: set"))
 

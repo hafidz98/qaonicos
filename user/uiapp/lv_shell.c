@@ -214,7 +214,7 @@ static void
 build_status_bar(void)
 {
 	lv_obj_t *top = lv_layer_top();
-	lv_obj_t *bg, *right;
+	lv_obj_t *bg;
 	char clk[6];
 
 	/* Bar background: flat light gray, square
@@ -232,13 +232,16 @@ build_status_bar(void)
 	lv_label_set_text(time_label, clk);
 	lv_obj_align(time_label, LV_ALIGN_TOP_LEFT, 6, 2);
 
-	/* Radio + battery, dim: state unknown under
-	 * QEMU (see file header). One label keeps the
-	 * right edge aligned without measuring glyphs. */
-	right = lv_label_create(top);
-	lv_label_set_text(right, "WiFi BT [    ]");
-	lv_obj_set_style_text_color(right, lv_color_hex(0x808080), 0);
-	lv_obj_align(right, LV_ALIGN_TOP_RIGHT, -6, 2);
+	/* Radio + battery icons (UI-7) are painted by
+	 * the port into the flush strip, not LVGL
+	 * objects (the vendored subset has no image /
+	 * line / arc widgets and no symbol glyphs).
+	 * QEMU defaults: wifi + bluetooth OFF (slashed)
+	 * -- no radio exists there; battery outline-only
+	 * (no ADC, never a fake level). Live state
+	 * wiring is a documented follow-up, not a
+	 * blocking RPC in the menu-build path. */
+	uilvgl_set_radio_icons(0, 0);
 
 	clock_timer = lv_timer_create(clock_timer_cb, 1000, NULL);
 }

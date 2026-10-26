@@ -424,9 +424,9 @@ try:
     check("list: up moves focus back to Device name",
           key(ser, "up", "UILV3: focus name", 20))
 
-    # Device name detail: current value + Edit button
-    # (UI-5 replaced the UI-3 "Edit in UI-5" note with
-    # a real editor entry; focus starts on Edit).
+    # Device name detail: current value + web note
+    # (UI-7: name editing is web-config only; the
+    # UI-5 editor is removed, focus starts on BACK).
     pos = len(serial)
     check("OK opens the Device name detail",
           key(ser, "ok", "UILV3: detail name", 20))
@@ -435,12 +435,12 @@ try:
     check("name detail screendump saved", ppm_name is not None)
     if ppm_name is not None and im_list is not None:
         from PIL import Image
-        _, _, edit_blue = band_stats(ppm_name, 100, 124)
+        _, note_dark, _ = band_stats(ppm_name, 100, 124)
         _, _, back_blue = band_stats(ppm_name, 130, 174)
         fd = frame_diff(im_list, Image.open(ppm_name).convert("RGB"))
-        print(f"  name: EDIT blue={edit_blue} BACK blue={back_blue} "
+        print(f"  name: NOTE dark={note_dark} BACK blue={back_blue} "
               f"frame diff={fd}", flush=True)
-        check("name: Edit button rendered (blue)", edit_blue > 1000)
+        check("name: web note rendered (dark)", note_dark > 100)
         check("name: BACK button rendered (blue)", back_blue > 1000)
         check("name: differs from the list", fd > 1000)
     pos = len(serial)
