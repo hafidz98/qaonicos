@@ -161,6 +161,128 @@ static unsigned last_input_ms;
 static unsigned flush_fail_count;
 static int lv_inited;
 
+/* Status-bar icons (UI-7), painted into the flush
+ * strip. The vendored LVGL subset compiles button +
+ * label widgets only, and the Montserrat 14 font
+ * carries no glyphs for LV_SYMBOL_WIFI / BLUETOOTH /
+ * BATTERY (verified in the font's cmap: 0xF1EB,
+ * 0xF293, 0xF244 all absent), so built-in symbols
+ * cannot render. Instead the port composites 1-bit
+ * icon masks into every flushed area overlapping
+ * the top bar, reusing the old hand-rolled strip's
+ * glyph shapes (ui.c icon_wifi / icon_bt / battery
+ * outline) for parity between old and LVGL screens.
+ * The shapes follow the canonical wifi-arcs /
+ * bluetooth-rune / battery-outline forms (cf.
+ * Lucide wifi, bluetooth -- ISC). Cost: point
+ * tables only, no font, no image, no new widget.
+ *
+ * Geometry (240x24 bar, right-aligned, 6 px margin):
+ * wifi 15x11 at x 174, y 6; bluetooth 8x11 at x 194,
+ * y 6; battery 20x8 outline + nub at x 210, y 8.
+ * Icon gray 0x808080 (RGB565 0x8410) matches the
+ * dim text the icons replace. OFF = glyph + diagonal
+ * slash. Battery is outline-only, never a fake level
+ * (no ADC) -- the honest-state rule. QEMU defaults
+ * are OFF/OFF: no radio exists there. Live state
+ * (uproto WIFI.STATUS / BLE.STATUS, the same calls
+ * the wifi/ble screens already make) is a follow-up,
+ * not wired here: a blocking RPC in the menu-build
+ * path would stall menu appearance on linkd trouble.
+ * Painting is enabled only once the shell builds its
+ * status bar (uilvgl_set_radio_icons), so the UI-1
+ * smoke screen stays icon-free. */
+#define ICON_GRAY	0x8410u	/* 0x808080 in RGB565 */
+#define ICON_WIFI_X	174
+#define ICON_WIFI_Y	6
+#define ICON_BT_X	194
+#define ICON_BT_Y	6
+#define ICON_BATT_X	210
+#define ICON_BATT_Y	8
+
+static int bar_icons;
+static int radio_wifi_on;
+static int radio_bt_on;
+
+void
+uilvgl_set_radio_icons(int wifi_on, int bt_on)
+{
+	bar_icons = 1;
+	radio_wifi_on = wifi_on ? 1 : 0;
+	radio_bt_on = bt_on ? 1 : 0;
+}
+
+static void
+icon_px(uint8_t *px_map, unsigned w, unsigned h,
+	const lv_area_t *area, int gx, int gy)
+{
+	int ox = gx - area->x1, oy = gy - area->y1;
+	uint16_t *px;
+
+	if (ox < 0 || oy < 0 || (unsigned)ox >= w || (unsigned)oy >= h)
+		return;
+	px = (uint16_t *)px_map + (unsigned)oy * w + (unsigned)ox;
+	px[0] = ICON_GRAY;
+}
+
+static void
+paint_status_icons(uint8_t *px_map, unsigned w, unsigned h,
+	const lv_area_t *area)
+{
+	/* Wifi arcs + dot (box 15x11, dot centre (7,9)
+	 * relative): inner, mid, outer arcs, then dot. */
+	static const signed char wifi_pts[] = {
+		6,8, 7,8, 6,9, 7,9,
+		7,6, 5,7, 9,7, 4,8, 10,8,
+		7,4, 3,5, 11,5, 2,7, 12,7,
+		7,2, 2,4, 12,4, 0,7, 14,7
+	};
+	/* Bluetooth rune (box 8x11): spine is drawn
+	 * separately; these are the triangle edges. */
+	static const signed char bt_pts[] = {
+		4,0, 5,1, 6,1, 7,2, 6,3, 5,3, 4,4,
+		4,6, 5,6, 6,7, 7,8, 6,9, 5,9, 4,10
+	};
+	int i, j;
+
+	if (!bar_icons)
+		return;
+	for (i = 0; i < 19; i++)
+		icon_px(px_map, w, h, area,
+			ICON_WIFI_X + wifi_pts[i * 2],
+			ICON_WIFI_Y + wifi_pts[i * 2 + 1]);
+	if (!radio_wifi_on)
+		for (i = 0; i < 15; i++)
+			icon_px(px_map, w, h, area, ICON_WIFI_X + i,
+				ICON_WIFI_Y + (i * 10) / 14);
+	for (i = 0; i <= 10; i++)
+		icon_px(px_map, w, h, area, ICON_BT_X + 3,
+			ICON_BT_Y + i);
+	for (i = 0; i < 14; i++)
+		icon_px(px_map, w, h, area,
+			ICON_BT_X + bt_pts[i * 2],
+			ICON_BT_Y + bt_pts[i * 2 + 1]);
+	if (!radio_bt_on)
+		for (i = 0; i < 8; i++)
+			icon_px(px_map, w, h, area, ICON_BT_X + i,
+				ICON_BT_Y + (i * 10) / 7);
+	/* Battery outline + nub, empty inside. */
+	for (i = 0; i < 20; i++) {
+		icon_px(px_map, w, h, area, ICON_BATT_X + i, ICON_BATT_Y);
+		icon_px(px_map, w, h, area, ICON_BATT_X + i,
+			ICON_BATT_Y + 7);
+	}
+	for (i = 0; i < 8; i++) {
+		icon_px(px_map, w, h, area, ICON_BATT_X, ICON_BATT_Y + i);
+		icon_px(px_map, w, h, area, ICON_BATT_X + 19,
+			ICON_BATT_Y + i);
+	}
+	for (i = 0; i < 2; i++)
+		for (j = 0; j < 4; j++)
+			icon_px(px_map, w, h, area, ICON_BATT_X + 22 + i,
+				ICON_BATT_Y + 2 + j);
+}
+
 /* Callbacks, defined below begin(). */
 static void flush_cb(lv_display_t *d, const lv_area_t *area,
 		     uint8_t *px_map);
@@ -194,6 +316,7 @@ uilvgl_shell_begin(void)
 	raw_keys = 0;
 	last_input_ms = sys_uptime();
 	flush_fail_count = 0;
+	bar_icons = 0;
 	return grp;
 }
 
@@ -277,6 +400,10 @@ flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px_map)
 {
 	unsigned w = (unsigned)(area->x2 - area->x1 + 1);
 	unsigned h = (unsigned)(area->y2 - area->y1 + 1);
+	/* Composite the status-bar icons into any flush
+	 * overlapping the top bar (clipped inside). */
+	if (area->y1 < STRIP_H)
+		paint_status_icons(px_map, w, h, area);
 	if (sys_display_flush((unsigned)area->x1, (unsigned)area->y1,
 			      w, h, px_map, w * h * 2u) != 0) {
 		flush_fail_count++;
