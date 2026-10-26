@@ -74,6 +74,9 @@ subprocess.run(["pkill", "-x", "qemu-system-arm"],
                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 time.sleep(1.0)
 
+# Fresh worktrees lack logs-c6l4/ (UI-6 harness
+# cleanup): create it instead of crashing on listdir.
+os.makedirs(os.path.join(ROOT, "logs-c6l4"), exist_ok=True)
 for f in os.listdir(os.path.join(ROOT, "logs-c6l4")):
     if f.startswith("c6l4-"):
         try:

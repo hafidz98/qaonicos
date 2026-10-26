@@ -338,21 +338,19 @@ def goto_settings(ser):
     for want in ("wifi", "ble", "llm", "passkey", "settings"):
         if not key(ser, "down", "UILV2: focus " + want, 20):
             return False
-    pos = len(serial)
-    ser.sendall(b"key ok\n")
-    return wait_from(pos, "UILV3: settings list", 20)
+    return key(ser, "ok", "UILV3: settings list", 20)
 
 
 def release_menu(ser):
     """From the settings list: BACK -> menu, BACK at
     root -> release. Returns False unless released."""
-    pos = len(serial)
-    ser.sendall(b"key back\n")
-    if not wait_from(pos, "UILV3: back menu", 20):
+    if not key(ser, "back", "UILV3: back menu", 20):
         return False
+    # Window anchor for the token-released wait below:
+    # key() snapshots its own pos internally, so keep an
+    # outer anchor from before the second BACK.
     pos = len(serial)
-    ser.sendall(b"key back\n")
-    if not wait_from(pos, "UILV2: release", 20):
+    if not key(ser, "back", "UILV2: release", 20):
         return False
     return wait_from(pos, "uiapp: token released", 20)
 
@@ -430,9 +428,8 @@ try:
     # (UI-5 replaced the UI-3 "Edit in UI-5" note with
     # a real editor entry; focus starts on Edit).
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK opens the Device name detail",
-          wait_from(pos, "UILV3: detail name", 20))
+          key(ser, "ok", "UILV3: detail name", 20))
     time.sleep(2.0)
     ppm_name = screendump(mon, "ui3-name")
     check("name detail screendump saved", ppm_name is not None)
@@ -447,17 +444,15 @@ try:
         check("name: BACK button rendered (blue)", back_blue > 1000)
         check("name: differs from the list", fd > 1000)
     pos = len(serial)
-    ser.sendall(b"key back\n")
     check("BACK returns to the settings list",
-          wait_from(pos, "UILV3: settings list", 20))
+          key(ser, "back", "UILV3: settings list", 20))
 
     # Timezone detail: focus starts on the current value.
     check("down moves focus to Timezone",
           key(ser, "down", "UILV3: focus tz", 20))
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK opens the Timezone detail",
-          wait_from(pos, "UILV3: detail tz", 20))
+          key(ser, "ok", "UILV3: detail tz", 20))
     check("tz detail focuses the current value (+0700)",
           wait_from(pos, "UILV3: focus tz+0700", 20))
     time.sleep(2.0)
@@ -473,9 +468,8 @@ try:
     check("down moves focus to +0800",
           key(ser, "down", "UILV3: focus tz+0800", 20))
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK saves +0800",
-          wait_from(pos, "UILV3: tz saved +0800", 20))
+          key(ser, "ok", "UILV3: tz saved +0800", 20))
     time.sleep(1.0)
     ppm_tz2 = screendump(mon, "ui3-tz2")
     check("tz saved screendump saved", ppm_tz2 is not None)
@@ -484,9 +478,8 @@ try:
         print(f"  tz2: title dark={title_dark}", flush=True)
         check("tz: title still rendered after save", title_dark > 100)
     pos = len(serial)
-    ser.sendall(b"key back\n")
     check("BACK returns to the settings list",
-          wait_from(pos, "UILV3: settings list", 20))
+          key(ser, "back", "UILV3: settings list", 20))
 
     # Timezone persistence via the shell (independent
     # channel) after a full release + re-grant.
@@ -498,15 +491,13 @@ try:
     check("down moves focus to Timezone",
           key(ser, "down", "UILV3: focus tz", 20))
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK reopens the Timezone detail",
-          wait_from(pos, "UILV3: detail tz", 20))
+          key(ser, "ok", "UILV3: detail tz", 20))
     check("tz detail focuses +0800 after re-grant",
           wait_from(pos, "UILV3: focus tz+0800", 20))
     pos = len(serial)
-    ser.sendall(b"key back\n")
     check("BACK returns to the settings list",
-          wait_from(pos, "UILV3: settings list", 20))
+          key(ser, "back", "UILV3: settings list", 20))
     check("release from the settings list", release_menu(ser))
 
     # PIN detail + full change round trip.
@@ -517,9 +508,8 @@ try:
     check("down moves focus to PIN",
           key(ser, "down", "UILV3: focus pin", 20))
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK opens the PIN detail",
-          wait_from(pos, "UILV3: detail pin", 20))
+          key(ser, "ok", "UILV3: detail pin", 20))
     time.sleep(2.0)
     ppm_pin = screendump(mon, "ui3-pin")
     check("pin detail screendump saved", ppm_pin is not None)
@@ -529,20 +519,17 @@ try:
         check("pin: BACK button rendered (blue)", back_blue > 1000)
     # Change PIN: old 1234 -> new 5678 (confirm 5678).
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK opens the PIN length select",
-          wait_from(pos, "UILV3: pin len old", 20))
+          key(ser, "ok", "UILV3: pin len old", 20))
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK confirms length 4, old entry opens",
-          wait_from(pos, "UILV3: pin entry old", 20))
+          key(ser, "ok", "UILV3: pin entry old", 20))
     pin_entry(ser, [1, 2, 3, 4])
     check("old PIN 1234 verifies",
           wait_from(pos, "UILV3: pin verified", 30))
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK confirms length 4, new entry opens",
-          wait_from(pos, "UILV3: pin entry new", 20))
+          key(ser, "ok", "UILV3: pin entry new", 20))
     pin_entry(ser, [5, 6, 7, 8])
     check("new PIN entry opens confirmation",
           wait_from(pos, "UILV3: pin entry confirm", 30))
@@ -552,33 +539,28 @@ try:
     time.sleep(1.0)
     # Wrong old PIN: exactly one fail, no lockout.
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK reopens the PIN length select",
-          wait_from(pos, "UILV3: pin len old", 20))
+          key(ser, "ok", "UILV3: pin len old", 20))
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK confirms length 4, old entry opens",
-          wait_from(pos, "UILV3: pin entry old", 20))
+          key(ser, "ok", "UILV3: pin entry old", 20))
     pin_entry(ser, [1, 2, 3, 4])
     check("old PIN 1234 now reports wrong",
           wait_from(pos, "UILV3: pin wrong", 30))
     # Change back with old 5678: proves the stored
     # value really is 5678 (digit assembly correct).
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK reopens the PIN length select",
-          wait_from(pos, "UILV3: pin len old", 20))
+          key(ser, "ok", "UILV3: pin len old", 20))
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK confirms length 4, old entry opens",
-          wait_from(pos, "UILV3: pin entry old", 20))
+          key(ser, "ok", "UILV3: pin entry old", 20))
     pin_entry(ser, [5, 6, 7, 8])
     check("old PIN 5678 verifies",
           wait_from(pos, "UILV3: pin verified", 30))
     pos = len(serial)
-    ser.sendall(b"key ok\n")
     check("OK confirms length 4, new entry opens",
-          wait_from(pos, "UILV3: pin entry new", 20))
+          key(ser, "ok", "UILV3: pin entry new", 20))
     pin_entry(ser, [1, 2, 3, 4])
     check("new PIN entry opens confirmation",
           wait_from(pos, "UILV3: pin entry confirm", 30))
@@ -586,9 +568,8 @@ try:
     check("PIN restored to 1234",
           wait_from(pos, "UILV3: pin changed", 30))
     pos = len(serial)
-    ser.sendall(b"key back\n")
     check("BACK returns to the settings list",
-          wait_from(pos, "UILV3: settings list", 20))
+          key(ser, "back", "UILV3: settings list", 20))
     check("release from the settings list", release_menu(ser))
     check("shell status still shows PIN set",
           shell_cmd(ser, "setup", "pin: set", 10))
