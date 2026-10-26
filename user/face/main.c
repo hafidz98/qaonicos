@@ -259,8 +259,16 @@ _start(void)
 		/* UI_SLEEP_AFTER_S: v1 = tetap display off (CPU idle via
 		 * yield); sleep beneran (clock gating) diverifikasi di HW. */
 
-		/* Render Qabot bila display on. */
-		if (display_on && (now - last_frame) >= FRAME_MS) {
+		/* Render Qabot bila display on. A grant
+		 * mid-iteration (input section above) hands
+		 * the token to uiapp; flushing after that
+		 * fails and used to kill face on grants
+		 * (SYS_DISPLAY_FLUSH -> exit, no respawn,
+		 * every later grant on the boot impossible).
+		 * Re-check the holder here and skip the
+		 * frame instead -- uiapp paints over it. */
+		if (display_on && (now - last_frame) >= FRAME_MS &&
+		    sys_display_status() == 0) {
 			last_frame = now;
 			face_update(FRAME_MS);
 			flush_frame();

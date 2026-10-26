@@ -745,8 +745,10 @@ try:
           key(ser, "ok", "UILV4: power restart", 32))
     check("Restart: kernel logged SYS_RESET",
           wait_from(pos, "sys: SYS_RESET (software request)", 30))
-    check("Restart: new boot reaches qaon> prompt",
-          wait_from(pos, "qaon>", 90))
+    # Kernel banner, not qaon>: a shell prompt matches
+    # any prompt (false positive -- run 7 lesson).
+    check("Restart: new boot reaches kernel banner",
+          wait_from(pos, "Mach 3.0 on ARMv7", 90))
 
     # Sleep.
     close_qemu(qemu, mon)
@@ -768,7 +770,10 @@ try:
           key(ser, "ok", "UILV4: power sleep", 32))
     check("Sleep: token released",
           wait_from(pos, "UILV2: release", 32))
-    time.sleep(1.0)
+    # Face needs time to process the sleep request and
+    # flush black; 1 s was too short under guest lag
+    # (run 7: dump caught the lit screen).
+    time.sleep(3.0)
     ppm_sleep = screendump(mon, "ui4-sleep")
     check("sleep screendump saved", ppm_sleep is not None)
     if ppm_sleep is not None and ppm_pwr is not None:
