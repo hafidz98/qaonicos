@@ -82,6 +82,26 @@ a normal network (the sandbox blocks UDP); limitations are documented in
   The datasheet + board schematics are not committed (see the Luckfox Pico
   reference repos).
 
+## Sources
+
+QaonicOS stands on the following upstream projects. Each is vendored
+verbatim under its own license (see the license file in each directory);
+QaonicOS's own code is Apache 2.0 (see [LICENSE](LICENSE)).
+
+| Component | Version | Upstream | License | Vendored at |
+| --- | --- | --- | --- | --- |
+| Mach 3.0 microkernel | 3.0 (MK83) | https://github.com/Prajna/mach | CMU license (notice below) | `mach3-port/upstream/mach3/` (pristine, never edited) |
+| LVGL graphics library | 9.5.0 | https://github.com/lvgl/lvgl | MIT | `user/uiapp/lvgl/` (subset: core, display, draw sw, Montserrat 14, button + label widgets) |
+| littlefs filesystem | 2.9 | https://github.com/littlefs-project/littlefs | BSD-3-Clause | `mach3-port/src/ext/littlefs/` |
+| mbedTLS | 3.6.7 | https://github.com/Mbed-TLS/mbedtls | Apache-2.0 (dual Apache-2.0 OR GPL-2.0-or-later; we take Apache-2.0) | `user/tls/mbedtls/` |
+
+Design reference only (no code taken): the Qabot face reimplements
+concepts from FluxGarage RoboEyes (GPL-3.0) from scratch; no RoboEyes
+code is included in this repository.
+
+Build tools (not shipped in the image): `clang`/`lld` and
+`qemu-system-arm`, used only to build and test.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
@@ -89,3 +109,23 @@ Apache License 2.0 — see [LICENSE](LICENSE).
 Note: `mach3-port/upstream/mach3/` contains the Mach 3.0 microkernel © Carnegie Mellon University,
 which retains its original CMU license. Apache 2.0 applies to QaonicOS's own
 code: drivers, userspace programs, tools, and documentation.
+
+### Mach 3.0 original license (CMU)
+
+The Mach 3.0 sources carry the following notice in every file header
+(`mach3-port/upstream/mach3/kernel/`), reproduced here because the
+license requires the notices to appear in supporting documentation:
+
+> Mach Operating System
+> Copyright (c) 1992 Carnegie Mellon University
+> All Rights Reserved.
+>
+> Permission to use, copy, modify and distribute this software and its
+> documentation is hereby granted, provided that both the copyright
+> notice and this permission notice appear in all copies of the
+> software, derivative works or modified versions, and any portions
+> thereof, and that both notices appear in supporting documentation.
+>
+> CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS-IS"
+> CONDITION. CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
+> ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
