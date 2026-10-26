@@ -148,11 +148,12 @@ a stale buffer.
 | | kernel binary | headroom | uiapp.bin |
 |---|---|---|---|
 | UI-4 baseline (fresh worktree) | 4,013,364 | 180,940 | 441,708 |
-| UI-5 | 4,015,520 | 178,784 | 443,864 |
-| UI-5 cost | +2,156 | -2,156 | +2,156 |
+| UI-5 (editor + polish) | 4,015,520 | 178,784 | 443,864 |
+| UI-5 + honest Memory row (§7) | 4,015,560 | 178,744 | 443,904 |
+| UI-5 total cost | +2,196 | -2,196 | +2,196 |
 
 Trajectory: 200,116 (UI-1) -> ~196,776 (UI-2) ->
-188,880 (UI-3) -> 180,940 (UI-4) -> 178,784
+188,880 (UI-3) -> 180,940 (UI-4) -> 178,744
 (UI-5). The whole phase fits inside uiapp, as
 expected. (The task brief cites UI-4's
 merged-tree measure 181,164 B; the 224 B delta
@@ -239,6 +240,42 @@ class of change as the UI-3 UI2-VERIFY update
 and the UI-4 FND1 update: the product changed,
 so the gate follows it.
 
+### Visual evidence (coordinator-readable dumps)
+
+Standing rule from the coordinator (2026-10-26):
+besides pixel-count asserts, the coordinator
+reads every new screen's screendump before
+merge. UI-5's run-4 originals live in
+`~/workspace/logs-ui5/` (its own LOGDIR, never
+shared with another phase's logs -- the
+`logs-ui4/` staleness lesson: a shared dir let
+a face frame from another run sit under a
+Power-screen name). The canonical, clearly
+named copies are in `~/workspace/logs-ui5/dumps/`
+(PPM original + PNG conversion each); the
+run-4 originals were NOT overwritten or deleted
+to make them, and no later UI-5 run writes into
+`dumps/`:
+
+- `dumps/ui5-editor.ppm` / `.png` -- the NEW
+  screen: the char-picker editor open on "AB"
+  (status bar 19:01 guest clock, "Edit device
+  name", value AB, "POS 3/2 CHAR _" append
+  position, UP/DN + L/R + LEFT@0/RIGHT@end +
+  OK/BACK hints). Copy of run-4 `ui5-edit.ppm`.
+- `dumps/ui5-name-detail.ppm` / `.png` -- the
+  CHANGED screen: the name detail showing AB
+  with the blue "Edit name" button focused and
+  the blue BACK button; the "Edit in UI-5" note
+  is gone. Copy of run-4 `ui5-detail-ab.ppm`.
+
+Other run-4 dumps still in `~/workspace/logs-ui5/`
+(not new screens, listed for completeness):
+`ui5-menu.ppm`, `ui5-list.ppm`,
+`ui5-detail-abc.ppm` (detail after saving ABC),
+`ui5-monitor.ppm`, `ui5-power.ppm`. All are
+240x240 RGB.
+
 ## 4. Battery (worktree; full logs per leg)
 
 Full logs: `~/workspace/logs-ui5/battery-<leg>.log`
@@ -323,6 +360,10 @@ fix-state: PIN 246810, unprovisioned, healthy
   pre-change) + UI3 script follows Edit button
 - `58bfc2e` -- ui5: LVGL name editor + polish
   (focus/back-menu parity)
+- `1bd5475` -- ui5: dev log (editor + polish,
+  battery, desync analysis)
+- (this follow-up) -- ui5: honest Memory row
+  (§7) + dev-log §7 and visual-dump list
 - dev log: this file (committed on `dev/ui5`;
   final hash in the coordinator's merge report)
 
@@ -353,3 +394,153 @@ fix-state: PIN 246810, unprovisioned, healthy
   resilient (e.g. re-grant + resume instead of
   fail-fast) rather than touching the product
   idle behavior, which is correct.
+
+## 7. Memory row: impossible value -- investigation + honest display
+
+Finding (coordinator, visual read of the Monitor
+screen): "Memory: 199872/65536 KB" -- used larger
+than total, physically impossible. Added as a
+bounded UI-5 polish item.
+
+### The arithmetic (exact)
+
+SYS_STAT (`mach3-port/src/ext/user.c`, handler
+for syscall 57) computes, as designed:
+
+- `mem_total_kb = mem_size / 1024` = 65536 (64 MB)
+- `total_pages = mem_size / 4096` = 16384
+- `mem_used_kb = (total_pages -
+  (unsigned)vm_page_free_count) * 4`
+
+199872 / 4 = 49968 used pages, so
+`(unsigned)vm_page_free_count` = 16384 - 49968
+mod 2^32 = 4294933712, i.e. `vm_page_free_count`
+= -33584 as the signed `int` it is declared as
+in both `user.c` and `http.c`. The formula is
+faithful; the INPUT is wrong. The kernel struct
+layout vs ulib layout was already verified
+identical (coordinator's check), so this is not
+a display-layout bug: Mach's free-page counter
+itself went negative.
+
+### What the counter does (traced, not assumed)
+
+- Definition: single BSS symbol in upstream
+  `kernel/vm/vm_resident.c:347` (verified unique
+  in the linked ELF: `407dab10 B
+  vm_page_free_count`; the ARM port never touches
+  the free list directly).
+- Bootstrap is sane: every boot log prints
+  "vm_page_bootstrap: 10152 free pages"
+  (16384 - 10152 = 6232 pages held by the kernel
+  image + page tables + stolen memory).
+- MI accounting is balanced on inspection:
+  `vm_page_grab` decrements + unlinks,
+  `vm_page_release` increments + links (and
+  panics on double-free), the contiguous
+  allocator decrements exactly npages for npages
+  removed. The ARM `pmap_startup`
+  (`md/arm/pmap.c`, MACHINE_PAGES override)
+  follows the same balanced pattern (steal page
+  structs, `pmap_next_page` + `vm_page_init` +
+  `vm_page_release` in reverse).
+- No port-side caller of `vm_page_create`,
+  `vm_page_grab`, or `vm_page_release` exists
+  outside the MI code. uiapp persists across
+  token grants (outer `for(;;)` in
+  `user/uiapp/main.c`), so there is no per-grant
+  task-teardown leak to blame.
+
+### Reproduction attempts (all negative)
+
+Scratch probes in `~/workspace/logs-ui5/memfix/`
+(never in the repo, never touching run-4 dumps):
+
+- `memprobe.py`: boot -> shell qfetch 27884 KB
+  (free 9413, sane) -> provision -> gui ->
+  Monitor marker 29872/65536 KB -> release ->
+  spawns -> 40 s idle -> Monitor again ->
+  final qfetch, all 29872 KB. Stable.
+- `memsoak.py`: 40 grant cycles (grant ->
+  Monitor -> BACK -> release) + spawn bursts +
+  a 200-key burst, sampling every 10 cycles:
+  29872 KB at every sample. Zero drift.
+
+So ordinary UI use, grants, spawns, and key
+traffic do NOT move the counter. The -33584
+value was not reproduced in ~15 minutes of
+probing. Candidates not yet exercised: very
+long uptime (a slow leak would need hours at
+any plausible rate -- 43736 net pages is 175 MB
+of phantom grabs on a 64 MB machine, which no
+steady workload can hold), qabot LLM prompt
+loops, heavy web/IPC/linkd traffic, or a rare
+one-off (list corruption would also panic or
+corrupt data before reaching -33584 cleanly).
+That is the VM rabbit hole the coordinator's
+brief names: finding the trigger needs a
+long-soak + workload bisection pass of its own,
+not a UI-5 side quest.
+
+### Choice: honest display, SYS_STAT untouched
+
+`user/uiapp/lv_monitor.c` `collect()`: when
+`st.mem_used_kb > st.mem_total_kb`, the Memory
+row shows `-` (unknown) instead of the
+impossible `used/total KB` -- mirroring the
+Disk row's `-` for unknown and the CPU row's
+`-`. Cost +40 B, all in uiapp (headroom
+178,784 -> 178,744). Deliberately NOT changed:
+
+- SYS_STAT's meaning, formula, or struct: both
+  sides (kernel + ulib) plus qfetch (`sh.c`),
+  `umon`, and web metrics (`http.c`) still see
+  the raw numbers. Changing the field meaning
+  would have forced updates across all of them
+  for no gain while the counter itself is wrong.
+- The old hand-rolled Monitor (`scr_mon.c`):
+  it is dead code (no reference from
+  `user/uiapp/main.c` or headers); the LVGL
+  Monitor is the only live Monitor surface.
+
+### Verification of the guard (both directions)
+
+- Impossible in, `-` out: a temporary
+  kernel-only hack forced SYS_STAT to report
+  exactly 199872 KB (reverted immediately
+  after; `git diff` confirms `user.c` clean).
+  On that build, shell qfetch printed
+  "Memory: 199872 / 65536 KB" (proving the
+  forced value reached userspace) while the
+  LVGL Monitor printed "UILV4: mon Memory: -"
+  on both Monitor opens. The marker text IS
+  the label text (same `vals[]` array), so the
+  screen shows "Memory: -".
+- Normal path unchanged: after revert +
+  rebuild (byte-identical size to the guard
+  build: 4,015,560 / 178,744), a fresh probe
+  shows Monitor "Memory: 29872/65536 KB" and
+  qfetch 27884 -> 29872 KB, exactly as before
+  the guard. No full UI5-VERIFY re-run was
+  done for this one-row display change: it
+  would have overwritten the run-4 dumps in
+  `logs-ui5/` that §3 preserves, and it
+  asserts no Memory value (UI5-VERIFY's
+  Monitor checks are clock band, monback
+  focus, and BACK-to-menu; UI4-VERIFY only
+  asserts the Memory row is PRESENT, which
+  "Memory: -" satisfies).
+
+### Open item for a later track
+
+The kernel accounting root is still unknown.
+If it ever reproduces, the first bisect axes
+are: uptime length, qabot prompt count, and
+web/IPC/linkd volume -- plus a boot-time vs
+late-run comparison of `vm_page_free_count`
+itself (it is only observable today via the
+derived SYS_STAT number). Until then the
+Monitor refuses to display an impossible
+number, and qfetch/web still show raw SYS_STAT
+-- that asymmetry is documented here, not
+hidden.
