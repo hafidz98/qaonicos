@@ -222,16 +222,51 @@ def frame_diff(a, b):
     return n
 
 
+def find_after(pos, needle):
+    return needle.encode() in serial[pos:]
+
+
+def send_key(ser, k):
+    """Send one key with injection verification (resend
+    once on PL011 byte-loss). True if sh ran it."""
+    for _ in range(2):
+        pos = len(serial)
+        ser.sendall(f"key {k}\n".encode())
+        if wait_from(pos, "key: injected", 5):
+            return True
+    return False
+
+
 def key(ser, k, needle, timeout=20):
-    pos = len(serial)
-    ser.sendall(f"key {k}\n".encode())
+    """Send one key, verifying sh ran it.
+
+    PL011 RX under cooperative scheduling can drop a byte
+    ('key menu' -> 'ey menu' -> unknown command, seen in
+    UI-4 runs); 'key: injected' proves sh parsed the full
+    line, so a missing confirmation triggers one resend.
+    Ported from verify-ui4.py (UI-4 coordinator harness
+    hardening)."""
+    for _ in range(2):
+        pos = len(serial)
+        ser.sendall(f"key {k}\n".encode())
+        if wait_from(pos, "key: injected", 5):
+            break
     return wait_from(pos, needle, timeout)
 
 
 def send_keys(ser, seq, delay=0.35):
-    """Raw key sequence with pacing; no per-key marker."""
+    """Raw key sequence with pacing and per-key injection
+    verification (UI-4 hardening port). The PIN picker
+    drains one raw key per shell-loop iteration, so a
+    dropped byte used to corrupt the whole digit burst
+    with no signal; each key is now confirmed injected
+    before the next is sent."""
     for k in seq:
-        ser.sendall(f"key {k}\n".encode())
+        for _ in range(2):
+            pos = len(serial)
+            ser.sendall(f"key {k}\n".encode())
+            if wait_from(pos, "key: injected", 5):
+                break
         time.sleep(delay * TSCALE)
 
 
@@ -247,11 +282,51 @@ def pin_entry(ser, digits):
 
 
 def grant_menu(ser):
-    """Fresh token grant -> shell menu. Returns False
-    unless UILV2: start appears."""
+    """Fresh token grant -> shell menu, with retries.
+
+    A grant can be lost when face is not up yet on a fresh
+    boot, and a menu may already run from a stolen-'m'
+    grant: a focus marker after our send proves the menu
+    is alive, which counts as granted. Recovery: BACK out,
+    let any pending release complete (release clears evq,
+    so the fresh menu key must come after it), then grant
+    fresh. Ported from verify-ui4.py."""
+    for _ in range(3):
+        pos = len(serial)
+        ser.sendall(b"key menu\n")
+        if not wait_from(pos, "key: injected", 5):
+            # Byte-loss on the send ('ey menu'): resend once
+            # before spending 32 s waiting for a grant that
+            # can never arrive.
+            pos = len(serial)
+            ser.sendall(b"key menu\n")
+            if not wait_from(pos, "key: injected", 5):
+                continue
+        if wait_from(pos, "UILV2: start", 32):
+            return True
+        if find_after(pos, "UILV2: focus"):
+            return True
+    # Recovery: the menu may be alive at unknown focus
+    # (a lagged transition left it running), in which
+    # case menu keys are ignored. BACK out, let any
+    # pending release complete, then grant fresh. A BACK
+    # that lands on the menu (leaf screen -> menu at
+    # qabot) also counts.
+    pos = len(serial)
+    send_key(ser, "back")
+    if wait_from(pos, "UILV2: start", 32):
+        return True
+    wait_from(pos, "UILV2: release", 32)  # best effort
     pos = len(serial)
     ser.sendall(b"key menu\n")
-    return wait_from(pos, "UILV2: start", 60)
+    if not wait_from(pos, "key: injected", 5):
+        pos = len(serial)
+        ser.sendall(b"key menu\n")
+        if not wait_from(pos, "key: injected", 5):
+            return False
+    if wait_from(pos, "UILV2: start", 32):
+        return True
+    return find_after(pos, "UILV2: focus")
 
 
 def goto_settings(ser):
@@ -519,7 +594,13 @@ try:
     check("no UILV2 flush failures", "UILV2: flush failures" not in seg)
     check("no UILV3 flush failures", "UILV3: flush failures" not in seg)
 
-    # Teardown: disk unprovisioned.
+    # Teardown: restore the shared battery PIN, then disk
+    # unprovisioned. This script's round trip leaves PIN
+    # 1234 behind; the web-login legs (FND2/FND3/IPC/ONB2)
+    # all log in with 246810, so leaving 1234 poisons the
+    # battery (UI-3 chain lesson, now enforced here).
+    check("teardown restores shared battery PIN 246810",
+          shell_cmd(ser, "setup pin 246810", "setup: PIN saved", 10))
     shell_cmd(ser, "setup reset", "", 10)
     time.sleep(1.0)
 
