@@ -449,20 +449,32 @@ def old_clock_check(ser, mon, off_min, label):
     # guest lag each BACK takes up to ~30 s to act,
     # and a BACK that overshoots straight to release
     # still ends at the desired shell state -- accept
-    # either marker as progress.
+    # either marker as progress. Old screens idle out
+    # on their own 30 s timer, printing 'uiapp: token
+    # released' (never 'UILV2: release'): that is also
+    # the desired shell state, so it is accepted too.
+    # Needles are release-first: wait_either returns
+    # the first list-order match, and a release always
+    # follows a start, never the reverse.
     at_menu = False
     for _ in range(3):
         pos = len(serial)
         send_key(ser, "back")
-        m = wait_either(pos, ("UILV2: start", "UILV2: release"), 32)
-        if m == "UILV2: release":
+        m = wait_either(pos, ("UILV2: release",
+                              "uiapp: token released",
+                              "UILV2: start"), 32)
+        if m in ("UILV2: release", "uiapp: token released"):
             return ok
         if m == "UILV2: start":
             at_menu = True
             break
     if not at_menu:
         return False
-    if not key(ser, "back", "UILV2: release", 32):
+    pos = len(serial)
+    send_key(ser, "back")
+    m = wait_either(pos, ("UILV2: release",
+                          "uiapp: token released"), 32)
+    if m is None:
         return False
     return ok
 
