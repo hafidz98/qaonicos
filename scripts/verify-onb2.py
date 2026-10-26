@@ -147,3 +147,8 @@ check("finale log line", b"face: provisioned -> finale" in log)
 
 p.kill()
 print("ONB2-VERIFY:", "PASS" if not fails else "FAIL " + str(fails))
+# UI-6 fix: the verdict line used to be the only signal --
+# the script fell off the end, so the exit code was always
+# 0 even on FAIL. Battery harnesses must be able to trust
+# the exit code; keep the verdict line as the human signal.
+sys.exit(0 if not fails else 1)
