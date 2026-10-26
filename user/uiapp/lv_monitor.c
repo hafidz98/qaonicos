@@ -141,18 +141,30 @@ collect(char vals[NROWS][48])
 	i = 0;
 	while (v0[i] && i < 40) { vals[1][i] = v0[i]; i++; }
 	vals[1][i++] = ' '; vals[1][i++] = 's'; vals[1][i] = 0;
-	/* Memory used/total KB */
-	fmt_u(v0, st.mem_used_kb);
-	fmt_u(v1, st.mem_total_kb);
-	i = 0;
-	while (v0[i] && i < 18) { vals[2][i] = v0[i]; i++; }
-	vals[2][i++] = '/';
-	{
-		int j = 0;
-		while (v1[j] && i < 40) { vals[2][i++] = v1[j++]; }
+	/* Memory used/total KB -- but never an impossible
+	 * number: Mach's vm_page_free_count has been observed
+	 * negative (-33584) on some runs, which SYS_STAT turns
+	 * into used > total (199872/65536 KB). Until the VM
+	 * accounting root is found (see DEVLOG-UI5 §7), show
+	 * unknown instead of a physically impossible value,
+	 * mirroring the Disk row's '-' for unknown. SYS_STAT
+	 * itself is untouched: qfetch/web still see the raw
+	 * numbers. */
+	if (st.mem_used_kb > st.mem_total_kb) {
+		vals[2][0] = '-'; vals[2][1] = 0;
+	} else {
+		fmt_u(v0, st.mem_used_kb);
+		fmt_u(v1, st.mem_total_kb);
+		i = 0;
+		while (v0[i] && i < 18) { vals[2][i] = v0[i]; i++; }
+		vals[2][i++] = '/';
+		{
+			int j = 0;
+			while (v1[j] && i < 40) { vals[2][i++] = v1[j++]; }
+		}
+		vals[2][i++] = ' '; vals[2][i++] = 'K'; vals[2][i++] = 'B';
+		vals[2][i] = 0;
 	}
-	vals[2][i++] = ' '; vals[2][i++] = 'K'; vals[2][i++] = 'B';
-	vals[2][i] = 0;
 	/* Threads */
 	fmt_u(vals[3], st.nthreads);
 	/* Net rx/tx KB */
