@@ -280,10 +280,15 @@ uilvgl_shell_run(void)
 			view = VIEW_SETTINGS;
 		} else if (settings_active) {
 			if (lvset_tick()) {
-				/* List BACK button: back to menu. */
+				/* List BACK button: back to menu.
+				 * Same marker as the BACK-key
+				 * path below (UI-5 polish: the
+				 * two BACK paths were
+				 * observably different). */
 				settings_active = 0;
 				view = VIEW_MENU;
 				build_menu();
+				puts("UILV3: back menu\n");
 			}
 		}
 		if (monitor_requested && view == VIEW_MENU) {
@@ -297,11 +302,14 @@ uilvgl_shell_run(void)
 				 * exit deletes the refresh timer:
 				 * without it the timer would keep
 				 * writing to labels build_menu
-				 * just deleted. */
+				 * just deleted. Same back-menu
+				 * marker as the BACK-key path
+				 * (UI-5 polish). */
 				monitor_active = 0;
 				lvmon_exit();
 				view = VIEW_MENU;
 				build_menu();
+				puts("UILV4: back menu\n");
 			}
 		}
 		if (power_requested && view == VIEW_MENU) {
@@ -312,11 +320,14 @@ uilvgl_shell_run(void)
 		} else if (power_active) {
 			int pr = lvpower_tick();
 			if (pr == 1) {
-				/* BACK button: back to menu. */
+				/* BACK button: back to menu.
+				 * Same back-menu marker as the
+				 * BACK-key path (UI-5 polish). */
 				power_active = 0;
 				lvpower_exit();
 				view = VIEW_MENU;
 				build_menu();
+				puts("UILV4: back menu\n");
 			} else if (pr == 2) {
 				/* Sleep Now: display already
 				 * blanked; release the token. */

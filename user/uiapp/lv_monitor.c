@@ -141,18 +141,30 @@ collect(char vals[NROWS][48])
 	i = 0;
 	while (v0[i] && i < 40) { vals[1][i] = v0[i]; i++; }
 	vals[1][i++] = ' '; vals[1][i++] = 's'; vals[1][i] = 0;
-	/* Memory used/total KB */
-	fmt_u(v0, st.mem_used_kb);
-	fmt_u(v1, st.mem_total_kb);
-	i = 0;
-	while (v0[i] && i < 18) { vals[2][i] = v0[i]; i++; }
-	vals[2][i++] = '/';
-	{
-		int j = 0;
-		while (v1[j] && i < 40) { vals[2][i++] = v1[j++]; }
+	/* Memory used/total KB -- but never an impossible
+	 * number: Mach's vm_page_free_count has been observed
+	 * negative (-33584) on some runs, which SYS_STAT turns
+	 * into used > total (199872/65536 KB). Until the VM
+	 * accounting root is found (see DEVLOG-UI5 §7), show
+	 * unknown instead of a physically impossible value,
+	 * mirroring the Disk row's '-' for unknown. SYS_STAT
+	 * itself is untouched: qfetch/web still see the raw
+	 * numbers. */
+	if (st.mem_used_kb > st.mem_total_kb) {
+		vals[2][0] = '-'; vals[2][1] = 0;
+	} else {
+		fmt_u(v0, st.mem_used_kb);
+		fmt_u(v1, st.mem_total_kb);
+		i = 0;
+		while (v0[i] && i < 18) { vals[2][i] = v0[i]; i++; }
+		vals[2][i++] = '/';
+		{
+			int j = 0;
+			while (v1[j] && i < 40) { vals[2][i++] = v1[j++]; }
+		}
+		vals[2][i++] = ' '; vals[2][i++] = 'K'; vals[2][i++] = 'B';
+		vals[2][i] = 0;
 	}
-	vals[2][i++] = ' '; vals[2][i++] = 'K'; vals[2][i++] = 'B';
-	vals[2][i] = 0;
 	/* Threads */
 	fmt_u(vals[3], st.nthreads);
 	/* Net rx/tx KB */
@@ -251,6 +263,16 @@ refresh_timer_cb(lv_timer_t *t)
 }
 
 static void
+focus_cb(lv_event_t *e)
+{
+	/* Like the shell menu and Power buttons:
+	 * focus on the BACK button is observable. */
+	puts("UILV4: focus ");
+	puts((const char *)lv_event_get_user_data(e));
+	puts("\n");
+}
+
+static void
 back_btn_cb(lv_event_t *e)
 {
 	(void)e;
@@ -288,6 +310,8 @@ lvmon_enter(lv_group_t *g)
 	lv_label_set_text(lbl, "BACK");
 	lv_obj_center(lbl);
 	lv_group_add_obj(grp, btn);
+	lv_obj_add_event_cb(btn, focus_cb, LV_EVENT_FOCUSED,
+			    (void *)"monback");
 	lv_obj_add_event_cb(btn, back_btn_cb, LV_EVENT_CLICKED, NULL);
 	lv_group_focus_obj(btn);
 	refresh_timer = lv_timer_create(refresh_timer_cb, 500, NULL);

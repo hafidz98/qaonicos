@@ -1,15 +1,17 @@
 /*
- * lv_settings.c - LVGL Settings screen (UI-3).
+ * lv_settings.c - LVGL Settings screen (UI-3, name
+ * editor UI-5).
  *
  * Views, all rebuilt on the single screen object
  * like the shell menu (never inside an event
  * handler): list -> detail (name/tz/pin) -> picker
- * (PIN length + digit entry). Button callbacks only
- * mark state; tick() rebuilds. Picker views use the
+ * (PIN length + digit entry) -> editor (UI-5 name
+ * char-picker). Button callbacks only mark state;
+ * tick() rebuilds. Picker and editor views use the
  * port's raw-key mode: UP/DOWN cycle, LEFT/RIGHT
- * move, OK advances/confirms, BACK cancels -- the
- * group model cannot express digit cycling because
- * UP/DOWN are group navigation (PREV/NEXT).
+ * move, OK advances/confirms/saves, BACK cancels --
+ * the group model cannot express character cycling
+ * because UP/DOWN are group navigation (PREV/NEXT).
  *
  * Serial markers (UILV3:) are the verify script's
  * sync points; dumps prove the pixels. A failed
@@ -32,6 +34,7 @@
 #define V_TZ		2
 #define V_PIN		3
 #define V_PICK		4
+#define V_EDIT		5
 
 /* Picker phases. */
 #define P_NONE		0
@@ -80,6 +83,29 @@ static int pick_cursor;
 static int new_len;
 static int new_digits[16];
 static char pick_msg[40];
+
+/* Name editor state (UI-5). Same charset and key
+ * semantics as the old hand-rolled scr_textedit
+ * picker: UP/DOWN cycles the character at the
+ * cursor, LEFT/RIGHT moves it, LEFT at position 0
+ * deletes the last character, RIGHT at the end
+ * appends 'A', OK saves, BACK cancels. The buffer
+ * cap is EDIT_MAX (the web form's 40-char bound);
+ * the web form's form_get() and the shell's setup
+ * display truncate to 39, so a 40-char name set
+ * here is stored intact and shown in full
+ * on-device, but shows truncated in those two
+ * legacy display fields (pre-existing limits, not
+ * data loss). An empty buffer cannot be saved
+ * (the len-0 lfs write edge is avoided); BACK
+ * cancels instead. */
+#define EDIT_MAX	40
+static const char edit_charset[] =
+	" ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!.,:-?";
+static char edit_buf[EDIT_MAX + 1];
+static int edit_len;
+static int edit_pos;		/* 0..len (len = append) */
+static char edit_msg[40];
 
 /* --- tiny string helpers (no printf in uiapp) --- */
 
@@ -250,11 +276,14 @@ back_list_cb(lv_event_t *e)
 	pending = 1;
 }
 
+/* Forward: the editor lives below the view builders. */
+static void edit_enter_cb(lv_event_t *e);
+
 static void
 build_name(void)
 {
 	lv_obj_t *scr = lv_screen_active();
-	lv_obj_t *btn;
+	lv_obj_t *btn, *first;
 
 	read_cfg();
 	lv_group_remove_all_objs(grp);
@@ -264,12 +293,18 @@ build_name(void)
 		mk_line(scr, cur_name, 62);
 	else
 		mk_line(scr, "(unset)", 62);
-	mk_line(scr, "Edit in UI-5", 94);
+	/* UI-5: the value is editable now (char-picker
+	 * editor, same pattern as the PIN picker).
+	 * Focus starts on Edit (the primary action),
+	 * matching the PIN detail's Change/Set focus. */
+	first = mk_button(scr, 0, "Edit name", "editname",
+			  edit_enter_cb, NULL);
+	/* mk_button places by LIST_Y0 pitch; move the
+	 * buttons to the detail layout rows. */
+	lv_obj_align(first, LV_ALIGN_TOP_MID, 0, 100);
 	btn = mk_button(scr, 0, "BACK", "nameback", back_list_cb, NULL);
-	/* mk_button places by LIST_Y0 pitch; move it to
-	 * the detail layout row. */
 	lv_obj_align(btn, LV_ALIGN_TOP_MID, 0, 130);
-	lv_group_focus_obj(btn);
+	lv_group_focus_obj(first);
 	view = V_NAME;
 	puts("UILV3: detail name\n");
 }
@@ -674,6 +709,185 @@ pick_key(int ev)
 	pending = 1;
 }
 
+/* --- name editor (UI-5) --- */
+
+static int
+edit_ch_count(void)
+{
+	int i = 0;
+	while (edit_charset[i])
+		i++;
+	return i;
+}
+
+static int
+edit_ch_idx(char c)
+{
+	int i = 0;
+	while (edit_charset[i]) {
+		if (edit_charset[i] == c)
+			return i;
+		i++;
+	}
+	return 0;
+}
+
+static void
+edit_cycle(int dir)
+{
+	int n = edit_ch_count(), i;
+
+	if (edit_pos >= edit_len) {
+		/* Append position: start a new character
+		 * (space) and cycle it, exactly like the
+		 * old picker. Blocked at the cap. */
+		if (edit_len >= EDIT_MAX)
+			return;
+		edit_buf[edit_len] = edit_charset[0];
+		edit_buf[edit_len + 1] = 0;
+		edit_pos = edit_len;
+		edit_len++;
+	}
+	i = edit_ch_idx(edit_buf[edit_pos]);
+	i = (i + dir + n) % n;
+	edit_buf[edit_pos] = edit_charset[i];
+}
+
+static void
+to_name_detail(void)
+{
+	uilvgl_raw_keys(0);
+	want_view = V_NAME;
+	pending = 1;
+}
+
+static void
+edit_key(int ev)
+{
+	switch (ev) {
+	case EV_UP:
+		edit_cycle(1);
+		break;
+	case EV_DOWN:
+		edit_cycle(-1);
+		break;
+	case EV_LEFT:
+		if (edit_pos > 0) {
+			edit_pos--;
+		} else if (edit_len > 0) {
+			/* At position 0: delete the last
+			 * character (old picker semantics)
+			 * and land at the end. */
+			edit_len--;
+			edit_buf[edit_len] = 0;
+			edit_pos = edit_len;
+		}
+		break;
+	case EV_RIGHT:
+		if (edit_pos < edit_len) {
+			edit_pos++;
+		} else if (edit_len < EDIT_MAX) {
+			/* At the end: append 'A' (old
+			 * picker semantics) and land past
+			 * it, back in append position. */
+			edit_buf[edit_len] = edit_charset[1];
+			edit_len++;
+			edit_buf[edit_len] = 0;
+			edit_pos = edit_len;
+		}
+		break;
+	case EV_OK:
+		if (edit_len == 0) {
+			str_copy(edit_msg, "Empty - not saved",
+				 sizeof(edit_msg));
+			break;
+		}
+		if (uilvgl_lfs_write("cfg-name", edit_buf,
+		    (unsigned)edit_len) == 0) {
+			puts("UILV5: edit saved ");
+			puts(edit_buf);
+			puts("\n");
+			edit_msg[0] = 0;
+			to_name_detail();
+			return;
+		}
+		str_copy(edit_msg, "Save failed - try again",
+			 sizeof(edit_msg));
+		break;
+	case EV_BACK:
+		puts("UILV5: edit cancel\n");
+		edit_msg[0] = 0;
+		to_name_detail();
+		return;
+	default:
+		return;
+	}
+	want_view = V_EDIT;
+	pending = 1;
+}
+
+static void
+build_edit(void)
+{
+	lv_obj_t *scr = lv_screen_active();
+	char pos[32];
+	int n = 0, c;
+
+	lv_group_remove_all_objs(grp);
+	lv_obj_clean(scr);
+	mk_line(scr, "Edit device name", 24);
+	if (edit_len > 0)
+		mk_line(scr, edit_buf, 56);
+	else
+		mk_line(scr, "(empty)", 56);
+	/* Cursor + current character, so the editor is
+	 * usable without a pixel cursor: "POS c/len
+	 * CHAR x", '_' in append position. */
+	pos[n++] = 'P'; pos[n++] = 'O'; pos[n++] = 'S'; pos[n++] = ' ';
+	c = edit_pos + 1;
+	if (c >= 10)
+		pos[n++] = (char)('0' + c / 10);
+	pos[n++] = (char)('0' + c % 10);
+	pos[n++] = '/';
+	if (edit_len >= 10)
+		pos[n++] = (char)('0' + edit_len / 10);
+	pos[n++] = (char)('0' + edit_len % 10);
+	pos[n++] = ' ';
+	pos[n++] = 'C'; pos[n++] = 'H'; pos[n++] = 'A'; pos[n++] = 'R';
+	pos[n++] = ' ';
+	if (edit_pos < edit_len)
+		pos[n++] = edit_buf[edit_pos];
+	else
+		pos[n++] = '_';
+	pos[n] = 0;
+	mk_line(scr, pos, 96);
+	mk_line(scr, "UP/DN: char L/R: move", 128);
+	mk_line(scr, "LEFT@0: del RIGHT@end: add", 150);
+	mk_line(scr, "OK: save BACK: cancel", 172);
+	if (edit_msg[0])
+		mk_line(scr, edit_msg, 196);
+	view = V_EDIT;
+	puts("UILV5: edit name\n");
+}
+
+static void
+edit_enter_cb(lv_event_t *e)
+{
+	int i;
+
+	(void)e;
+	/* Start from the stored value (clamped to the
+	 * cap), cursor at the end, like the old picker. */
+	for (i = 0; i < EDIT_MAX && cur_name[i]; i++)
+		edit_buf[i] = cur_name[i];
+	edit_buf[i] = 0;
+	edit_len = i;
+	edit_pos = edit_len;
+	edit_msg[0] = 0;
+	want_view = V_EDIT;
+	pending = 1;
+}
+
 /* --- module API --- */
 
 void
@@ -711,6 +925,12 @@ lvset_tick(void)
 			/* Picker views own the EV queue. */
 			uilvgl_raw_keys(1);
 			break;
+		case V_EDIT:
+			build_edit();
+			/* The editor owns the EV queue, like
+			 * the picker. */
+			uilvgl_raw_keys(1);
+			break;
 		default:
 			/* -1 from the list BACK button: the
 			 * caller rebuilds the shell menu. */
@@ -723,6 +943,10 @@ lvset_tick(void)
 		ev = uilvgl_take_key();
 		if (ev != EV_NONE)
 			pick_key(ev);
+	} else if (view == V_EDIT) {
+		ev = uilvgl_take_key();
+		if (ev != EV_NONE)
+			edit_key(ev);
 	}
 	return exited;
 }
@@ -730,11 +954,11 @@ lvset_tick(void)
 int
 lvset_on_back(void)
 {
-	if (view == V_PICK) {
-		/* Picker already consumed BACK as cancel in
-		 * tick(); a group-mode BACK here cannot
-		 * happen (raw mode never sets the edge),
-		 * so treat it as consumed. */
+	if (view == V_PICK || view == V_EDIT) {
+		/* Picker/editor already consumed BACK as
+		 * cancel in tick(); a group-mode BACK here
+		 * cannot happen (raw mode never sets the
+		 * edge), so treat it as consumed. */
 		return 1;
 	}
 	if (view == V_LIST)
@@ -760,4 +984,7 @@ lvset_exit(void)
 	uilvgl_raw_keys(0);
 	active = 0;
 	pick_phase = P_NONE;
+	edit_len = 0;
+	edit_pos = 0;
+	edit_buf[0] = 0;
 }

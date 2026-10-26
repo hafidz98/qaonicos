@@ -12,13 +12,15 @@
  * constant-time compare, and the throttle apply
  * exactly as they do for the web login.
  *
- * Editing honesty (UI-3): timezone is a fixed option
- * list (keypad-selectable, no text entry needed) and
- * the PIN is a digit-picker (digits only, 4..16
- * positions); the device name is free text, so its
- * detail view shows the current value with an honest
- * "edit in UI-5" note instead of fake editing.
- * Non-numeric PINs can only change via the web UI.
+ * Editing (UI-3, extended UI-5): timezone is a fixed
+ * option list (keypad-selectable, no text entry
+ * needed) and the PIN is a digit-picker (digits only,
+ * 4..16 positions); the device name is free text
+ * edited by the UI-5 char-picker (UP/DOWN cycles the
+ * character, LEFT/RIGHT moves, OK saves, BACK
+ * cancels; 40-char cap, same file as the web
+ * settings page). Non-numeric PINs can only change
+ * via the web UI.
  *
  * The module is driven by the shell loop: enter()
  * builds the list, tick() handles pending rebuilds
