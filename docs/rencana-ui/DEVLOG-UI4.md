@@ -115,18 +115,22 @@ inventing one.
 | | kernel binary | headroom | uiapp.bin |
 |---|---|---|---|
 | UI-3 baseline (fresh worktree) | 4,005,424 | 188,880 | 435,824 |
-| UI-4 | TBD | TBD | TBD |
-| UI-4 cost | TBD | TBD | TBD |
+| UI-4 (final, incl. face fix) | 4,013,364 | 180,940 | 441,708 |
+| UI-4 cost | +7,940 | -7,940 | +5,884 |
 
-Trajectory: TBD (restated after the post-change
-measure). Linkd untouched (93.9% cap). No strip
-bundled (coordinator decision).
+Trajectory: UI-1 200,116 -> UI-2 ~196,776 ->
+UI-3 188,880 -> UI-4 180,940 (objcopy-binary
+method throughout). The pre-verify estimate was
+180,956; the face race fix (below) added 16 B.
+Linkd untouched (93.9% cap). No strip bundled
+(coordinator decision).
 
 ## 3. Verification
 
 ### UI4-VERIFY (new, `scripts/verify-ui4.py`)
 
-- Pre-change (UI-3 kernel): **FAIL TBD/TBD**.
+- Pre-change (UI-3 kernel): **FAIL 38/74** (36
+  FAILs, full log `logs-ui4/ui4-prechange.log`).
   No `UILV4` string exists anywhere in the base
   tree, so every marker wait fails by
   construction; the passing checks are harness
@@ -135,18 +139,20 @@ bundled (coordinator decision).
   UI-3 clock hardcodes WIB, so it matches at
   +0700 by coincidence — the discriminating
   old-path check is the +0800 one).
-- Post-change: **PASS TBD/TBD** -- menu, Monitor
-  rows (Device TestDev, CPU "-", Boot #, Time),
-  Monitor BACK button, Power four blue buttons,
-  Power BACK key, tz +0800 LVGL + old-path
-  (glyph-exact 5x7 template match), malformed tz
-  -> WIB fallback, +0700 restore with setup
-  read-back, Shutdown (QEMU exits 0), Restart
-  (SYS_RESET + new prompt), Sleep (release +
-  changed dump). 0 FAULT, 0 uiapp FAIL,
+- Post-change: **PASS 73/73** (run 8, full log
+  `logs-ui4/ui4-postchange8.log`, EXIT=0) -- menu,
+  Monitor rows (Device TestDev, CPU "-", Boot #,
+  Time), Monitor BACK button, Power four blue
+  buttons, Power BACK key, tz +0800 LVGL +
+  old-path (glyph-exact 5x7 template match:
+  75/75 first try at +0800, 61/61 at +0700),
+  malformed tz -> WIB fallback, +0700 restore
+  with setup read-back, Shutdown (QEMU exits 0),
+  Restart (SYS_RESET + kernel banner), Sleep
+  (release + black dump). 0 FAULT, 0 uiapp FAIL,
   0 flush failures, no QEMU left.
-  uiapp.bin=TBD, kernel binary=TBD,
-  headroom=TBD.
+  uiapp.bin=441,708, kernel binary=4,013,364,
+  headroom=180,940.
 
 The script never changes the shared PIN (UI-3
 lesson): teardown restores tz +0700 and name
@@ -167,31 +173,138 @@ product changed, so the gate follows it.
 
 ## 4. Battery (worktree; full logs per leg)
 
-TBD — table filled after the battery run. Known
-flake classes applied as discriminators (not
-hidden): FND1 ev=12 battery-order flake (rerun
-standalone), C6L5 serial-under-load misses
-(rerun standalone), one-shot SD/fat timing
-(rerun standalone), ONB2's exit code (read the
-verdict line from the full log).
+Full logs: `~/workspace/logs-ui4/battery-<leg>.log`
+(in-chain) and `~/workspace/logs-ui4/rerun-<leg>.log`
+(standalone reruns). UI4 itself (73/73) is not a
+battery leg; it is §3. The battery was killed
+externally mid-FND2 (VM replacement, ~01:29 UTC)
+and resumed from FND2 after a fix-state run (PIN
+246810 + unprovisioned); completed legs' results
+stand. In-chain failures were discriminated by
+standalone rerun, never hidden.
 
-## 5. Commits (branch `dev/ui4`, no merge, no push)
+| Leg | In-chain | Standalone | Failing checks / cause |
+| --- | --- | --- | --- |
+| UI1 | PASS 25/25 | — | — |
+| UI2 | PASS 38/38 | — | — |
+| UI3 | FAIL 50/76 | FAIL 50/76 (same count) | First grant flakes in both runs (single-attempt `key menu`, no injection verification — the PL011 byte-loss disease UI4's script was hardened against); both re-grants PASS, so the grant product path is healthy. UI3-script harness weakness, NOT a UI-4 regression; flagged for the coordinator's harness cleanup, not fixed on this branch. |
+| C6L1 | PASS 29/29 | — | — |
+| C6L2 | PASS 36/36 | — | — |
+| C6L3 | PASS 72/72 | — | — |
+| C6L4 | PASS 60/60 | — | — |
+| C6L5 | FAIL 54/55 | PASS 55/55 | In-chain: `ulink5d ok markers continue after client death` — known serial-under-load flake class. |
+| IPC2 | FAIL 28/34 | PASS 34/34 | In-chain: web login + web shell + ev=17 checks — PIN cascade (UI3's leg leaves PIN 1234; IPC2 logs in with 246810). UI3's script forces 1234 at start and restores 1234, never 246810; its teardown only does `setup reset`. Fix-state (restore 246810) + rerun = green. |
+| IPC4 | FAIL 36/58 | PASS 58/58 | In-chain: all 22 failures cascade from web login (PIN 1234 left by UI3); the tools server runs via web shell, so registration + all client checks fell with it. |
+| IPC5 | PASS 20/20 | — | — |
+| FND1 | PASS | — | LVGL Power Phase C gate works on the UI-4 tree. |
+| FND2 | PASS 21/21 (resume) | — | Resume leg passed after fix-state; confirms the PIN theory. |
+| FND3 | FAIL 35/45 (resume) | PASS 46/46 | In-chain root: `boot 3 is NOT safe mode (self-cleared)` — fail_count carried over from the VM-killed boots; all 9 other failures were `[blocked: no finale]` cascade. Clean state + rerun = green. |
+| FND4 | PASS 36/36 | — | — |
+| FND5 | PASS 33/33 | — | — |
+| ONB1 | FAIL (3 checks, resume) | PASS | In-chain: `POST /login wrong PIN rejected`, `correct PIN -> 303`, `throttle: 4 more wrong PINs still just rejected` — order-sensitive state (ran after FND5 without a PIN reset); clean preconditions + rerun = green. |
+| ONB2 | FAIL (2 checks, resume) | PASS | In-chain: `finale shows the eyes again` (0 eye pixels), `finale log line` — lag/state; rerun finale shows 4460 eye pixels. Face finale path healthy (UI3's rerun also reaches finale). |
+| SHELL | FAIL (resume) | PASS | In-chain: single sub-check `ls` missing `/sd:` — one-shot SD/fat timing flake class. |
+| SAFEMODE | FAIL (resume) | PASS | In-chain: boot3 fail_count=1 (safe-mode boot did not self-clear under carried-over state); rerun boot3 fail_count=0. |
+| UPDATE | PASS | — | — |
+
+Final shared-disk state after all runs + a closing
+fix-state: PIN 246810, unprovisioned, healthy
+(fail_count 0), no `qemu-system-arm` left. Battery
+artifacts that landed in the repo worktree
+(`logs/*.ppm`, `logs/*.png`, `logs/*-serial.log`
+from legs that dump into repo `logs/`) were left
+untracked, never committed; a tracked
+`logs/ipc4-serial.log` overwritten by the IPC4 leg
+was restored with `git checkout` before commit.
+
+## 5. Face race fix (product bug, found by UI-4 verify)
+
+Face's loop checks the display holder at the
+top of the iteration, grants mid-iteration on
+EV_MENU, then renders at the bottom -- and the
+render flush fails (no longer holder) and
+exits(1). Death is intermittent per grant (a
+frame must be due in the grant iteration), so
+early grants pass and later grants on the same
+boot fail with no face left to grant -- exactly
+the run-7 pattern (face FAIL + exit on all four
+boots, grants dying partway through). Fix
+(`user/face/main.c`, +16 B): re-check
+`sys_display_status() == 0` immediately before
+the render flush and skip the frame instead;
+uiapp paints over it anyway. Run 8: 14 grants,
+0 face FAILs. This is a robustness fix, not a
+face redesign: face stays hand-rolled, LVGL
+stays in uiapp only. No respawn was observed
+for face (FND-3 respawn does not cover it) --
+a follow-up worth filing, not fixed here.
+
+## 6. Harness lessons (verify script only, no device change)
+
+- Guest wall-time lag: responses arrive 20-30 s
+  real-time (menu idle is 30 guest-s ~= 37 s
+  real). Needle waits went 20 s -> 32 s (below
+  the real-time idle limit, above the lag).
+- PL011 RX byte-loss under load (known C6L
+  family): `key menu` -> `ey menu` seen twice.
+  Every key send now verifies `key: injected`
+  and resends once.
+- Dev-mode boots are shell-first: daemons
+  launch only on `gui`. Action phases must run
+  `gui` (wait for `face: Qabot server
+  starting`) before any grant -- a grant
+  without gui can never arrive.
+- A relaunch must close a still-alive QEMU
+  first, or the new QEMU dies on hostfwd 18080
+  (run-2 crash: `conn(SER)` timeout).
+- Old screens idle out on their own timer
+  printing `uiapp: token released`, never
+  `UILV2: release`: the Wi-Fi BACK-out accepts
+  both (release-first priority).
+- Restart's new-boot check waits for the kernel
+  banner, not `qaon>` (any prompt matched --
+  run-7 false positive).
+- Reader marker timestamps (`ui4-marks.log`)
+  adjudicated wait-expired-vs-device-slow
+  disputes during diagnosis.
+
+## 7. Commits (branch `dev/ui4`, no merge, no push)
 
 - `5975abc` -- ui4: verify script (FAILs
   pre-change) + FND1 Phase C follows LVGL Power
   screen
-- TBD -- ui4: LVGL Monitor + Power screens +
-  tz-clock follow-up
+- `310a200` -- ui4: fix verify flow (shell state
+  after old_clock_check; skip setup on action
+  boots)
+- `b4581ab` -- ui4: LVGL Monitor + Power screens
+  + tz-clock follow-up
+- `350c067` -- ui4: fix verify harness races
+  (stolen console bytes theory -- later
+  disproven, see §6; stale monitor row; qemu
+  reap)
+- `e4dbe87` -- ui4: fix verify harness (gui
+  before action grants, key resend, probe
+  pattern, restart close)
+- `d0e873a` -- ui4: verify waits 20s->32s for
+  guest lag; fix restart/sleep pos-before-ok
+- `abdb47b` -- ui4: verify grant recovery +
+  wait_either wifi back-out
+- `05294ff` -- ui4: verify back-out accepts
+  old-screen idle release
+- `1178dc3` -- ui4: face must not die on
+  post-grant flush; verify banner check + sleep
+  dump wait
 - dev log: this file (committed on `dev/ui4`;
   final hash in the coordinator's merge report)
 
-## 6. What UI-4 deliberately does NOT do
+## 8. What UI-4 deliberately does NOT do
 
 - No text editing (UI-5): Monitor values are
   read-only; device name editing still waits.
 - No chart/arc gauges (labels carry the values;
   see §1).
 - No strip of test programs (coordinator call).
-- No linkd, face, daemon-order, or wire change.
+- No linkd, daemon-order, or wire change. One
+  face robustness fix (§5) -- no face redesign.
 - No confirmation dialog on Power (scr_power
   parity, see §1).
