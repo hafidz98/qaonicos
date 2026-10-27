@@ -92,6 +92,7 @@ di tiap direktori); kode QaonicOS sendiri berlisensi Apache 2.0
 | Mikrokernel Mach 3.0 | 3.0 (MK83) | https://github.com/Prajna/mach | Lisensi CMU (teks di bawah) | `mach3-port/upstream/mach3/` (pristine, tidak pernah diubah) |
 | Library grafis LVGL | 9.5.0 | https://github.com/lvgl/lvgl | MIT | `user/uiapp/lvgl/` (subset: core, display, draw sw, Montserrat 14, widget button + label) |
 | Filesystem littlefs | 2.9 | https://github.com/littlefs-project/littlefs | BSD-3-Clause | `mach3-port/src/ext/littlefs/` |
+| Material Symbols Outlined (font ikon status bar, subset) | 2.978 | https://github.com/google/material-design-icons | Apache-2.0 | `user/uiapp/lv_font_qaon_icons.c` (5 glyph di 18 px, subset via lv_font_conv dari variable font; font penuh tidak di-vendor) |
 | mbedTLS | 3.6.7 | https://github.com/Mbed-TLS/mbedtls | Apache-2.0 (dual Apache-2.0 OR GPL-2.0-or-later; kami memakai Apache-2.0) | `user/tls/mbedtls/` |
 
 Referensi desain saja (tanpa kode): wajah Qabot mengimplementasikan

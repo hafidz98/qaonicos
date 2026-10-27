@@ -232,11 +232,10 @@ build_status_bar(void)
 	lv_label_set_text(time_label, clk);
 	lv_obj_align(time_label, LV_ALIGN_TOP_LEFT, 6, 2);
 
-	/* Radio + battery icons (UI-7) are painted by
-	 * the port into the flush strip, not LVGL
-	 * objects (the vendored subset has no image /
-	 * line / arc widgets and no symbol glyphs).
-	 * QEMU defaults: wifi + bluetooth OFF (slashed)
+	/* Radio + battery icons (UI-8) are icon-font
+	 * labels created by the port (Material Symbols
+	 * subset; see lv_port.c). QEMU defaults: wifi +
+	 * bluetooth OFF (the font's real off glyphs)
 	 * -- no radio exists there; battery outline-only
 	 * (no ADC, never a fake level). Live state
 	 * wiring is a documented follow-up, not a

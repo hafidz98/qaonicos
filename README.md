@@ -93,6 +93,7 @@ QaonicOS's own code is Apache 2.0 (see [LICENSE](LICENSE)).
 | Mach 3.0 microkernel | 3.0 (MK83) | https://github.com/Prajna/mach | CMU license (notice below) | `mach3-port/upstream/mach3/` (pristine, never edited) |
 | LVGL graphics library | 9.5.0 | https://github.com/lvgl/lvgl | MIT | `user/uiapp/lvgl/` (subset: core, display, draw sw, Montserrat 14, button + label widgets) |
 | littlefs filesystem | 2.9 | https://github.com/littlefs-project/littlefs | BSD-3-Clause | `mach3-port/src/ext/littlefs/` |
+| Material Symbols Outlined (status-bar icon font, subset) | 2.978 | https://github.com/google/material-design-icons | Apache-2.0 | `user/uiapp/lv_font_qaon_icons.c` (5 glyphs at 18 px, subset by lv_font_conv from the variable font; full font not vendored) |
 | mbedTLS | 3.6.7 | https://github.com/Mbed-TLS/mbedtls | Apache-2.0 (dual Apache-2.0 OR GPL-2.0-or-later; we take Apache-2.0) | `user/tls/mbedtls/` |
 
 Design reference only (no code taken): the Qabot face reimplements
