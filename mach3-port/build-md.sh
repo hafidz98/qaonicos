@@ -175,6 +175,12 @@ done
 # shellcheck disable=SC2086
 clang $UCFLAGS2 -c "$USR/uiapp/lv_port.c" -o "$BUILD/uiapp_lv_port.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/uiapp/lv_port.c (see $LOG)"; exit 1; }
+# UI-8: status-bar icon font (Material Symbols subset, generated
+# by lv_font_conv; see DEVLOG-UI8 section 3). Compiled like the
+# other uiapp objects and linked into uiapp below.
+# shellcheck disable=SC2086
+clang $UCFLAGS2 -c "$USR/uiapp/lv_font_qaon_icons.c" -o "$BUILD/uiapp_lv_icons.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/uiapp/lv_font_qaon_icons.c (see $LOG)"; exit 1; }
 # Shell: status bar + menu (UI-2).
 # shellcheck disable=SC2086
 clang $UCFLAGS2 -c "$USR/uiapp/lv_shell.c" -o "$BUILD/uiapp_lv_shell.o" >>"$LOG" 2>&1 || \
@@ -206,7 +212,7 @@ clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
     "$BUILD/uiapp_scr_ble.o" "$BUILD/uiapp_scr_llm.o" \
     "$BUILD/uiapp_scr_passkey.o" "$BUILD/uiapp_scr_textedit.o" \
     "$BUILD/uartproto_linkcli.o" \
-    "$BUILD/uiapp_lv_port.o" "$BUILD/uiapp_lv_shell.o" \
+    "$BUILD/uiapp_lv_port.o" "$BUILD/uiapp_lv_icons.o" "$BUILD/uiapp_lv_shell.o" \
     "$BUILD/uiapp_lv_settings.o" "$BUILD/uiapp_lv_monitor.o" \
     "$BUILD/uiapp_lv_power.o" "$BUILD/uiapp_lv_shim.o" \
     $LVOBJS \

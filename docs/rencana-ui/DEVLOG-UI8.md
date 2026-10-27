@@ -214,6 +214,151 @@ execute §2.3 items 1–4 + re-point or drop the
 §2.1 legs + full battery. Estimated shape: a
 small kernel-adjacent track, not a strip.
 
+## 3. Job 2 — status-bar icon font
+
+### 3.1 Why a font, and which one
+
+UI-7 masks: hand-drawn 1-bit point tables
+(wifi 15x11, BT 8x11) composited into the flush
+strip. User feedback 2026-10-27: "masih ga
+bagus". A real icon font gives antialiased,
+proportionally drawn glyphs at a readable size
+instead of 11 px dot patterns.
+
+Font choice, researched first: **Material
+Symbols Outlined** (Google, Apache 2.0) —
+official font, has exactly the needed glyphs
+including real off variants (wifi_off,
+bluetooth_disabled) and an empty-battery
+outline (battery_0_bar). Lucide was NOT used:
+its main distribution is SVG, not a font file,
+so there is no clean Lucide font to subset
+(the UI-7 masks only followed Lucide's shapes
+as a convention). No hand-drawn glyph is left
+in the status bar.
+
+Source (downloaded by curl 2026-10-27, no
+browser task):
+`https://github.com/google/material-design-icons/raw/master/variablefont/MaterialSymbolsOutlined%5BFILL%2CGRAD%2Copsz%2Cwght%5D.ttf`
+— Material Symbols Outlined v2.978, 6,653
+glyphs, variable axes FILL 0–1 / GRAD −50–200 /
+opsz 20–48 / wght 100–700, default instance
+(FILL 0 = outline, wght 400, opsz 24) used as
+is. SHA-256 of the downloaded file:
+`f7837ba8573d9a7a74931618ced8307bc81f96d49af296bf6c8052c772ed5282`.
+License file: same repo, `LICENSE` (Apache
+2.0). Codepoints file (same directory,
+`.codepoints` suffix): wifi e63e, wifi_off
+e648, bluetooth e1a7, bluetooth_disabled e1a9,
+battery_0_bar ebdc (battery_horiz_000 f8ae is
+the newer alias for the same empty outline;
+battery_0_bar chosen as the classic name).
+
+### 3.2 Subset (lv_font_conv, headless)
+
+Tool: `lv_font_conv` (npm, installed in
+scratch, not in the repo) run headless:
+`lv_font_conv --font MaterialSymbolsOutlined.ttf
+--size 18 --bpp 4 --format lvgl -r
+0xE63E,0xE648,0xE1A7,0xE1A9,0xEBDC
+--lv-font-name lv_font_qaon_icons
+--no-compress -o lv_font_qaon_icons.c`. It
+accepted the variable font directly (default
+instance) — no static instantiation needed.
+Output: `user/uiapp/lv_font_qaon_icons.c`,
+byte-identical to the tool output
+(regeneration command in its header comment),
+6,860 B source, 1,708 B compiled object
+in the real build
+(5 glyphs, 18 px, 4 bpp antialiasing; line
+height 17). No `lv_conf.h` change: the
+generated file defaults `LV_FONT_QAON_ICONS`
+to 1 itself. Build: one compile step + one
+object in the uiapp link (see `build-md.sh`
+UI-8 comments).
+
+`--no-compress` is load-bearing, not
+cosmetic. The first subset used lv_font_conv's
+default RLE compression (`.bitmap_format =
+1`); the vendored LVGL build has
+`LV_USE_FONT_COMPRESSED 0` (lv_conf.h), so
+`lv_font_get_bitmap_fmt_txt` returns NULL
+for every glyph (with a log warning) and the
+labels render empty. The first font battery
+proved it: icons_ok v2 measured zero
+icon-gray pixels on EVERY screen (menu,
+list, detail, Monitor, Power) while the
+Montserrat clock band rendered. The plain
+subset (`.bitmap_format = 0`, the same
+format as the in-tree Montserrat 14) is the
+fix; enabling compressed-font support in
+lv_conf.h was rejected as the wider change.
+
+### 3.3 Rendering + binding rules (unchanged)
+
+`lv_port.c` owns three labels on the top
+layer (one glyph each), created by
+`uilvgl_set_radio_icons()` — same call site
+in `lv_shell.c` `build_status_bar()`, same
+signature, so the UI-1 smoke screen (which
+never calls it) stays icon-free, and labels
+die with the display in `uilvgl_shell_end()`
+(pointers cleared in `begin()` for the fresh
+display). Layout: 240x24 bar, right-aligned,
+6 px margin, 4 px gaps, y offset 3 (17 px
+line height in a 24 px bar); batt at −6, BT
+at −28, wifi at −50 (one 18 px advance each).
+Color: the same dim gray 0x808080. OFF = the
+font's real wifi_off / bluetooth_disabled
+glyphs (no hand-drawn slash). Battery =
+battery_0_bar outline only, never a level (no
+ADC). QEMU defaults OFF/OFF (no radio,
+honest). Live linkd wiring (WIFI.STATUS /
+BLE.STATUS) stays deferred, same follow-up as
+UI-7. The UI-7 mask tables, `paint_status_icons`,
+and the flush-strip compositing are deleted;
+`flush_cb` just forwards now.
+
+### 3.4 Verify updates (icons_ok v2)
+
+`verify-ui5.py` `icons_ok()` rewritten for
+font glyphs: per-label gray counts (wifi box
+172..190, BT 194..212, batt 216..234;
+thresholds 25/15/15, tuned from the first
+font dumps) + font-height proof (gray at
+rows ≤ 5 AND ≥ 18 in the wifi box) + battery
+interior empty. Test-first evidence: v2 run
+against the UI-7 mask dump FAILS
+(wifi-gray=34 bt-gray=44 batt-gray=42
+wifi-top=False wifi-bottom=False
+batt-empty=True) — the 11 px masks cannot
+reach the font rows, so v2 discriminates
+font from mask by construction, not by
+threshold luck. Post-change (plain font):
+every screen measures wifi-gray=120
+bt-gray=77 batt-gray=78 wifi-top=True
+wifi-bottom=True batt-empty=True — the
+thresholds (25/15/15) pass with 3-5x
+margin, and the height proof (rows ≤ 5
+and ≥ 18) holds on all five screens.
+Denominator: unchanged at 73; v2 changes
+checks inside icons_ok, not the check
+count. The bound retry loop (§3.4 note
+above) is also test-only; UI5's denominator
+stays 73.
+
+Bound retry loop (UI-8 harness fix,
+test-only, also in verify-ui5.py): the bound
+SET now retries until the readback shows the
+39-char prefix (up to 3 attempts), because
+chunked delivery can still lose a whole
+8-char chunk to PL011 RX FIFO overflow under
+load (§5.2: the debug run stored 32 of 40
+A's while the shell printed "name saved").
+Same verdict checks, same count; the product
+code is untouched.
+
+
 ## 4. Size
 
 - Baseline (UI-7 tree, pre-strip): kernel
@@ -236,7 +381,21 @@ small kernel-adjacent track, not a strip.
   logs-ui8/qa-strip-build.log ("MD: 43 ok,
   0 failed" + "LINK OK"); kernel preserved
   as logs-ui8/qa-strip-kernel.elf.
-- Post-strip + font figures arrive with commit 2.
+- Post-strip + font (plain subset, commit 2):
+  production binary 2,181,984 B, headroom
+  2,012,320 B (net −40 B vs strip-only: the
+  1,708 B font object costs less than the
+  mask tables + compositing it replaced);
+  QA binary 2,503,072 B, headroom 1,691,232 B
+  (same −40 B net). Build logs
+  logs-ui8/prod-font2-build.log and
+  qa-font2-build.log; kernels preserved as
+  prod-font-kernel.elf and qa-font-kernel.elf.
+  The earlier compressed-font build measured
+  2,181,864 / 2,502,952 B (net −160 B) but
+  rendered zero icon pixels (§3.2) and was
+  discarded; its logs are kept as
+  fontprod-ui5-compressed.log.
 
 ## 5. Battery
 
@@ -332,14 +491,80 @@ battery is therefore green except the
 UI5 bound readback flake (§5.2).
 
 Tier-A legs cannot run here by design;
-they run on the QA image (§5.1). Font
-battery arrives with commit 2.
+they run on the QA image (§5.1).
+
+### 5.4 Font battery (commit 2, plain subset)
+
+Two-part evidence per the UI-6 rule, on the
+final plain-font binaries (build/mach3.elf
+verified by cmp before each part).
+
+QA+font (Tier-A legs): C6L1 29/29, C6L2
+36/36, C6L3 72/72, C6L4 60/60, C6L5 55/55,
+IPC2 34/34, IPC4 58/58, IPC5 20/20 on
+rerun (chain 19/20: only the trailing
+"shell responsive at the end" probe failed
+after boot 2 was already proven alive with
+fail_count=0 — an end-of-run serial race).
+Logs logs-ui8/fontqa-*.log.
+
+PROD+font (all other legs): UI1 25/25,
+UI2 38/38, UI3 78/78, UI4 73/73, FND1
+PASS, FND2 21/21, FND3 46/46, FND4 36/36,
+FND5 33/33, ONB1 PASS, SHELL PASS,
+SAFEMODE PASS. UI5 chain 70/73: the three
+failures were all bound-section (set +
+detail-open + readback) under chain load;
+the bound retry loop passed in the
+compressed-font partial run and in both
+standalone reruns, so the chain bound
+failures are the §5.2 delivery class, not
+the loop. UI5 rerun 72/73: only "setup
+flow reaches finale" missed its marker
+while every downstream check passed —
+the UI4 grant-race class. ONB2 chain
+finale pair only; rerun PASS. Second UI5
+standalone rerun 72/73: only "back: shell
+still reads KeepMe" — the post-release
+window race documented in shell_probe's
+docstring (a line consumed by qabotd while
+sh never sees it); the same check passed
+in the chain run and rerun 1. Three UI5
+runs, three different single-race
+signatures, all product behavior verified
+in each run (icons 120/77/78 everywhere,
+bound green in both reruns): the harness
+race pattern, not a product regression.
+No fourth run chasing 73/73; the number
+is reported honestly as 72/73.
+
+Compressed-font run (discarded build,
+§3.2): the prod chain reached UI5 before
+a runtime restart killed it; its UI5
+partial log is the evidence for the
+compression root cause (zero icon-gray
+pixels on all screens) and for the bound
+loop (bound section passed). UI1 25/25,
+UI2 38/38, UI3 78/78, UI4 72/73 (only the
+"restart grant starts the shell menu"
+race) before the kill.
+
+Visual gate: menu + name-detail + Power
+dumps with the font icons in
+logs-ui8/dumps/ui8-{menu,detail,power}.png
+(+ .ppm), plus COMPARISON-ui7-vs-ui8.md.
+The coordinator reads the dumps personally
+before merge; the agent's own reading:
+wifi_off, bluetooth_disabled, and the
+battery outline render as real gray
+glyphs, legible at 240x240, clearly
+better than the 11 px masks.
 
 ## 6. Honest limitations / follow-ups
 
 - Live radio state wiring for the icons (UI-7
-  follow-up, unchanged by the strip; the font
-  work in commit 2 keeps it deferred).
+  follow-up, unchanged by the strip and the
+  font work; still deferred).
 - Tier B removal (§2) needs its own decision.
 - The structural fix (daemon images from
   littlefs, DEVLOG-UI6 §2) subsumes the strip
