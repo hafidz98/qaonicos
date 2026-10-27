@@ -73,6 +73,7 @@ startrtclock(void)
 {
 	extern void	task_selftest(void);
 	extern void	user_selftest(void);
+	extern void	fpu_selftest(void);	/* K1: FPU/NEON save/restore */
 	extern void	sched_selftest(void);	/* M5 Phase 4 */
 
 	timer_freq = read_cntfrq();
@@ -88,6 +89,8 @@ startrtclock(void)
 
 	task_selftest();	/* M4: verify task_create + thread_create */
 	user_selftest();	/* M4 item 4: user mode + syscall */
+	fpu_selftest();		/* K1: must precede sched_selftest (which
+				 * never returns: worker_a launches init) */
 	sched_selftest();	/* M6: preemption test; never returns --
 				 * worker_a launches init (Fase B) */
 }

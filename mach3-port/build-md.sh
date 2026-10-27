@@ -68,14 +68,17 @@ clang $UCFLAGS -c "$USR/hello.c" -o "$BUILD/hello.o" >>"$LOG" 2>&1 || \
 # UI-8: Tier A test programs build ONLY for the QA image
 # (QA=1); the production image omits them. Tier B daemons
 # (uipcld, ulink5d) stay in both images.
-PROGS="init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest uaudiocap uaudiogain upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipcld"
+PROGS="init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest uaudiocap uaudiogain upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipcld ufpu"
 if [ "${QA:-0}" = "1" ]; then
     PROGS="$PROGS uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcaud ulinktools ulink5die"
 fi
 # shellcheck disable=SC2086
 for prog in $PROGS; do
+    # K1: ufpu uses VFP inline asm (same flag note as fpu_test).
+    pflags="$UCFLAGS"
+    [ "$prog" = "ufpu" ] && pflags="$pflags -mfpu=neon -mfloat-abi=softfp"
     # shellcheck disable=SC2086
-    clang $UCFLAGS -c "$USR/$prog.c" -o "$BUILD/$prog.o" >>"$LOG" 2>&1 || \
+    clang $pflags -c "$USR/$prog.c" -o "$BUILD/$prog.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/$prog.c (see $LOG)"; exit 1; }
     extra=""
     [ "$prog" = "umon" ] && extra="$BUILD/tui.o"
@@ -698,8 +701,14 @@ pass=0; fail=0
 for src in "$MACH3_DIR/src/md/arm/"*.c "$MACH3_DIR/src/md/arm/tests/"*.c "$MACH3_DIR/src/ext/"*.c; do
     base=$(basename "$src" .c)
     echo "CC md/$base.c" >> "$LOG"
+    # K1: the FPU selftest TU uses VFP inline asm; it needs an FPU
+    # + softfp ABI (plain -mfpu alone does not enable VFP regs in
+    # this clang's inline asm). No C float ops live in this TU, so
+    # the ABI choice changes no codegen beyond the asm itself.
+    extra=""
+    [ "$base" = "fpu_test" ] && extra="-mfpu=neon -mfloat-abi=softfp"
     # shellcheck disable=SC2086
-    if clang $CFLAGS -c "$src" -o "$OBJMD/$base.o" >> "$LOG" 2>&1; then
+    if clang $CFLAGS $extra -c "$src" -o "$OBJMD/$base.o" >> "$LOG" 2>&1; then
         pass=$((pass+1))
     else
         echo "FAIL md/$base.c (see $LOG)"
@@ -742,7 +751,7 @@ rm -f "$OBJMD"/*_img.o
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
 # UI-8: same Tier A / Tier C split as loop 1 (see above).
-IMGS="init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli qabot qabotd sh utimeset utcpkeep uaudiotest uaudiocap uaudiogain uvoice linkd ulink5d upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipcld"
+IMGS="init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli qabot qabotd sh utimeset utcpkeep uaudiotest uaudiocap uaudiogain uvoice linkd ulink5d upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipcld ufpu"
 if [ "${QA:-0}" = "1" ]; then
     IMGS="$IMGS ulinktest ulinkbr ulink3 ulinkaud ulink5 ulinktools ulink5die uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcaud"
 fi

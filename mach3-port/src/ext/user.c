@@ -1288,7 +1288,7 @@ user_syscall(struct arm_trap_frame *frame)
 				extern unsigned char	uls_img[], ufault_img[],
 						ufaultd_img[], uyield_img[],
 						uhangd_img[], uspin_img[],
-						uhangc_img[]
+						uhangc_img[], ufpu_img[]
 #ifdef QA_TIER_A
 						, uipkpark_img[],
 						uipknd_img[],
@@ -1301,7 +1301,7 @@ user_syscall(struct arm_trap_frame *frame)
 			extern unsigned int	uls_img_len, ufault_img_len,
 						ufaultd_img_len, uyield_img_len,
 						uhangd_img_len, uspin_img_len,
-						uhangc_img_len
+						uhangc_img_len, ufpu_img_len
 #ifdef QA_TIER_A
 						, uipkpark_img_len,
 						uipknd_img_len,
@@ -1334,6 +1334,9 @@ user_syscall(struct arm_trap_frame *frame)
 				  &uspin_img_len, -1 },
 				{ "embed:uhangc", uhangc_img,
 				  &uhangc_img_len, -1 },
+				/* K1: user-mode VFP pattern vs IPC park. */
+				{ "embed:ufpu", ufpu_img,
+				  &ufpu_img_len, -1 },
 #ifdef QA_TIER_A
 				/* IPC-2: park probes (see docs/rencana-ipc). */
 				{ "embed:uipkpark", uipkpark_img,
