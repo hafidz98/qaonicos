@@ -114,6 +114,7 @@ extern unsigned char	uaudiogain_img[];	/* D3: gain + overrun */
 extern unsigned int	uaudiogain_img_len;
 extern unsigned char	uvoice_img[];	/* D4: VOICE.START + AUD uplink */
 extern unsigned int	uvoice_img_len;
+#ifdef QA_TIER_A
 extern unsigned char	ulinktest_img[];	/* C6L-1: link layer + wire freeze */
 extern unsigned int	ulinktest_img_len;
 extern unsigned char	ulinkbr_img[];	/* C6L-2: bridge test */
@@ -128,6 +129,7 @@ extern unsigned char	ulinktools_img[];	/* C6L-5: stub tools server */
 extern unsigned int	ulinktools_img_len;
 extern unsigned char	ulink5die_img[];	/* C6L-5: client-death probe */
 extern unsigned int	ulink5die_img_len;
+#endif /* QA_TIER_A */
 extern unsigned char	upl330_img[];	/* D2b: PL330 microcode */
 extern unsigned int	upl330_img_len;
 extern unsigned char	ulfs_img[];	/* B1: littlefs test */
@@ -144,8 +146,6 @@ extern unsigned char	ucred_img[];	/* B5.5: credential store test */
 extern unsigned int	ucred_img_len;
 extern unsigned char	utcpkeep_img[];	/* F1 SEMENTARA: keep-alive RX test */
 extern unsigned int	utcpkeep_img_len;
-extern unsigned char	utlskeep_img[];	/* F1 SEMENTARA: TLS keep-alive RX test */
-extern unsigned int	utlskeep_img_len;
 extern unsigned char	face_img[];	/* App A1/A2: Qabot server */
 extern unsigned int	face_img_len;
 extern unsigned char	sh_img[];	/* Q9: shell qaon> */
@@ -156,8 +156,6 @@ extern unsigned char	ntp_img[];	/* App A4: sinkron jam via NTP */
 extern unsigned int	ntp_img_len;
 extern unsigned char	utcpcli_img[];	/* Q2a SEMENTARA: uji TCP client */
 extern unsigned int	utcpcli_img_len;
-extern unsigned char	utlscli_img[];	/* Q2b SEMENTARA: uji TLS client */
-extern unsigned int	utlscli_img_len;
 extern unsigned char	qabotd_img[];	/* Q4: daemon persisten Qabot */
 extern unsigned int	qabotd_img_len;
 extern unsigned char	uipcld_img[];	/* IPC-4: concurrent client daemon (test-only) */
@@ -1258,6 +1256,9 @@ user_syscall(struct arm_trap_frame *frame)
 		len = fat32_read_file(kpath, imgbuf, sizeof(imgbuf));
 		if (len <= 0) {
 			/* Test hooks: "embed:<name>" spawns an embedded
+			 * (UI-8: the IPC-2/4/5 and C6L test hooks below exist
+			 * only in QA builds (QA=1); production images omit
+			 * them, so those spawn names fail there by design.)
 			 * image without depending on FAT (Q9 pattern).
 			 *   embed:uls     Q9 spawn self-test program.
 			 *   embed:uipkpark (65 s deadline park)
@@ -1287,21 +1288,29 @@ user_syscall(struct arm_trap_frame *frame)
 				extern unsigned char	uls_img[], ufault_img[],
 						ufaultd_img[], uyield_img[],
 						uhangd_img[], uspin_img[],
-						uhangc_img[], uipkpark_img[],
+						uhangc_img[]
+#ifdef QA_TIER_A
+						, uipkpark_img[],
 						uipknd_img[],
 						uiptoolssrv_img[],
 						uipcregexit_img[],
 						uipcregfull_img[],
-						uipcaud_img[];
+						uipcaud_img[]
+#endif /* QA_TIER_A */
+						;
 			extern unsigned int	uls_img_len, ufault_img_len,
 						ufaultd_img_len, uyield_img_len,
 						uhangd_img_len, uspin_img_len,
-						uhangc_img_len, uipkpark_img_len,
+						uhangc_img_len
+#ifdef QA_TIER_A
+						, uipkpark_img_len,
 						uipknd_img_len,
 						uiptoolssrv_img_len,
 						uipcregexit_img_len,
 						uipcregfull_img_len,
-						uipcaud_img_len;
+						uipcaud_img_len
+#endif /* QA_TIER_A */
+						;
 			static const struct {
 				const char	*name;
 				unsigned char	*img;
@@ -1325,6 +1334,7 @@ user_syscall(struct arm_trap_frame *frame)
 				  &uspin_img_len, -1 },
 				{ "embed:uhangc", uhangc_img,
 				  &uhangc_img_len, -1 },
+#ifdef QA_TIER_A
 				/* IPC-2: park probes (see docs/rencana-ipc). */
 				{ "embed:uipkpark", uipkpark_img,
 				  &uipkpark_img_len, -1 },
@@ -1388,6 +1398,7 @@ user_syscall(struct arm_trap_frame *frame)
 				 * (raw SEND + immediate exit). */
 				{ "embed:ulink5die", ulink5die_img,
 				  &ulink5die_img_len, -1 },
+#endif /* QA_TIER_A */
 			};
 			unsigned int hi, ei;
 			int matched = 0;
@@ -3089,7 +3100,9 @@ static struct uprog_image uprogs[] = {
 	{ "uaudiocap", uaudiocap_img, &uaudiocap_img_len, 1u },	/* D2: I2S RX */
 	{ "uaudiogain", uaudiogain_img, &uaudiogain_img_len, 1u },	/* D3: gain */
 	{ "uvoice", uvoice_img, &uvoice_img_len, 1u },	/* D4: VOICE uplink */
+#ifdef QA_TIER_A
 	{ "ulinktest", ulinktest_img, &ulinktest_img_len, 1u },	/* C6L-1: link test */
+#endif /* QA_TIER_A */
 	{ "upl330", upl330_img, &upl330_img_len, 1u },	/* D2b: PL330 */
 	{ "ulfs", ulfs_img, &ulfs_img_len, 1u },	/* B1: littlefs */
 	{ "ublogtest", ublogtest_img, &ublogtest_img_len, 1u },	/* B2 diag */

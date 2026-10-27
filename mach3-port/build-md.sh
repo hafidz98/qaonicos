@@ -65,7 +65,15 @@ clang $UCFLAGS -c "$USR/udiv.c" -o "$BUILD/udiv.o" >>"$LOG" 2>&1 || \
 # shellcheck disable=SC2086
 clang $UCFLAGS -c "$USR/hello.c" -o "$BUILD/hello.o" >>"$LOG" 2>&1 || \
     { echo "FAIL user/hello.c (see $LOG)"; exit 1; }
-for prog in init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest uaudiocap uaudiogain upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud ulinktools ulink5die; do
+# UI-8: Tier A test programs build ONLY for the QA image
+# (QA=1); the production image omits them. Tier B daemons
+# (uipcld, ulink5d) stay in both images.
+PROGS="init ucat uls uecho umon ugpio usd ufs sh utimeset uaudiotest uaudiocap uaudiogain upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipcld"
+if [ "${QA:-0}" = "1" ]; then
+    PROGS="$PROGS uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcaud ulinktools ulink5die"
+fi
+# shellcheck disable=SC2086
+for prog in $PROGS; do
     # shellcheck disable=SC2086
     clang $UCFLAGS -c "$USR/$prog.c" -o "$BUILD/$prog.o" >>"$LOG" 2>&1 || \
         { echo "FAIL user/$prog.c (see $LOG)"; exit 1; }
@@ -264,6 +272,8 @@ python3 "$USR/embed.py" "$BUILD/uvoice.bin" "$GEN/uvoice_img.c" "uvoice_img" 655
     { echo "FAIL embed uvoice_img"; exit 1; }
 echo "USER: uvoice.elf entry=$ENTRY ok"
 
+# UI-8: QA image only (QA=1); omitted from production.
+if [ "${QA:-0}" = "1" ]; then
 # --- 1d1. user program ulinktest (C6L-1): link layer + wire freeze test. ---
 echo "BUILD user program ulinktest"
 # shellcheck disable=SC2086
@@ -288,7 +298,11 @@ python3 "$USR/pad-bss.py" "$BUILD/ulinktest.bin" "$BUILD/ulinktest.elf" \
 python3 "$USR/embed.py" "$BUILD/ulinktest.bin" "$GEN/ulinktest_img.c" "ulinktest_img" 65536 >>"$LOG" 2>&1 || \
     { echo "FAIL embed ulinktest_img"; exit 1; }
 echo "USER: ulinktest.elf entry=$ENTRY ok"
+fi
 
+
+# UI-8: QA image only (QA=1); omitted from production.
+if [ "${QA:-0}" = "1" ]; then
 # --- 1d1b. user program ulinkbr (C6L-2): bridge backend + host peer test. ---
 echo "BUILD user program ulinkbr"
 # shellcheck disable=SC2086
@@ -314,7 +328,11 @@ python3 "$USR/pad-bss.py" "$BUILD/ulinkbr.bin" "$BUILD/ulinkbr.elf" \
 python3 "$USR/embed.py" "$BUILD/ulinkbr.bin" "$GEN/ulinkbr_img.c" "ulinkbr_img" 65536 >>"$LOG" 2>&1 || \
     { echo "FAIL embed ulinkbr_img"; exit 1; }
 echo "USER: ulinkbr.elf entry=$ENTRY ok"
+fi
 
+
+# UI-8: QA image only (QA=1); omitted from production.
+if [ "${QA:-0}" = "1" ]; then
 # --- 1d1c. user program ulink3 (C6L-3): v2 completion test. ---
 echo "BUILD user program ulink3"
 # shellcheck disable=SC2086
@@ -340,7 +358,11 @@ python3 "$USR/pad-bss.py" "$BUILD/ulink3.bin" "$BUILD/ulink3.elf" \
 python3 "$USR/embed.py" "$BUILD/ulink3.bin" "$GEN/ulink3_img.c" "ulink3_img" 65536 >>"$LOG" 2>&1 || \
     { echo "FAIL embed ulink3_img"; exit 1; }
 echo "USER: ulink3.elf entry=$ENTRY ok"
+fi
 
+
+# UI-8: QA image only (QA=1); omitted from production.
+if [ "${QA:-0}" = "1" ]; then
 # --- 1d1d. user program ulinkaud (C6L-4): AUD streaming integrity
 # + error semantics test. ---
 echo "BUILD user program ulinkaud"
@@ -367,6 +389,8 @@ python3 "$USR/pad-bss.py" "$BUILD/ulinkaud.bin" "$BUILD/ulinkaud.elf" \
 python3 "$USR/embed.py" "$BUILD/ulinkaud.bin" "$GEN/ulinkaud_img.c" "ulinkaud_img" 65536 >>"$LOG" 2>&1 || \
     { echo "FAIL embed ulinkaud_img"; exit 1; }
 echo "USER: ulinkaud.elf entry=$ENTRY ok"
+fi
+
 
 # --- 1d1e. user program linkd (C6L-5): the link daemon --
 # single transport owner + IPC server on `link`.
@@ -423,6 +447,8 @@ python3 "$USR/embed.py" "$BUILD/ulink5d.bin" "$GEN/ulink5d_img.c" "ulink5d_img" 
     { echo "FAIL embed ulink5d_img"; exit 1; }
 echo "USER: ulink5d.elf entry=$ENTRY ok"
 
+# UI-8: QA image only (QA=1); omitted from production.
+if [ "${QA:-0}" = "1" ]; then
 # --- 1d1g. user program ulink5 (C6L-5): linkd client test
 # (spawn-only, like ulinkbr/ulink3/ulinkaud). Talks to
 # linkd via the stub only.
@@ -449,6 +475,8 @@ python3 "$USR/pad-bss.py" "$BUILD/ulink5.bin" "$BUILD/ulink5.elf" \
 python3 "$USR/embed.py" "$BUILD/ulink5.bin" "$GEN/ulink5_img.c" "ulink5_img" 65536 >>"$LOG" 2>&1 || \
     { echo "FAIL embed ulink5_img"; exit 1; }
 echo "USER: ulink5.elf entry=$ENTRY ok"
+fi
+
 
 # --- 1d. user program ntp (App A4): daemon sinkron jam via NTP. ---
 echo "BUILD user program ntp"
@@ -519,35 +547,14 @@ for f in tls_port tls_bio tls_api; do
 done
 echo "TLS: mbedTLS + port ok"
 
-# --- 1d4. user program utlscli (Q2b SEMENTARA): uji TLS client. ---
-echo "BUILD user program utlscli"
+# UI-8: ca_pem.o moved here from the deleted utlscli section --
+# qabotd's TLS client still links it (its link line is below).
 python3 "$USR/../tools/pem2c.py" "$USR/tls/testcerts/ca.crt" \
     "$BUILD/ca_pem.c" "qaonic_test_ca_pem" >>"$LOG" 2>&1 || \
     { echo "FAIL pem2c ca.crt (see $LOG)"; exit 1; }
 # shellcheck disable=SC2086
 clang $UCFLAGS -c "$BUILD/ca_pem.c" -o "$BUILD/ca_pem.o" >>"$LOG" 2>&1 || \
     { echo "FAIL ca_pem.c (see $LOG)"; exit 1; }
-# shellcheck disable=SC2086
-clang $UCFLAGS -I"$USR/tls/inc" -I"$USR/tls/mbedtls/include" \
-    -c "$USR/utlscli.c" -o "$BUILD/utlscli.o" >>"$LOG" 2>&1 || \
-    { echo "FAIL user/utlscli.c (see $LOG)"; exit 1; }
-# shellcheck disable=SC2086
-clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
-    -o "$BUILD/utlscli.elf" "$BUILD/utlscli.o" "$BUILD/ca_pem.o" \
-    $TLSOBJS "$BUILD/ulib.o" "$BUILD/udiv.o" \
-    >>"$LOG" 2>&1 || \
-    { echo "FAIL link user/utlscli.elf (see $LOG)"; exit 1; }
-ENTRY=$("$LLVM_READELF" -h "$BUILD/utlscli.elf" | sed -n 's/.*Entry point address: *//p')
-[ "$ENTRY" = "0x100000" ] || \
-    { echo "FATAL: utlscli entry $ENTRY != 0x100000"; exit 1; }
-"$LLVM_OBJCOPY" -O binary "$BUILD/utlscli.elf" "$BUILD/utlscli.bin" >>"$LOG" 2>&1 || \
-    { echo "FAIL objcopy user/utlscli.bin"; exit 1; }
-python3 "$USR/pad-bss.py" "$BUILD/utlscli.bin" "$BUILD/utlscli.elf" \
-    >>"$LOG" 2>&1 || \
-    { echo "FAIL pad-bss user/utlscli.bin"; exit 1; }
-python3 "$USR/embed.py" "$BUILD/utlscli.bin" "$GEN/utlscli_img.c" "utlscli_img" 1048576 >>"$LOG" 2>&1 || \
-    { echo "FAIL embed utlscli_img"; exit 1; }
-echo "USER: utlscli.elf entry=$ENTRY ok"
 
 # --- 1e. user program qabot (Qabot harness Q1): ReAct loop + mock provider. ---
 echo "BUILD user program qabot"
@@ -658,30 +665,6 @@ python3 "$USR/embed.py" "$BUILD/utcpkeep.bin" "$GEN/utcpkeep_img.c" "utcpkeep_im
     { echo "FAIL embed utcpkeep_img"; exit 1; }
 echo "USER: utcpkeep.elf entry=$ENTRY ok"
 
-# --- 1f2. user program utlskeep (F1 SEMENTARA): TLS keep-alive RX test. ---
-echo "BUILD user program utlskeep"
-# shellcheck disable=SC2086
-clang $UCFLAGS -I"$USR/tls/inc" -I"$USR/tls/mbedtls/include" \
-    -c "$USR/utlskeep.c" -o "$BUILD/utlskeep.o" >>"$LOG" 2>&1 || \
-    { echo "FAIL user/utlskeep.c (see $LOG)"; exit 1; }
-# shellcheck disable=SC2086
-clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
-    -o "$BUILD/utlskeep.elf" "$BUILD/utlskeep.o" "$BUILD/ca_pem.o" \
-    $TLSOBJS "$BUILD/ulib.o" "$BUILD/udiv.o" \
-    >>"$LOG" 2>&1 || \
-    { echo "FAIL link user/utlskeep.elf (see $LOG)"; exit 1; }
-ENTRY=$("$LLVM_READELF" -h "$BUILD/utlskeep.elf" | sed -n 's/.*Entry point address: *//p')
-[ "$ENTRY" = "0x100000" ] || \
-    { echo "FATAL: utlskeep entry $ENTRY != 0x100000"; exit 1; }
-"$LLVM_OBJCOPY" -O binary "$BUILD/utlskeep.elf" "$BUILD/utlskeep.bin" >>"$LOG" 2>&1 || \
-    { echo "FAIL objcopy user/utlskeep.bin"; exit 1; }
-python3 "$USR/pad-bss.py" "$BUILD/utlskeep.bin" "$BUILD/utlskeep.elf" \
-    >>"$LOG" 2>&1 || \
-    { echo "FAIL pad-bss user/utlskeep.bin"; exit 1; }
-python3 "$USR/embed.py" "$BUILD/utlskeep.bin" "$GEN/utlskeep_img.c" "utlskeep_img" 1048576 >>"$LOG" 2>&1 || \
-    { echo "FAIL embed utlskeep_img"; exit 1; }
-echo "USER: utlskeep.elf entry=$ENTRY ok"
-
 # --- 2. MD compile ---
 mkdir -p "$OBJMD"
 : > "$LOG"
@@ -700,6 +683,11 @@ CFLAGS="$CFLAGS -Wno-implicit-function-declaration -Wno-implicit-int"
 CFLAGS="$CFLAGS -Wno-int-conversion -Wno-deprecated-non-prototype"
 CFLAGS="$CFLAGS -Wno-extra-tokens -include $GEN/md_globals.h"
 
+# UI-8: QA image keeps the Tier A test programs (user.c map
+# entries + externs under QA_TIER_A); production omits them.
+if [ "${QA:-0}" = "1" ]; then
+    CFLAGS="$CFLAGS -DQA_TIER_A"
+fi
 pass=0; fail=0
 for src in "$MACH3_DIR/src/md/arm/"*.c "$MACH3_DIR/src/md/arm/tests/"*.c "$MACH3_DIR/src/ext/"*.c; do
     base=$(basename "$src" .c)
@@ -747,7 +735,13 @@ echo "MD: $pass ok, $fail failed"
 rm -f "$OBJMD"/*_img.o
 
 # Fase C: compile generated *_img.c -> obj-md (embedded user programs).
-for prog in init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli utlscli qabot qabotd sh utimeset utcpkeep utlskeep uaudiotest uaudiocap uaudiogain uvoice ulinktest ulinkbr ulink3 ulinkaud linkd ulink5d ulink5 ulinktools ulink5die upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcld uipcaud; do
+# UI-8: same Tier A / Tier C split as loop 1 (see above).
+IMGS="init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli qabot qabotd sh utimeset utcpkeep uaudiotest uaudiocap uaudiogain uvoice linkd ulink5d upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipcld"
+if [ "${QA:-0}" = "1" ]; then
+    IMGS="$IMGS ulinktest ulinkbr ulink3 ulinkaud ulink5 ulinktools ulink5die uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcaud"
+fi
+# shellcheck disable=SC2086
+for prog in $IMGS; do
     # shellcheck disable=SC2086
     clang $CFLAGS -c "$GEN/${prog}_img.c" -o "$OBJMD/${prog}_img.o" >>"$LOG" 2>&1 || \
         { echo "FAIL md/${prog}_img.c (see $LOG)"; exit 1; }
