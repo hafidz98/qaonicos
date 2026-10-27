@@ -45,8 +45,24 @@ struct arm_saved_state {
 	unsigned int	fault_status;
 };
 
+/*
+ * Per-thread VFP/NEON state (K1/THR-1).  Cortex-A7 VFPv4-D32: 32
+ * double registers d0-d31 (aliased s0-s31 / q0-q15) + FPSCR.
+ * FPEXC stays globally enabled by fpu_init(); it is not per-thread
+ * state.  The 264-byte area lives in the pcb (mms) so the switch
+ * path can save/restore it keyed on thread identity (the pcb),
+ * never on the preempting frame's mode (Fase 10 lesson).
+ * Offset of mms in struct pcb is 120 (iss 80 + kss 40);
+ * context.s hardcodes PCB_FPU 120 and pcb.c asserts it.
+ */
+struct arm_fpu_state {
+	unsigned int	d[64];	/* d0-d31 as 64 words */
+	unsigned int	fpscr;
+	unsigned int	pad;	/* align size to 8 */
+};
+
 struct arm_machine_state {
-	int		pad;	/* placeholder for VFP state pointer etc. */
+	struct arm_fpu_state	fpu;
 };
 
 typedef struct pcb {

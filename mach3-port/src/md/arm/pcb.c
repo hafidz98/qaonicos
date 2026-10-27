@@ -14,6 +14,14 @@
 #include <kern/sched_prim.h>
 #include <vm/vm_kern.h>
 
+/* K1: context.s hardcodes PCB_FPU 120 (offsetof pcb->mms) and the
+ * 264-byte arm_fpu_state layout.  Fail the build, not the boot,
+ * if the struct layout ever drifts. */
+typedef char	pcb_mms_offset_check[
+	(__builtin_offsetof(struct pcb, mms) == 120) ? 1 : -1];
+typedef char	fpu_state_size_check[
+	(sizeof(struct arm_fpu_state) == 264) ? 1 : -1];
+
 /* asm primitives (context.s) */
 extern thread_t	__Switch_context(pcb_t old_pcb, continuation_t continuation,
 				 pcb_t new_pcb, thread_t new_thread,

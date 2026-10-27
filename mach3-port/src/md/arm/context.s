@@ -12,8 +12,13 @@
  */
 	.text
 	.align 2
+	/* K1: VFP instructions below need an FPU (file-local; the
+	 * kernel build has no -mfpu flag).  Cortex-A7 VFPv4-D32. */
+	.fpu neon-vfpv4
 
 	.set PCB_KSS, 80	/* offsetof(struct pcb, kss) = sizeof(iss) = 20*4 */
+	.set PCB_FPU, 120	/* offsetof(struct pcb, mms.fpu) = 80 + 40;
+				 * pcb.c asserts this at compile time */
 
 /*
  * __Switch_context: switch kernel context.
@@ -38,6 +43,18 @@ __Switch_context:
 	cmp	r0, #0
 	beq	.Lsw_nosave
 
+	/* K1: save old thread's VFP/NEON state into old_pcb->mms.fpu.
+	 * Keyed on old_pcb identity (r0), same guard as the kss
+	 * save (continuation == NULL, old_pcb != NULL): a discarded
+	 * thread never resumes, so its FPU state needs no saving --
+	 * exactly like its general registers.  r3 is safe scratch
+	 * (new_thread is pushed and reloaded from [sp,#4] later). */
+	add	r12, r0, #PCB_FPU
+	vstmia	r12!, {d0-d15}
+	vstmia	r12!, {d16-d31}
+	vmrs	r3, fpscr
+	str	r3, [r12]
+
 	/* Save old thread's callee-saved state into old_pcb->kss */
 	add	r12, r0, #PCB_KSS
 	stmia	r12!, {r4-r11}		/* kss.r4-r11; r12 = &kss.sp */
@@ -55,6 +72,17 @@ __Switch_context:
 	ldmia	r0, {r4-r11}		/* new thread's r4-r11 */
 	ldr	r12, [r0, #32]		/* kss.sp */
 	ldr	lr, [r0, #36]		/* kss.lr = resumption pc */
+
+	/* K1: restore new thread's VFP/NEON state.  Always runs
+	 * (including first switch-in, where kss.lr is the thread's
+	 * start function).  r0/r3 are safe scratch here: r0 is
+	 * reloaded for active_threads below, r3 is dead. */
+	ldr	r0, [sp, #0]		/* new_pcb */
+	add	r0, r0, #PCB_FPU
+	vldmia	r0!, {d0-d15}
+	vldmia	r0!, {d16-d31}
+	ldr	r3, [r0]		/* fpscr */
+	vmsr	fpscr, r3
 
 	/* active_threads[0] = new_thread */
 	ldr	r0, =active_threads
@@ -84,6 +112,16 @@ _load_context:
 	/* active_threads[0] = thread */
 	ldr	r2, =active_threads
 	str	r1, [r2]
+
+	/* K1: restore first-entry thread's VFP state (zeroed by
+	 * pcb_init), so a new thread never inherits the previous
+	 * thread's registers before its first switch.  r0 is still
+	 * the pcb; r2/r3 are free here. */
+	add	r2, r0, #PCB_FPU
+	vldmia	r2!, {d0-d15}
+	vldmia	r2!, {d16-d31}
+	ldr	r3, [r2]		/* fpscr */
+	vmsr	fpscr, r3
 
 	/* Enable IRQ+FIQ for the new thread (cpsie if) */
 	cpsie	if

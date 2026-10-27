@@ -1,7 +1,13 @@
 /*
  * mach3-port/src/md/arm/fpu.c -- ARM VFP init.
  *
- * M3: enable VFPv3/4 coprocessor access; no per-thread state yet.
+ * M3: enable VFPv3/4 coprocessor access.  K1: per-thread
+ * save/restore lives in ONE place, context.s's __Switch_context
+ * (save old / restore new, keyed on the pcb) and _load_context
+ * (restore on first entry) -- not here.  There are deliberately
+ * no fpu_save/fpu_restore C wrappers: a second copy of the
+ * sequence would drift from the switch path, and no caller
+ * needs one (all switches funnel through __Switch_context).
  */
 #include <mach/machine/vm_types.h>
 
@@ -24,12 +30,4 @@ fpu_init(void)
 		: "=&r" (v) : : "memory");
 }
 
-void
-fpu_save(void *save_area)
-{
-}
-
-void
-fpu_restore(void *save_area)
-{
-}
+/* No fpu_save/fpu_restore here by design (see header comment). */
