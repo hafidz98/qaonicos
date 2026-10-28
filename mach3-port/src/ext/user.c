@@ -568,6 +568,9 @@ static volatile int	wd_irq_tripped;
 
 static int	wd_supervise(void);
 static void	wd_fatal_reset(const char *who);
+static int	wd_respawn(struct daemon *d);	/* K4: used by sched_exit_switch */
+static void	wd_note(char *buf, unsigned int max, const char *kind,
+    const char *name);	/* K4: used by sched_exit_switch */
 
 /* Q9: state spawn. Slot NDAEMON-1 dipakai untuk child yang di-spawn.
  * spawn_parent = indeks daemon parent (yang menunggu), -1 bila tidak ada.
@@ -2602,6 +2605,22 @@ daemon_reclaim(int idx)
 		}
 	}
 
+	/* K4: a pending face request must not survive ANY face
+	 * death for the next incarnation to consume: the
+	 * request was aimed at a dead instance (face consumes
+	 * only while it holds the token, and a respawned face
+	 * starts clean). The holder branch above clears it
+	 * only when face held the token; this covers the
+	 * face-died-while-uiapp-holds case too. The request
+	 * is one-way polled (no waiter blocks on it), so the
+	 * requester re-posts if still relevant. */
+	if (d->progid == PROG_FACE && face_req_pending) {
+		face_req_pending = 0;
+		face_req_owner = -1;
+		printf("reclaim: dropped pending face request "
+		    "(face died)\n");
+	}
+
 	/* A pending face request posted BY the dying daemon:
 	 * its author is gone; the face must not act on it. */
 	if (face_req_pending && face_req_owner == idx) {
@@ -2663,6 +2682,48 @@ sched_exit_switch(struct arm_trap_frame *f, unsigned int code)
 	uprog_states[daemons[sched_cur].uprog_idx] = 2u;	/* EXITED */
 	wd_last_activity = arm_timer_ticks();	/* FND-3 */
 #if WD_ENABLED
+	/* K4: face death-respawn. FND-3 respawned only HUNG
+	 * daemons (the supervisor scans runnable slots); a
+	 * face that EXITS or FAULTS stayed dead forever --
+	 * and face is the only display granter, so a dead
+	 * face wedges the whole GUI. Respawn a dead face
+	 * under the same scheme: same 2-per-boot budget
+	 * (shared with the hang path), same bootlog ev 15,
+	 * same fatal rung on exhaustion (wd_fatal_reset
+	 * converges to safe mode, never a reset loop).
+	 * Scoped to face only (progid, never slot: slots
+	 * follow registration order, progids don't); other
+	 * daemons keep their exact FND-3 contract. The
+	 * spawn child can never match (its progid is -1).
+	 * The fresh face joins normal rotation via
+	 * pick_next below -- no ctx surgery: the exiting
+	 * frame must not resume the new instance. */
+	if (daemons[sched_cur].progid == PROG_FACE) {
+		struct daemon *fd = &daemons[sched_cur];
+		char note[40];
+
+		if (fd->wd_respawns >= WD_MAX_RESPAWN) {
+			printf("watchdog: 'face' death-respawn "
+			    "budget exhausted (%u)\n",
+			    fd->wd_respawns);
+			wd_fatal_reset("face");
+			fd->wd_respawns = 0;	/* refused: reladder */
+		} else {
+			fd->wd_respawns++;
+			if (wd_respawn(fd) != 0) {
+				printf("watchdog: 'face' death-respawn "
+				    "setup failed\n");
+				wd_fatal_reset("face");
+			} else {
+				wd_note(note, sizeof(note), "respawn",
+				    "face");
+				bootstate_log_event(WD_EV_RESPAWN,
+				    arm_timer_ticks() * 10u, note);
+				printf("watchdog: 'face' death-respawned "
+				    "(respawn %u)\n", fd->wd_respawns);
+			}
+		}
+	}
 	(void)wd_supervise();
 #endif
 	next = pick_next();
