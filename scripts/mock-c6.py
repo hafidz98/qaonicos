@@ -136,6 +136,14 @@ class Peer:
         self.ble_name = "QABOT-01"
         # Wi-Fi runtime state (not persisted).
         self.wifi_conn = None     # ssid or None
+        # K5: initial radio state flags (verify-k5's
+        # pre-change run boots the peer already-ON so
+        # the old kernel's always-OFF icons fail
+        # against live state without any driver).
+        if getattr(args, "wifi_on", None):
+            self.wifi_conn = args.wifi_on
+        if getattr(args, "ble_on", False):
+            self.ble_on = True
         self.wifi_pending = None  # ssid awaiting PASS
         # Voice state.
         self.voice_active = False
@@ -695,6 +703,10 @@ def run():
     ap.add_argument("--kill-after", type=int, default=None)
     ap.add_argument("--junk-after", type=int, default=None)
     ap.add_argument("--scan-list", default=None)
+    ap.add_argument("--wifi-on", default=None,
+                    help="K5: start already connected to this SSID")
+    ap.add_argument("--ble-on", action="store_true",
+                    help="K5: start with BLE on")
     args = ap.parse_args()
     args.scan = parse_scan(args.scan_list) if args.scan_list \
         else SCAN_DEFAULT

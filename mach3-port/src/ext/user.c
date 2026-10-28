@@ -129,6 +129,8 @@ extern unsigned char	ulinktools_img[];	/* C6L-5: stub tools server */
 extern unsigned int	ulinktools_img_len;
 extern unsigned char	ulink5die_img[];	/* C6L-5: client-death probe */
 extern unsigned int	ulink5die_img_len;
+extern unsigned char	uradio_img[];	/* K5: radio-state driver */
+extern unsigned int	uradio_img_len;
 #endif /* QA_TIER_A */
 extern unsigned char	upl330_img[];	/* D2b: PL330 microcode */
 extern unsigned int	upl330_img_len;
@@ -1404,6 +1406,10 @@ user_syscall(struct arm_trap_frame *frame)
 				 * (raw SEND + immediate exit). */
 				{ "embed:ulink5die", ulink5die_img,
 				  &ulink5die_img_len, -1 },
+				/* K5: marker-driven radio driver
+				 * (see user/uradio.c). */
+				{ "embed:uradio", uradio_img,
+				  &uradio_img_len, -1 },
 #endif /* QA_TIER_A */
 			};
 			unsigned int hi, ei;

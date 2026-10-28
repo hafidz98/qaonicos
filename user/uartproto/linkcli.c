@@ -173,8 +173,18 @@ rep_status(int rc)
 
 /* --- Line commands --- */
 
+/* K5: caller-timeout variant. The default 30 s
+ * LINKD_RPC_CMD_MS is right for a user-initiated
+ * screen refresh, but a background poll (the
+ * status-bar radio poll) must bound its UI-loop
+ * stall to a few seconds when the peer hangs
+ * mid-exchange: the poll passes its own short
+ * timeout and treats a timeout as OFF, retrying
+ * on the next period. Same wire path, same
+ * parsing -- only the client-side wait differs. */
 static int
-cmd_rpc(const char *line, unsigned mode, char *resp, unsigned rsz)
+cmd_rpc_t(const char *line, unsigned mode, char *resp, unsigned rsz,
+	  unsigned timeout_ms)
 {
 	unsigned n, rc, st;
 	int sl;
@@ -194,7 +204,7 @@ cmd_rpc(const char *line, unsigned mode, char *resp, unsigned rsz)
 		msg.body[n++] = 0;
 	}
 	rc = (unsigned)rpc(LINKD_OP_CMD, n, LINKD_BUDGET_CMD,
-			   LINKD_RPC_CMD_MS);
+			   timeout_ms);
 	st = (unsigned)rep_status((int)rc);
 	if (rc <= 0 || (int)st < 0)
 		return -1;
@@ -213,12 +223,29 @@ cmd_rpc(const char *line, unsigned mode, char *resp, unsigned rsz)
 	return 0;
 }
 
+static int
+cmd_rpc(const char *line, unsigned mode, char *resp, unsigned rsz)
+{
+	return cmd_rpc_t(line, mode, resp, rsz, LINKD_RPC_CMD_MS);
+}
+
 int
 uproto_cmd(const char *cmd, char *resp, unsigned rsz)
 {
 	if (!cmd || !resp || rsz == 0u)
 		return -1;
 	return cmd_rpc(cmd, 0u, resp, rsz);
+}
+
+/* K5: uproto_cmd with a caller-supplied RPC timeout
+ * (background poll use; see cmd_rpc_t). */
+int
+uproto_cmd_t(const char *cmd, char *resp, unsigned rsz,
+	     unsigned timeout_ms)
+{
+	if (!cmd || !resp || rsz == 0u)
+		return -1;
+	return cmd_rpc_t(cmd, 0u, resp, rsz, timeout_ms);
 }
 
 int
