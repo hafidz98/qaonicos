@@ -180,10 +180,12 @@ static int lv_inited;
  * Battery is the outline glyph only, never a level
  * (no ADC) -- the honest-state rule. QEMU defaults
  * are OFF/OFF: no radio exists there. Live state
- * (uproto WIFI.STATUS / BLE.STATUS) is still a
- * follow-up, not wired here: a blocking RPC in the
- * menu-build path would stall menu appearance on
- * linkd trouble. Labels die with the display in
+ * (K5): the shell's radio poll timer calls
+ * uilvgl_set_radio_icons() with linkd's live
+ * WIFI.STATUS / BLE.STATUS (STATUS-gated, short
+ * timeout); the menu-build path itself never RPCs,
+ * so menu appearance costs zero RPCs even with
+ * linkd dead. Labels die with the display in
  * uilvgl_shell_end(); begin() clears the pointers
  * for the fresh display. */
 extern const lv_font_t lv_font_qaon_icons;

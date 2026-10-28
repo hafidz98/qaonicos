@@ -36,6 +36,13 @@
  * must pass a big enough buffer). */
 int	uproto_cmd(const char *cmd, char *resp, unsigned rsz);
 
+/* K5: uproto_cmd with a caller-supplied RPC timeout
+ * (background poll use: a hung peer must not stall
+ * the caller for the default 30 s). Implemented by
+ * the linkd client stub (linkcli) only. */
+int	uproto_cmd_t(const char *cmd, char *resp, unsigned rsz,
+		     unsigned timeout_ms);
+
 /* "CMD <arg>" (one argument, no spaces in arg). */
 int	uproto_cmd1(const char *cmd, const char *arg, char *resp,
 		    unsigned rsz);

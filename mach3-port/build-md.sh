@@ -340,6 +340,37 @@ echo "USER: ulinkbr.elf entry=$ENTRY ok"
 fi
 
 
+# K5: QA image only (QA=1); omitted from production.
+if [ "${QA:-0}" = "1" ]; then
+# --- user program uradio (K5): marker-driven radio-state driver. ---
+# Links the linkd client stub (NOT the direct layer): it must drive
+# the same path the status-bar poll uses. The linkcli object is built
+# in the uiapp section above, so it exists by this point.
+echo "BUILD user program uradio"
+# shellcheck disable=SC2086
+clang $UCFLAGS -I"$USR" -c "$USR/uradio.c" -o "$BUILD/uradio.o" >>"$LOG" 2>&1 || \
+    { echo "FAIL user/uradio.c (see $LOG)"; exit 1; }
+# shellcheck disable=SC2086
+clang --target=arm-none-eabi -nostdlib -T "$USR/init.ld" \
+    -o "$BUILD/uradio.elf" "$BUILD/uradio.o" \
+    "$BUILD/uartproto_linkcli.o" \
+    "$BUILD/ulib.o" "$BUILD/udiv.o" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL link user/uradio.elf (see $LOG)"; exit 1; }
+ENTRY=$("$LLVM_READELF" -h "$BUILD/uradio.elf" | sed -n 's/.*Entry point address: *//p')
+[ "$ENTRY" = "0x100000" ] || \
+    { echo "FATAL: uradio entry $ENTRY != 0x100000"; exit 1; }
+"$LLVM_OBJCOPY" -O binary "$BUILD/uradio.elf" "$BUILD/uradio.bin" >>"$LOG" 2>&1 || \
+    { echo "FAIL objcopy user/uradio.bin"; exit 1; }
+python3 "$USR/pad-bss.py" "$BUILD/uradio.bin" "$BUILD/uradio.elf" \
+    >>"$LOG" 2>&1 || \
+    { echo "FAIL pad-bss user/uradio.bin"; exit 1; }
+python3 "$USR/embed.py" "$BUILD/uradio.bin" "$GEN/uradio_img.c" "uradio_img" 32768 >>"$LOG" 2>&1 || \
+    { echo "FAIL embed uradio_img"; exit 1; }
+echo "USER: uradio.elf entry=$ENTRY ok"
+fi
+
+
 # UI-8: QA image only (QA=1); omitted from production.
 if [ "${QA:-0}" = "1" ]; then
 # --- 1d1c. user program ulink3 (C6L-3): v2 completion test. ---
@@ -753,7 +784,7 @@ rm -f "$OBJMD"/*_img.o
 # UI-8: same Tier A / Tier C split as loop 1 (see above).
 IMGS="init ucat uls uecho umon ugpio usd ufs face uiapp ntp utcpcli qabot qabotd sh utimeset utcpkeep uaudiotest uaudiocap uaudiogain uvoice linkd ulink5d upl330 ulfs ublogtest ufirst utimegate uupdsig ucred ufault ufaultd uyield uhangd uspin uhangc uipcld ufpu"
 if [ "${QA:-0}" = "1" ]; then
-    IMGS="$IMGS ulinktest ulinkbr ulink3 ulinkaud ulink5 ulinktools ulink5die uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcaud"
+    IMGS="$IMGS ulinktest ulinkbr ulink3 ulinkaud ulink5 ulinktools ulink5die uipkpark uipknd uiptoolssrv uipcregexit uipcregfull uipcaud uradio"
 fi
 # shellcheck disable=SC2086
 for prog in $IMGS; do
