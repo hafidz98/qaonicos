@@ -166,6 +166,58 @@ mmio_w(struct blkdev *d, unsigned int off, unsigned int v)
 }
 
 /*
+ * blk_wait_complete: wait until the device has completed every
+ * request submitted so far (used == avail), not merely until the
+ * used index moves.  K3: the old "wait for any movement" test
+ * let a request return on a PREVIOUS request's late completion
+ * (after a timeout): the caller then read req_status/req_data
+ * belonging to the old request -- status 0xff (clobbered by the
+ * new request's 0xff setup plus pre-kick clean) or stale data --
+ * while its own request was still queued.  Waiting for
+ * used == avail makes every return correspond to the caller's
+ * own request: the last completion observed is always its own,
+ * written after its own setup.
+ *
+ * A lost kick (or a slow device) is recovered by re-notifying:
+ * once halfway through each window and once at the start of
+ * each further window, up to BLK_WAIT_ATTEMPTS windows.
+ * Returns 0 when used == avail, -2 on timeout (used_idx
+ * resynced to the device index; the uncompleted request stays
+ * queued, so a genuinely dead device fails loudly on every
+ * later request instead of corrupting data silently).
+ */
+#define	BLK_WAIT_SPINS	3000000u
+#define	BLK_WAIT_ATTEMPTS	3u
+
+static int
+blk_wait_complete(struct blkdev *d)
+{
+	unsigned int spin, attempt;
+	volatile unsigned short *uidx;
+
+	uidx = (volatile unsigned short *)&d->used->idx;
+	for (attempt = 0; attempt < BLK_WAIT_ATTEMPTS; attempt++) {
+		if (attempt > 0)
+			mmio_w(d, VMM_QNOTIFY, 0);
+		spin = 0;
+		while (*uidx != (unsigned short)d->avail_idx &&
+		       spin < BLK_WAIT_SPINS) {
+			dcache_inval_range((unsigned int)(unsigned long)uidx,
+					   2);
+			if (spin == BLK_WAIT_SPINS / 2u)
+				mmio_w(d, VMM_QNOTIFY, 0);
+			spin++;
+		}
+		if (*uidx == (unsigned short)d->avail_idx) {
+			d->used_idx = *uidx;
+			return 0;
+		}
+	}
+	d->used_idx = *uidx;	/* resync: drop the lost request */
+	return -2;
+}
+
+/*
  * blk_request: run one synchronous request on device d.
  * type = BLK_T_IN/BLK_T_OUT.  For WRITE, 512B are copied from wdata.
  * For READ, data lands in d->req_data (caller must copy out).
@@ -175,8 +227,7 @@ static int
 blk_request(struct blkdev *d, unsigned int type, unsigned int sector,
 	    const unsigned char *wdata)
 {
-	unsigned int i, spin;
-	volatile unsigned short *uidx;
+	unsigned int i;
 
 	if (!d->vmm || sector >= d->nsectors)
 		return -1;
@@ -233,30 +284,12 @@ blk_request(struct blkdev *d, unsigned int type, unsigned int sector,
 	mmio_w(d, VMM_QNOTIFY, 0);
 	__asm__ volatile ("dsb ish" ::: "memory");
 
-	/* Poll for completion.  used->idx is written by the device;
-	 * invalidate its line each iteration so we never read a stale
-	 * cached copy (the Fase 12d volatile-hoisting lesson, now with
-	 * D-cache on).
-	 *
-	 * B2 hardening: the old 100M-spin limit took ~100 s to expire
-	 * (a dcache invalidate per iteration), which looked exactly
-	 * like a hang and desynced the queue for every later request.
-	 * Now: re-notify once halfway (lost-notify retry), give up at
-	 * 3M spins, and resync used_idx on timeout so the next request
-	 * starts from a clean state. */
-	uidx = (volatile unsigned short *)&d->used->idx;
-	spin = 0;
-	while (*uidx == (unsigned short)d->used_idx && spin < 3000000u) {
-		dcache_inval_range((unsigned int)(unsigned long)uidx, 2);
-		if (spin == 1500000u)
-			mmio_w(d, VMM_QNOTIFY, 0);
-		spin++;
-	}
-	if (*uidx == (unsigned short)d->used_idx) {
-		d->used_idx = *uidx;	/* resync: drop the lost request */
+	/* K3: wait for this request's own completion (used == avail),
+	 * with lost-kick recovery; see blk_wait_complete.  The B2
+	 * lesson stands: the old 100M-spin limit took ~100 s to
+	 * expire, which looked exactly like a hang. */
+	if (blk_wait_complete(d) != 0)
 		return -2;		/* timeout */
-	}
-	d->used_idx = *uidx;
 
 	/* Pull device writes into the cache. */
 	mem_barrier();
@@ -418,9 +451,15 @@ static int
 blkdev_is_fat32(struct blkdev *d)
 {
 	static unsigned char sec[BLK_SECTOR] __attribute__((aligned(16)));
-	unsigned int i;
+	unsigned int i, attempt;
 
-	if (blk_request(d, BLK_T_IN, 0, 0) != 0)
+	/* K3: this read decides the dev map (Fase 15); a transient
+	 * read loss must not misclassify the SD card. */
+	for (attempt = 0; attempt < 3u; attempt++) {
+		if (blk_request(d, BLK_T_IN, 0, 0) == 0)
+			break;
+	}
+	if (attempt >= 3u)
 		return 0;
 	for (i = 0; i < BLK_SECTOR; i++)
 		sec[i] = d->req_data[i];
@@ -450,9 +489,29 @@ blk_init(void)
 			continue;
 		if (base[VMM_DEVID / 4u] != VMM_DEV_BLK)
 			continue;
-		if (blkdev_init_one(&blkdevs[found], base) != 0) {
-			printf("blk: slot %u init failed\n", i);
-			continue;
+		{
+			/* K3: a transient init failure must not lose
+			 * the device for the whole boot.  init_one is
+			 * idempotent (STATUS reset first, queue rebuilt),
+			 * so re-running it is safe. */
+			unsigned int attempt, s;
+			int rc = -1;
+			for (attempt = 0; attempt < 3u; attempt++) {
+				if (attempt > 0) {
+					/* Uncalibrated settle, host side. */
+					for (s = 0; s < 500000u; s++)
+						__asm__ volatile ("" ::: "memory");
+					printf("blk: slot %u init retry %u\n",
+					       i, attempt);
+				}
+				rc = blkdev_init_one(&blkdevs[found], base);
+				if (rc == 0)
+					break;
+			}
+			if (rc != 0) {
+				printf("blk: slot %u init failed\n", i);
+				continue;
+			}
 		}
 		printf("blk: dev %u: slot %u, %u sectors (%u MB)\n",
 		       found, i, blkdevs[found].nsectors,

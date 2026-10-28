@@ -58,10 +58,23 @@ machine_init(void)
 	audio_init();		/* D1: ACODEC (virtual regs di QEMU) */
 	if (gpu_init() != 0)
 		printf("gpu: display dinonaktifkan (lanjut tanpa display)\n");
-	if (fat32_mount() == 0)
-		printf("fat32: mounted /sd\n");
-	else
-		printf("fat32: mount failed (SD absent?)\n");
+	/* K3: mount is idempotent (state reset, geometry re-read),
+	 * so a transient mount-read loss is retried, not fatal. */
+	{
+		unsigned int attempt;
+		int rc = -1;
+		for (attempt = 0; attempt < 3u; attempt++) {
+			if (attempt > 0)
+				printf("fat32: mount retry %u\n", attempt);
+			rc = fat32_mount();
+			if (rc == 0)
+				break;
+		}
+		if (rc == 0)
+			printf("fat32: mounted /sd\n");
+		else
+			printf("fat32: mount failed (SD absent?)\n");
+	}
 	cold = 0;
 }
 
