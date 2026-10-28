@@ -25,15 +25,21 @@ launches linkd + ulink5d), and checks:
     observes command failure + link DOWN, then prints
     "ready restart", the script restarts the peer, and
     ulink5 observes recovery (command + state UP);
-  * peer-dispatch forwarding: while the shell runs
-    embed:ulinktools (progid 2, the stub `tools`
-    server), ulink5d's TEST.SCRIPT attempts flow
-    through linkd to it -- the peer transcript shows
-    the real policy results (uptime_ms, pin 3 value 1,
-    needs_confirm, refused) -- and attempts without a
-    tools server show tools_unavailable (the no-tools
-    leg); every attempt also fans an EVT WIFI.DROPPED
-    out to ulink5d;
+  * peer-dispatch forwarding: qabotd owns `tools`
+    from GUI start (K2) and serves ulink5d's
+    TEST.SCRIPT attempts with real policy results
+    (string-form uptime_ms, needs_confirm, refused);
+    while the shell runs embed:ulinktools (progid 2,
+    the stub `tools` server) it steals the name and
+    serves 4 attempts (object-form pin 3 value 1) --
+    the stub window still proves forwarding +
+    coexistence; the old no-tools leg (attempts
+    without a tools server show tools_unavailable)
+    is retired: its premise -- no consumer at boot --
+    is exactly what K2 closed, and its degradation
+    coverage moved to verify-k2.py (pre-change run
+    + stub-death transient gap); every attempt also
+    fans an EVT WIFI.DROPPED out to ulink5d;
   * client death: embed:ulink5die sends one raw CMD
     request and exits at once (against a delayed
     peer, so the request is in flight); linkd logs
@@ -298,6 +304,8 @@ try:
     ser.sendall(b"gui\n")
     check("linkd registers name link",
           wait_from(0, "LINKD: registered link", 90))
+    check("qabotd registers name tools",
+          wait_from(0, "QABOTD: registered tools", 90))
     check("ulink5d ready",
           wait_from(0, "ULINK5D: ready", 90))
     check("shell link after gui reports UP",
@@ -379,8 +387,8 @@ try:
           re.search(r"RESULT .*needs_confirm", trb) is not None)
     check("transcript B shows refused result",
           re.search(r"RESULT .*refused", trb) is not None)
-    check("transcript B shows tools_unavailable (no-tools leg)",
-          "tools_unavailable" in trb)
+    check("transcript B shows qabotd-served get_info (string-form result)",
+          re.search(r"RESULT .*\"result\":\"uptime_ms", trb) is not None)
     check("transcript B shows EVT WIFI.DROPPED frames",
           "WIFI.DROPPED" in trb)
     seg2 = txt()

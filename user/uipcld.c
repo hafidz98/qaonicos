@@ -12,12 +12,19 @@
  * boot line -- because daemon_images is static).
  *
  * Active flow (driven by scripts/verify-ipc4.py):
- *   lookup "tools" (gen 1) -> 100 echo RPCs byte-exact
- *   -> structured dispatch RPC -> double-reply RPC
- *   -> DIE RPC (server exits without replying;
- *   expect UIPC_EPEER) -> re-lookup (EDEST) + gen 2
- *   (death bump) -> lookup incarnation 2 (gen 3)
- *   -> 10 echo RPCs -> STOP -> DONE.
+ *   wait for the stub's generation bump (gen >= 2:
+ *   qabotd owns gen 1 from GUI start, so a bare
+ *   lookup would reach qabotd, not the stub) ->
+ *   lookup "tools" (baseline gen N) -> 100 echo RPCs
+ *   byte-exact -> structured dispatch RPC ->
+ *   double-reply RPC -> DIE RPC (server exits without
+ *   replying; expect UIPC_EPEER) -> re-lookup (EDEST)
+ *   + gen N+1 (death bump) -> lookup incarnation 2
+ *   (gen N+2) -> 10 echo RPCs -> STOP -> DONE.
+ *   Generations are baseline-relative: since K2 qabotd
+ *   owns "tools" from GUI start (gen 1), the stub's
+ *   incarnation 1 observes N=2; the bumps, not the
+ *   absolute values, are the contract.
  * Every RPC goes through uipc_rpc_user with a 30 s
  * deadline; any validation failure prints FAIL and
  * exits 1. Lookup retries yield between attempts so
@@ -133,6 +140,29 @@ echo_one(unsigned s)
 	}
 }
 
+/* Wait for the stub to own "tools": since K2 qabotd
+ * owns the name from GUI start (gen 1), a bare lookup
+ * would succeed immediately against qabotd and the
+ * echo RPCs would go to the wrong server. The stub's
+ * same-owner REGISTER bumps the generation to 2; wait
+ * for that bump (wall-clock 120 s via sys_uptime, same
+ * shape as lookup_retry) before the flow starts. */
+static void
+wait_stub_gen(void)
+{
+	unsigned t0 = sys_uptime();
+	int gen;
+
+	for (;;) {
+		gen = uipc_reg_gen("tools");
+		if (gen >= 2)
+			return;
+		if (sys_uptime() - t0 >= 120000u)
+			fail("stub gen", gen);
+		sys_yield();
+	}
+}
+
 /* Lookup "tools" with retries; returns the send name
  * (or exits 1 on timeout). The retry is WALL-CLOCK
  * based (60 s via sys_uptime): a bare yield count
@@ -162,7 +192,7 @@ __attribute__((section(".text.start")))
 void
 _start(void)
 {
-	int rc, gen, i;
+	int rc, gen, i, base_gen;
 
 	/* Marker gate. */
 	if (sys_lfs_simple(94u) != 0) {
@@ -176,6 +206,10 @@ _start(void)
 		sys_exit(0);
 	}
 
+	/* Wait for the stub to own "tools" (see
+	 * wait_stub_gen) before any RPC goes out. */
+	wait_stub_gen();
+
 	/* Phase 1: lookup + 100 echo RPCs. */
 	rc = lookup_retry();
 	(void)rc;	/* the send name is not used directly;
@@ -184,8 +218,9 @@ _start(void)
 	u_put("UIPCLD: lookup tools gen=");
 	puti(gen);
 	u_put("\n");
-	if (gen != 1)
+	if (gen < 1)
 		fail("lookup gen", gen);
+	base_gen = gen;
 	for (i = 0; i < 100; i++) {
 		echo_one((unsigned)i);
 		if (i == 24 || i == 49 || i == 74 || i == 99) {
@@ -267,17 +302,17 @@ _start(void)
 	u_put("UIPCLD: regen gen=");
 	puti(gen);
 	u_put("\n");
-	if (gen != 2)
+	if (gen != base_gen + 1)
 		fail("regen gen", gen);
 
-	/* Phase 6: incarnation 2 (gen 3) + 10 echo RPCs. */
+	/* Phase 6: incarnation 2 (gen base+2) + 10 echo RPCs. */
 	rc = lookup_retry();
 	(void)rc;
 	gen = uipc_reg_gen("tools");
 	u_put("UIPCLD: lookup2 gen=");
 	puti(gen);
 	u_put("\n");
-	if (gen != 3)
+	if (gen != base_gen + 2)
 		fail("lookup2 gen", gen);
 	for (i = 0; i < 10; i++)
 		echo_one((unsigned)i);

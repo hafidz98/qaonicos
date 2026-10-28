@@ -33,12 +33,15 @@ Boot 2 (GUI boot; commands via the web shell after `gui`):
       deadline-wakes; etime must be 0 across the flow,
       and 100 RPCs must finish far faster than any
       deadline-driven schedule).
-  - Flow: lookup gen 1 -> 100 echo RPCs byte-exact ->
-    structured dispatch RPC -> double-reply probe
+  - Flow (generations baseline-relative since K2:
+    qabotd owns "tools" from GUI start, so the stub's
+    incarnation 1 observes gen N=2; the bumps are the
+    contract): lookup gen N -> 100 echo RPCs byte-exact
+    -> structured dispatch RPC -> double-reply probe
     (server's second reply fails) -> DIE RPC (server
     exits without replying; client gets EPEER -12) ->
-    re-lookup -> EDEST + generation 2 (death bump) ->
-    server incarnation 2 registers -> lookup gen 3 ->
+    re-lookup -> EDEST + generation N+1 (death bump) ->
+    server incarnation 2 registers -> lookup gen N+2 ->
     10 echo RPCs -> STOP -> DONE.
   - Teardown: marker back to "0" via the web shell.
 
@@ -319,8 +322,17 @@ check("boot 2: web shell accepted run embed:uiptoolssrv", st == 200)
 check("server#1 registered `tools`",
       wait_from(pos, "UIPTOOLSSRV: registered tools", 60))
 t_flow = time.time()
-check("client lookup gen 1",
-      wait_from(pos, "UIPCLD: lookup tools gen=1", 90))
+ipc4_base_gen = None
+_t0 = time.time()
+while time.time() - _t0 < 90:
+    _m_gen = re.search(r"UIPCLD: lookup tools gen=(\d+)",
+                       txt()[pos:])
+    if _m_gen:
+        ipc4_base_gen = int(_m_gen.group(1))
+        break
+    time.sleep(0.5)
+check("client lookup tools gen (baseline recorded)",
+      ipc4_base_gen is not None)
 check("client echo 100/100 byte-exact",
       wait_from(pos, "UIPCLD: PASS echo=100/100", 180))
 check("client structured dispatch OK",
@@ -333,15 +345,17 @@ check("client DIE RPC -> EPEER (-12), not a hang",
       wait_from(pos, "UIPCLD: die rc=-12", 90))
 check("client re-lookup after death -> EDEST",
       wait_from(pos, "UIPCLD: regen lookup rc=-3", 60))
-check("death bumped generation to 2",
-      wait_from(pos, "UIPCLD: regen gen=2", 60))
+check("death bumped generation by 1",
+      ipc4_base_gen is not None and
+      wait_from(pos, f"UIPCLD: regen gen={ipc4_base_gen + 1}", 60))
 pos2 = len(serial)
 st, body = web_cmd("run embed:uiptoolssrv")
 check("boot 2: web shell accepted server incarnation 2", st == 200)
 check("server#2 registered `tools`",
       wait_from(pos2, "UIPTOOLSSRV: registered tools", 60))
-check("client lookup2 gen 3 (re-register bump)",
-      wait_from(pos2, "UIPCLD: lookup2 gen=3", 90))
+check("client lookup2 gen +2 (re-register bump)",
+      ipc4_base_gen is not None and
+      wait_from(pos2, f"UIPCLD: lookup2 gen={ipc4_base_gen + 2}", 90))
 check("client echo2 10/10 on incarnation 2",
       wait_from(pos2, "UIPCLD: PASS echo2=10/10", 120))
 check("client DONE, server STOP served",
