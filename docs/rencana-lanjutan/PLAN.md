@@ -43,6 +43,16 @@ ter-probe, `nblkdevs=1`), semua syscall FAT gagal dan hanya check
 Tujuan: probe blk diulang/robust sehingga mount tidak kalah race
 (mis. retry probe per slot / ulangi negosiasi yang gagal), dibuktikan
 dengan N boot berturut-turut tanpa `ls /sd` gagal karena probe.
+
+KOREKSI (hasil K3, 2026-10-28): premis probe-race TIDAK TERBUKTI
+sebagai kelas dominan — 120 boot pre-change: 0 probe loss.
+Kegagalan yang terbukti adalah runtime request loss sesudah probe
+dan mount yang bagus (late-completion cascade di `blk_request`:
+poll lama keluar pada gerakan used-index apapun sehingga request
+berikutnya kembali dengan `req_data` basi / status 0xff). Perbaikan:
+`blk_wait_complete` (tunggu used==avail) + retry slot-init 3×,
+signature-read 3×, mount 3×, semua bounded. Post-change: 30/30 boot
+OK. Detail di DEVLOG-K3.
 Risiko: jangan ubah pemetaan dev 0 = internal / dev 1 = SD (identifikasi
 lewat signature FAT32, bukan urutan slot — pelajaran Fase 15).
 
