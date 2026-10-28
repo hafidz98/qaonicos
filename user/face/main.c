@@ -144,7 +144,7 @@ _start(void)
 {
 	struct qaon_display di;
 	unsigned last_frame, now, last_input, idle_ms;
-	unsigned last_poll;
+	unsigned last_poll, last_kill_poll;
 	int fstate = FACE_NORMAL;
 	int ev, st;
 	int display_on = 1;
@@ -166,6 +166,7 @@ _start(void)
 	last_frame = sys_uptime();
 	last_input = last_frame;
 	last_poll = last_frame;
+	last_kill_poll = last_frame;
 
 	/* ONB-2: unprovisioned -> setup screen until the flag flips. */
 	{
@@ -201,6 +202,38 @@ _start(void)
 				puts("face: provisioned -> finale\n");
 			}
 		}
+		/* K4 test hook: single-shot kill/wedge marker
+		 * (littlefs "face-kill", ~1 Hz, all states, BEFORE
+		 * the holder check so a non-holder face also dies).
+		 * "1" = exit(1) (death-respawn test), "2" = yield
+		 * forever (hang-respawn test). The marker is
+		 * consumed (overwritten "0") BEFORE the effect, so
+		 * a respawned face never re-arms itself; a stale
+		 * arm left by a crash costs at most one death or
+		 * wedge + respawn. Precedent: UI-1's
+		 * /data/ui1-test marker. */
+		if ((unsigned)(now - last_kill_poll) >= 1000u) {
+			char kb[2];
+
+			last_kill_poll = now;
+			face_lfs(94, (const char *)0, (void *)0, 0);
+			if (face_lfs(96, "face-kill", kb, 1) == 1 &&
+			    (kb[0] == '1' || kb[0] == '2')) {
+				char zero = '0';
+
+				face_lfs(97, "face-kill", &zero, 1);
+				if (kb[0] == '1') {
+					puts("face: test kill marker "
+					    "consumed, exiting\n");
+					sys_exit(1);
+				}
+				puts("face: test wedge marker "
+				    "consumed, yielding forever\n");
+				for (;;)
+					sys_yield();
+			}
+		}
+
 		/* uiapp pegang token: jangan render, jangan baca event. */
 		st = sys_display_status();
 		if (st != 0) {
